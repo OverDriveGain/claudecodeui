@@ -26,6 +26,9 @@ const DEFAULT_PROVIDER: LLMProvider = 'claude';
 
 type ChatWebSocketDependencies = {
   queryClaudeSDK: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  // Hybrid control-channel bridge (see server/control-channel.js).
+  queryControlChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  isControlSession: (sessionId: string, cwd: string) => Promise<boolean>;
   spawnCursor: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   queryCodex: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   spawnGemini: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
@@ -119,6 +122,18 @@ export function handleChatConnection(
       }
 
       if (messageType === 'claude-command') {
+        // Hybrid: if this session is driven by plugin:control@kaxtus (a live
+        // --remote-control session), inject the prompt into it instead of
+        // spawning a new Agent SDK session. See server/control-channel.js.
+        const controlSid = typeof data.options?.sessionId === 'string' ? data.options.sessionId : '';
+        const controlCwd = typeof data.options?.cwd === 'string' ? data.options.cwd : '';
+        if (
+          (controlSid || controlCwd) &&
+          (await dependencies.isControlSession(controlSid, controlCwd))
+        ) {
+          await dependencies.queryControlChannel(data.command ?? '', data.options, writer);
+          return;
+        }
         await dependencies.queryClaudeSDK(data.command ?? '', data.options, writer);
         return;
       }

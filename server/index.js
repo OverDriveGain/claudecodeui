@@ -27,6 +27,8 @@ import {
     getPendingApprovalsForSession,
     reconnectSessionWriter,
 } from './claude-sdk.js';
+// Hybrid: drive live `claude --remote-control` sessions via plugin:control@kaxtus.
+import { queryControlChannel, isControlSession } from './control-channel.js';
 import {
     spawnCursor,
     abortCursorSession,
@@ -97,6 +99,8 @@ const wss = createWebSocketServer(server, {
     },
     chat: {
         queryClaudeSDK,
+        queryControlChannel,
+        isControlSession,
         spawnCursor,
         queryCodex,
         spawnGemini,
