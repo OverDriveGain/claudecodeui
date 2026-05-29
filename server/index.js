@@ -29,6 +29,12 @@ import {
 } from './claude-sdk.js';
 // Hybrid: drive live `claude --remote-control` sessions via plugin:control@kaxtus.
 import { queryControlChannel, isControlSession } from './control-channel.js';
+// Live fleet agents (virtual projects) — inject + tail transcript over HTTP.
+import { queryFleetChannel, isFleetSession } from './fleet-channel.js';
+// Live fleet agents — route per-project file endpoints to the discovery service
+// instead of the local filesystem. GUI is unchanged; only the data source differs.
+import { isFleetProjectId } from './services/fleet.service.js';
+import { fleetFileTree, fleetReadFile, fleetFileContent, fleetReadOnly } from './fleet-files.js';
 import {
     spawnCursor,
     abortCursorSession,
@@ -101,6 +107,8 @@ const wss = createWebSocketServer(server, {
         queryClaudeSDK,
         queryControlChannel,
         isControlSession,
+        queryFleetChannel,
+        isFleetSession,
         spawnCursor,
         queryCodex,
         spawnGemini,
@@ -437,6 +445,8 @@ app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
         const { projectId } = req.params;
         const { filePath } = req.query;
 
+        if (isFleetProjectId(projectId)) return fleetReadFile(projectId, filePath, res);
+
 
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
@@ -478,6 +488,8 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
     try {
         const { projectId } = req.params;
         const { path: filePath } = req.query;
+
+        if (isFleetProjectId(projectId)) return fleetFileContent(projectId, filePath, res);
 
 
         // Security: ensure the requested path is inside the project root
@@ -537,6 +549,8 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
         const { projectId } = req.params;
         const { filePath, content } = req.body;
 
+        if (isFleetProjectId(projectId)) return fleetReadOnly(res);
+
 
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
@@ -584,6 +598,7 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
 
 app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) => {
     try {
+        if (isFleetProjectId(req.params.projectId)) return fleetFileTree(req.params.projectId, res);
 
         // Using fsPromises from import
 
@@ -603,6 +618,7 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
 
         const files = await getFileTree(actualPath, 10, 0, true);
         res.json(files);
+
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);
         res.status(500).json({ error: error.message });
@@ -661,6 +677,8 @@ app.post('/api/projects/:projectId/files/create', authenticateToken, async (req,
     try {
         const { projectId } = req.params;
         const { path: parentPath, type, name } = req.body;
+
+        if (isFleetProjectId(projectId)) return fleetReadOnly(res);
 
         // Validate input
         if (!name || !type) {
@@ -739,6 +757,8 @@ app.put('/api/projects/:projectId/files/rename', authenticateToken, async (req, 
         const { projectId } = req.params;
         const { oldPath, newName } = req.body;
 
+        if (isFleetProjectId(projectId)) return fleetReadOnly(res);
+
         // Validate input
         if (!oldPath || !newName) {
             return res.status(400).json({ error: 'oldPath and newName are required' });
@@ -815,6 +835,8 @@ app.delete('/api/projects/:projectId/files', authenticateToken, async (req, res)
     try {
         const { projectId } = req.params;
         const { path: targetPath, type } = req.body;
+
+        if (isFleetProjectId(projectId)) return fleetReadOnly(res);
 
         // Validate input
         if (!targetPath) {

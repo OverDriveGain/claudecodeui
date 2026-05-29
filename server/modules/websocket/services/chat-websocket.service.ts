@@ -29,6 +29,9 @@ type ChatWebSocketDependencies = {
   // Hybrid control-channel bridge (see server/control-channel.js).
   queryControlChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   isControlSession: (sessionId: string, cwd: string) => Promise<boolean>;
+  // Live fleet-agent bridge (see server/fleet-channel.js).
+  queryFleetChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  isFleetSession: (sessionId: string) => Promise<boolean>;
   spawnCursor: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   queryCodex: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   spawnGemini: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
@@ -127,6 +130,13 @@ export function handleChatConnection(
         // spawning a new Agent SDK session. See server/control-channel.js.
         const controlSid = typeof data.options?.sessionId === 'string' ? data.options.sessionId : '';
         const controlCwd = typeof data.options?.cwd === 'string' ? data.options.cwd : '';
+        // Live fleet agent (a virtual project) — inject into the remote agent
+        // and tail its transcript over HTTP. See server/fleet-channel.js.
+        const fleetMatch = controlSid ? await dependencies.isFleetSession(controlSid) : false;
+        if (fleetMatch) {
+          await dependencies.queryFleetChannel(data.command ?? '', data.options, writer);
+          return;
+        }
         if (
           (controlSid || controlCwd) &&
           (await dependencies.isControlSession(controlSid, controlCwd))

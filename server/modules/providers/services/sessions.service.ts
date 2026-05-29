@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
+import { lookupBySession, listAgents, discoveryTranscript } from '@/services/fleet.service.js';
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
@@ -94,11 +95,23 @@ export const sessionsService = {
    * Provider and provider-specific lookup hints are resolved from the indexed
    * session metadata in the database.
    */
-  fetchHistory(
+  async fetchHistory(
     sessionId: string,
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
   ): Promise<FetchHistoryResult> {
-    const session = sessionsDb.getSessionById(sessionId);
+    // Live fleet agent? Its transcript lives on a remote host — fetch it over
+    // HTTP and normalize, instead of the local-disk DB-backed path.
+    let agent = lookupBySession(sessionId);
+    const session = agent ? null : sessionsDb.getSessionById(sessionId);
+    if (!agent && !session) {
+      // May be a fleet session we haven't registered yet (e.g. deep link before
+      // the project list loaded). Refresh once before giving up.
+      await listAgents({ force: true });
+      agent = lookupBySession(sessionId);
+    }
+    if (agent) {
+      return this.fetchFleetHistory(agent.agent, sessionId);
+    }
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -112,6 +125,22 @@ export const sessionsService = {
       offset: options.offset ?? 0,
       projectPath: session.project_path ?? '',
     });
+  },
+
+  /**
+   * History for a live fleet agent: pulls raw JSONL records from the discovery
+   * transcript endpoint and runs them through the claude normalizer, yielding
+   * the same shape as a local session. Returns empty (not an error) if the
+   * transcript endpoint is unavailable, so the chat opens cleanly.
+   */
+  async fetchFleetHistory(agentName: string, sessionId: string): Promise<FetchHistoryResult> {
+    const t = await discoveryTranscript(agentName);
+    const sid = t.sessionId || sessionId;
+    const messages: NormalizedMessage[] = [];
+    for (const raw of t.records) {
+      messages.push(...this.normalizeMessage('claude', raw, sid));
+    }
+    return { messages, total: messages.length, hasMore: false, offset: 0, limit: null };
   },
 
   /**

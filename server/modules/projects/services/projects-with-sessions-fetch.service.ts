@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { listAgents, fleetProjectId } from '@/services/fleet.service.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
@@ -262,6 +263,41 @@ export async function getProjectsWithSessions(
         total: sessionsPage.total,
       },
     });
+  }
+
+  // Virtual fleet projects: each live agent in this user's domain is surfaced
+  // as a project + one claude session, so it flows through the same chat UI.
+  // No DB row — recognised later (history/send) via the session->agent registry
+  // in fleet.service.js. Non-fatal if discovery is unreachable.
+  try {
+    const agents = await listAgents();
+    for (const a of agents) {
+      const sessions: SessionSummary[] = a.session_id
+        ? [{
+            id: a.session_id,
+            summary: `${a.agent} (live)`,
+            messageCount: 0,
+            lastActivity: a.last_activity
+              ? new Date(a.last_activity * 1000).toISOString()
+              : new Date().toISOString(),
+          }]
+        : [];
+      projects.push({
+        projectId: fleetProjectId(a.agent),
+        path: `fleet://${a.host}/${a.agent}`,
+        displayName: `🤖 ${a.agent}`,
+        fullPath: `fleet://${a.host}/${a.agent}`,
+        isStarred: false,
+        sessions,
+        cursorSessions: [],
+        codexSessions: [],
+        geminiSessions: [],
+        opencodeSessions: [],
+        sessionMeta: { hasMore: false, total: sessions.length },
+      });
+    }
+  } catch {
+    // discovery down — just omit fleet projects this round
   }
 
   broadcastProgress({
