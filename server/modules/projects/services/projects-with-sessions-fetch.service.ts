@@ -40,6 +40,9 @@ export type ProjectListItem = {
     hasMore: boolean;
     total: number;
   };
+  // Fleet-agent metadata (only set for virtual fleet projects).
+  fleetAlive?: boolean;
+  fleetHost?: string;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -265,17 +268,20 @@ export async function getProjectsWithSessions(
     });
   }
 
-  // Virtual fleet projects: each live agent in this user's domain is surfaced
-  // as a project + one claude session, so it flows through the same chat UI.
+  // Virtual fleet projects: ALL agents in this user's domain (alive + offline)
+  // appear as projects with their last session navigable.
+  // Offline agents show a read-only last-session history; live ones are talkable.
   // No DB row — recognised later (history/send) via the session->agent registry
   // in fleet.service.js. Non-fatal if discovery is unreachable.
   try {
     const agents = await listAgents();
     for (const a of agents) {
+      const isAlive = Boolean(a.alive);
+      const sessionLabel = isAlive ? `${a.agent} (live)` : `${a.agent} (last session)`;
       const sessions: SessionSummary[] = a.session_id
         ? [{
             id: a.session_id,
-            summary: `${a.agent} (live)`,
+            summary: sessionLabel,
             messageCount: 0,
             lastActivity: a.last_activity
               ? new Date(a.last_activity * 1000).toISOString()
@@ -294,6 +300,9 @@ export async function getProjectsWithSessions(
         geminiSessions: [],
         opencodeSessions: [],
         sessionMeta: { hasMore: false, total: sessions.length },
+        // Pass alive state so the frontend can show offline/online status badge.
+        fleetAlive: isAlive,
+        fleetHost: a.host,
       });
     }
   } catch {

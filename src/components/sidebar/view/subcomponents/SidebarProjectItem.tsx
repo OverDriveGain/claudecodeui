@@ -115,8 +115,10 @@ export default function SidebarProjectItem({
     toggleProject();
   };
 
+  const isFleetOffline = project.projectId.startsWith('fleet:') && !project.fleetAlive;
+
   return (
-    <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none')}>
+    <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none', isFleetOffline && 'opacity-70')}>
       <div className="md:group group">
         <div className="md:hidden">
           <div
@@ -173,7 +175,21 @@ export default function SidebarProjectItem({
                   ) : (
                     <>
                       <div className="flex min-w-0 flex-1 items-center justify-between">
-                        <h3 className="truncate text-sm font-medium text-foreground">{project.displayName}</h3>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <h3 className="truncate text-sm font-medium text-foreground">{project.displayName}</h3>
+                          {project.projectId.startsWith('fleet:') && (
+                            <span
+                              className={cn(
+                                'flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none',
+                                project.fleetAlive
+                                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                  : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+                              )}
+                            >
+                              {project.fleetAlive ? 'online' : 'offline'}
+                            </span>
+                          )}
+                        </div>
                         {tasksEnabled && (
                           <TaskIndicator
                             status={taskStatus}
@@ -311,8 +327,22 @@ export default function SidebarProjectItem({
                 </div>
               ) : (
                 <div>
-                  <div className="truncate text-sm font-semibold text-foreground" title={project.displayName}>
-                    {project.displayName}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="truncate text-sm font-semibold text-foreground" title={project.displayName}>
+                      {project.displayName}
+                    </div>
+                    {project.projectId.startsWith('fleet:') && (
+                      <span
+                        className={cn(
+                          'flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none',
+                          project.fleetAlive
+                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                            : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+                        )}
+                      >
+                        {project.fleetAlive ? 'online' : 'offline'}
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {sessionCountDisplay}

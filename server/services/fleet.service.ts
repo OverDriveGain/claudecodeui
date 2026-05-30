@@ -75,16 +75,22 @@ export async function discoveryCall(
   return { status: r.status, json };
 }
 
-// List live agents for this domain (cached ~8s). Refreshes the session
-// registry. Never throws — returns last-known/[] if discovery is unreachable.
+// List agents for this domain (cached ~8s). Includes offline (alive:false) agents
+// from the fleet roster so their last session history is navigable. Refreshes the
+// session registry. Never throws — returns last-known/[] if discovery is unreachable.
 export async function listAgents({ force = false }: { force?: boolean } = {}): Promise<FleetAgent[]> {
   const now = Date.now();
   if (!force && now - listCache.at < LIST_TTL_MS) return listCache.agents;
   try {
     const { domain } = cfg();
     const { status, json } = await discoveryCall('GET', '/agents', { query: { domain } });
-    const agents: FleetAgent[] = status >= 200 && status < 300 && Array.isArray(json) ? json : [];
+    // Filter out discovery sentinel objects (e.g. {_peers_failed: [...]}).
+    const raw: unknown[] = status >= 200 && status < 300 && Array.isArray(json) ? json : [];
+    const agents: FleetAgent[] = raw.filter(
+      (a): a is FleetAgent => typeof a === 'object' && a !== null && 'agent' in a,
+    );
     listCache = { at: now, agents };
+    // Register ALL agents (alive or not) so history lookups work for offline agents.
     for (const a of agents) {
       if (a.session_id) registry.set(a.session_id, a);
     }
