@@ -4,6 +4,11 @@ import path from 'node:path';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { lookupBySession, listAgents, discoveryTranscript } from '@/services/fleet.service.js';
+import {
+  lookupBySession as lookupAgentBySession,
+  listAgents as listRegisteredAgents,
+  discoveryTranscript as agentDiscoveryTranscript,
+} from '@/services/agent-discovery.service.js';
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
@@ -99,6 +104,16 @@ export const sessionsService = {
     sessionId: string,
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
   ): Promise<FetchHistoryResult> {
+    // Registered agent (agent-discovery)? Fetch transcript from daemon by ID.
+    let registeredAgent = lookupAgentBySession(sessionId);
+    if (!registeredAgent) {
+      await listRegisteredAgents({ force: true });
+      registeredAgent = lookupAgentBySession(sessionId);
+    }
+    if (registeredAgent) {
+      return this.fetchAgentHistory(registeredAgent.id, sessionId);
+    }
+
     // Live fleet agent? Its transcript lives on a remote host — fetch it over
     // HTTP and normalize, instead of the local-disk DB-backed path.
     let agent = lookupBySession(sessionId);
@@ -125,6 +140,21 @@ export const sessionsService = {
       offset: options.offset ?? 0,
       projectPath: session.project_path ?? '',
     });
+  },
+
+  /**
+   * History for a registered agent (agent-discovery): pulls JSONL records from
+   * the daemon transcript endpoint by agent ID, normalizes them like a local
+   * session. Returns empty (not an error) if transcript is unavailable.
+   */
+  async fetchAgentHistory(agentId: string, sessionId: string): Promise<FetchHistoryResult> {
+    const t = await agentDiscoveryTranscript(agentId);
+    const sid = t.sessionId || sessionId;
+    const messages: NormalizedMessage[] = [];
+    for (const raw of t.records) {
+      messages.push(...this.normalizeMessage('claude', raw, sid));
+    }
+    return { messages, total: messages.length, hasMore: false, offset: 0, limit: null };
   },
 
   /**

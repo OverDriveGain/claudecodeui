@@ -162,6 +162,7 @@ export default tseslint.config(
             "server/shared/frontmatter.ts",
             "server/shared/claude-cli-path.ts",
             "server/services/fleet.service.{js,ts}", // fleet discovery client + session registry, imported directly by project/provider modules
+            "server/services/agent-discovery.service.{js,ts}", // agent-discovery client + session registry, imported directly by project/provider modules
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

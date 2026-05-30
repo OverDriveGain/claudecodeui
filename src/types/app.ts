@@ -66,11 +66,18 @@ export interface Project {
   opencodeSessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
-  // Fleet-agent virtual projects only.
+  // Fleet-agent virtual projects only (legacy fleet integration).
   fleetAlive?: boolean;
   fleetHost?: string;
   // controllable: agent has a live control plane; false → read-only transcript view.
   fleetControllable?: boolean;
+  // agent-discovery virtual projects only (general, register-based).
+  // agentState: ONLINE | CONTROLLABLE | DISCONNECTED
+  agentState?: 'ONLINE' | 'CONTROLLABLE' | 'DISCONNECTED';
+  agentLabel?: string;
+  agentId?: string;
+  agentCwd?: string;
+  agentLastSeen?: number;
   [key: string]: unknown;
 }
 

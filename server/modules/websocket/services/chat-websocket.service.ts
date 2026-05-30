@@ -32,6 +32,9 @@ type ChatWebSocketDependencies = {
   // Live fleet-agent bridge (see server/fleet-channel.js).
   queryFleetChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   isFleetSession: (sessionId: string) => Promise<boolean>;
+  // Registered agent bridge (agent-discovery, see server/agent-discovery-channel.js).
+  queryAgentChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  isAgentSession: (sessionId: string) => Promise<boolean>;
   spawnCursor: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   queryCodex: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   spawnGemini: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
@@ -130,6 +133,12 @@ export function handleChatConnection(
         // spawning a new Agent SDK session. See server/control-channel.js.
         const controlSid = typeof data.options?.sessionId === 'string' ? data.options.sessionId : '';
         const controlCwd = typeof data.options?.cwd === 'string' ? data.options.cwd : '';
+        // Registered agent (agent-discovery) — inject + tail transcript by agent ID.
+        const agentMatch = controlSid ? await dependencies.isAgentSession(controlSid) : false;
+        if (agentMatch) {
+          await dependencies.queryAgentChannel(data.command ?? '', data.options, writer);
+          return;
+        }
         // Live fleet agent (a virtual project) — inject into the remote agent
         // and tail its transcript over HTTP. See server/fleet-channel.js.
         const fleetMatch = controlSid ? await dependencies.isFleetSession(controlSid) : false;

@@ -120,8 +120,15 @@ export default function SidebarProjectItem({
   // Alive but no control plane — transcript is readable, sending is blocked.
   const isFleetReadOnly = isFleetProject && Boolean(project.fleetAlive) && project.fleetControllable === false;
 
+  // agent-discovery states
+  const isAgentProject = project.projectId.startsWith('agent:');
+  const agentState = project.agentState as 'ONLINE' | 'CONTROLLABLE' | 'DISCONNECTED' | undefined;
+  const isAgentDisconnected = isAgentProject && agentState === 'DISCONNECTED';
+  const isAgentReadOnly = isAgentProject && agentState === 'ONLINE';
+  const isAgentControllable = isAgentProject && agentState === 'CONTROLLABLE';
+
   return (
-    <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none', isFleetOffline && 'opacity-70')}>
+    <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none', isFleetOffline && 'opacity-70', isAgentDisconnected && 'opacity-70')}>
       <div className="md:group group">
         <div className="md:hidden">
           <div
@@ -195,6 +202,21 @@ export default function SidebarProjectItem({
                           {isFleetReadOnly && (
                             <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                               read-only
+                            </span>
+                          )}
+                          {isAgentControllable && (
+                            <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                              connected
+                            </span>
+                          )}
+                          {isAgentReadOnly && (
+                            <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                              read-only
+                            </span>
+                          )}
+                          {isAgentDisconnected && (
+                            <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                              disconnected
                             </span>
                           )}
                         </div>
@@ -354,6 +376,21 @@ export default function SidebarProjectItem({
                     {isFleetReadOnly && (
                       <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                         read-only
+                      </span>
+                    )}
+                    {isAgentControllable && (
+                      <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                        connected
+                      </span>
+                    )}
+                    {isAgentReadOnly && (
+                      <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                        read-only
+                      </span>
+                    )}
+                    {isAgentDisconnected && (
+                      <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                        disconnected
                       </span>
                     )}
                   </div>

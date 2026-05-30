@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { listAgents, fleetProjectId } from '@/services/fleet.service.js';
+import { listAgents as listRegisteredAgents, agentProjectId } from '@/services/agent-discovery.service.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
@@ -46,6 +47,12 @@ export type ProjectListItem = {
   // controllable: agent has a live control plane (can receive injected prompts).
   // false → transcript visible, but the composer must be disabled (read-only).
   fleetControllable?: boolean;
+  // agent-discovery metadata (only set for virtual registered-agent projects).
+  agentState?: 'ONLINE' | 'CONTROLLABLE' | 'DISCONNECTED';
+  agentLabel?: string;
+  agentId?: string;
+  agentCwd?: string;
+  agentLastSeen?: number;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -313,6 +320,48 @@ export async function getProjectsWithSessions(
     }
   } catch {
     // discovery down — just omit fleet projects this round
+  }
+
+  // agent-discovery virtual projects: all registered agents (ONLINE, CONTROLLABLE,
+  // DISCONNECTED) appear as projects. Register-only — if nothing is registered,
+  // this block adds nothing. Non-fatal if the daemon is unreachable.
+  try {
+    const registeredAgents = await listRegisteredAgents();
+    for (const a of registeredAgents) {
+      const isControllable = a.state === 'CONTROLLABLE';
+      const isConnected = a.state !== 'DISCONNECTED';
+      const stateLabel = isControllable ? 'connected' : isConnected ? 'read-only' : 'disconnected';
+      const sessions: SessionSummary[] = a.session_id
+        ? [{
+            id: a.session_id,
+            summary: `${a.label} (${stateLabel})`,
+            messageCount: 0,
+            lastActivity: a.last_activity
+              ? new Date(a.last_activity * 1000).toISOString()
+              : new Date().toISOString(),
+          }]
+        : [];
+      projects.push({
+        projectId: agentProjectId(a.id),
+        path: a.cwd,
+        displayName: a.label,
+        fullPath: a.cwd,
+        isStarred: false,
+        sessions,
+        cursorSessions: [],
+        codexSessions: [],
+        geminiSessions: [],
+        opencodeSessions: [],
+        sessionMeta: { hasMore: false, total: sessions.length },
+        agentState: a.state,
+        agentLabel: a.label,
+        agentId: a.id,
+        agentCwd: a.cwd,
+        agentLastSeen: a.last_seen,
+      });
+    }
+  } catch {
+    // daemon unreachable — omit registered agent projects this round
   }
 
   broadcastProgress({

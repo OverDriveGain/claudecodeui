@@ -104,6 +104,9 @@ interface ChatComposerProps {
   // When true the agent is alive but has no control plane — transcript is
   // readable but sending is not supported. Show a banner and disable input.
   readOnly?: boolean;
+  // When true the agent is registered but not running (DISCONNECTED state).
+  // Composer is disabled; the reconnect guidance panel is shown above in ChatInterface.
+  disconnected?: boolean;
 }
 
 export default function ChatComposer({
@@ -160,6 +163,7 @@ export default function ChatComposer({
   isTextareaExpanded,
   sendByCtrlEnter,
   readOnly = false,
+  disconnected = false,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -198,11 +202,20 @@ export default function ChatComposer({
         </div>
       )}
 
-      {readOnly && (
+      {(readOnly || disconnected) && (
         <div className="mx-auto mb-2 max-w-4xl">
           <div className="flex items-center gap-2 rounded-lg border border-amber-200/60 bg-amber-50/80 px-3 py-2 text-xs text-amber-700 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-400">
-            <span className="font-medium">View only</span>
-            <span className="text-amber-600/70 dark:text-amber-500/70">— this agent has no control plane; transcript is read-only.</span>
+            {disconnected ? (
+              <>
+                <span className="font-medium">Agent disconnected</span>
+                <span className="text-amber-600/70 dark:text-amber-500/70">— relaunch the agent and re-register to send messages.</span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium">View only</span>
+                <span className="text-amber-600/70 dark:text-amber-500/70">— this agent has no control plane; transcript is read-only.</span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -317,8 +330,8 @@ export default function ChatComposer({
               onFocus={() => onInputFocusChange?.(true)}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
-              placeholder={readOnly ? 'View only — this agent cannot receive messages' : placeholder}
-              disabled={readOnly}
+              placeholder={disconnected ? 'Agent disconnected — relaunch to send messages' : readOnly ? 'View only — this agent cannot receive messages' : placeholder}
+              disabled={readOnly || disconnected}
             />
         </PromptInputBody>
 
@@ -413,7 +426,7 @@ export default function ChatComposer({
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
             <PromptInputSubmit
-              disabled={!input.trim() || isLoading || readOnly}
+              disabled={!input.trim() || isLoading || readOnly || disconnected}
               className="h-10 w-10 sm:h-10 sm:w-10"
               onMouseDown={(event) => {
                 event.preventDefault();

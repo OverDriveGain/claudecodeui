@@ -35,6 +35,10 @@ import { queryFleetChannel, isFleetSession } from './fleet-channel.js';
 // instead of the local filesystem. GUI is unchanged; only the data source differs.
 import { isFleetProjectId } from './services/fleet.service.js';
 import { fleetFileTree, fleetReadFile, fleetFileContent, fleetReadOnly } from './fleet-files.js';
+// Registered agents (agent-discovery) — general, ID-addressed, register-only.
+import { queryAgentChannel, isAgentSession } from './agent-discovery-channel.js';
+import { isAgentProjectId } from './services/agent-discovery.service.js';
+import { agentFileTree, agentReadFile, agentFileContent, agentReadOnly } from './agent-discovery-files.js';
 import {
     spawnCursor,
     abortCursorSession,
@@ -109,6 +113,8 @@ const wss = createWebSocketServer(server, {
         isControlSession,
         queryFleetChannel,
         isFleetSession,
+        queryAgentChannel,
+        isAgentSession,
         spawnCursor,
         queryCodex,
         spawnGemini,
@@ -446,7 +452,7 @@ app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
         const { filePath } = req.query;
 
         if (isFleetProjectId(projectId)) return fleetReadFile(projectId, filePath, res);
-
+        if (isAgentProjectId(projectId)) return agentReadFile(projectId, filePath, res);
 
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
@@ -490,7 +496,7 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         const { path: filePath } = req.query;
 
         if (isFleetProjectId(projectId)) return fleetFileContent(projectId, filePath, res);
-
+        if (isAgentProjectId(projectId)) return agentFileContent(projectId, filePath, res);
 
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
@@ -550,7 +556,7 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
         const { filePath, content } = req.body;
 
         if (isFleetProjectId(projectId)) return fleetReadOnly(res);
-
+        if (isAgentProjectId(projectId)) return agentReadOnly(res);
 
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
@@ -599,6 +605,7 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
 app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) => {
     try {
         if (isFleetProjectId(req.params.projectId)) return fleetFileTree(req.params.projectId, res);
+        if (isAgentProjectId(req.params.projectId)) return agentFileTree(req.params.projectId, res);
 
         // Using fsPromises from import
 
@@ -679,6 +686,7 @@ app.post('/api/projects/:projectId/files/create', authenticateToken, async (req,
         const { path: parentPath, type, name } = req.body;
 
         if (isFleetProjectId(projectId)) return fleetReadOnly(res);
+        if (isAgentProjectId(projectId)) return agentReadOnly(res);
 
         // Validate input
         if (!name || !type) {
@@ -758,6 +766,7 @@ app.put('/api/projects/:projectId/files/rename', authenticateToken, async (req, 
         const { oldPath, newName } = req.body;
 
         if (isFleetProjectId(projectId)) return fleetReadOnly(res);
+        if (isAgentProjectId(projectId)) return agentReadOnly(res);
 
         // Validate input
         if (!oldPath || !newName) {
@@ -837,6 +846,7 @@ app.delete('/api/projects/:projectId/files', authenticateToken, async (req, res)
         const { path: targetPath, type } = req.body;
 
         if (isFleetProjectId(projectId)) return fleetReadOnly(res);
+        if (isAgentProjectId(projectId)) return agentReadOnly(res);
 
         // Validate input
         if (!targetPath) {
