@@ -427,6 +427,9 @@ function ChatInterface({
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
+          readOnly={
+            Boolean(selectedProject?.fleetAlive) && selectedProject?.fleetControllable === false
+          }
         />
       </div>
 

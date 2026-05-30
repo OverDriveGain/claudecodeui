@@ -66,6 +66,11 @@ export interface Project {
   opencodeSessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  // Fleet-agent virtual projects only.
+  fleetAlive?: boolean;
+  fleetHost?: string;
+  // controllable: agent has a live control plane; false → read-only transcript view.
+  fleetControllable?: boolean;
   [key: string]: unknown;
 }
 

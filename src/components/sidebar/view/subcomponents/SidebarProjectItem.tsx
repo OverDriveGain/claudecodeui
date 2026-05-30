@@ -115,7 +115,10 @@ export default function SidebarProjectItem({
     toggleProject();
   };
 
-  const isFleetOffline = project.projectId.startsWith('fleet:') && !project.fleetAlive;
+  const isFleetProject = project.projectId.startsWith('fleet:');
+  const isFleetOffline = isFleetProject && !project.fleetAlive;
+  // Alive but no control plane — transcript is readable, sending is blocked.
+  const isFleetReadOnly = isFleetProject && Boolean(project.fleetAlive) && project.fleetControllable === false;
 
   return (
     <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none', isFleetOffline && 'opacity-70')}>
@@ -177,7 +180,7 @@ export default function SidebarProjectItem({
                       <div className="flex min-w-0 flex-1 items-center justify-between">
                         <div className="flex min-w-0 items-center gap-1.5">
                           <h3 className="truncate text-sm font-medium text-foreground">{project.displayName}</h3>
-                          {project.projectId.startsWith('fleet:') && (
+                          {isFleetProject && (
                             <span
                               className={cn(
                                 'flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none',
@@ -187,6 +190,11 @@ export default function SidebarProjectItem({
                               )}
                             >
                               {project.fleetAlive ? 'online' : 'offline'}
+                            </span>
+                          )}
+                          {isFleetReadOnly && (
+                            <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                              read-only
                             </span>
                           )}
                         </div>
@@ -331,7 +339,7 @@ export default function SidebarProjectItem({
                     <div className="truncate text-sm font-semibold text-foreground" title={project.displayName}>
                       {project.displayName}
                     </div>
-                    {project.projectId.startsWith('fleet:') && (
+                    {isFleetProject && (
                       <span
                         className={cn(
                           'flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none',
@@ -341,6 +349,11 @@ export default function SidebarProjectItem({
                         )}
                       >
                         {project.fleetAlive ? 'online' : 'offline'}
+                      </span>
+                    )}
+                    {isFleetReadOnly && (
+                      <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        read-only
                       </span>
                     )}
                   </div>

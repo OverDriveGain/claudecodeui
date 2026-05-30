@@ -101,6 +101,9 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  // When true the agent is alive but has no control plane — transcript is
+  // readable but sending is not supported. Show a banner and disable input.
+  readOnly?: boolean;
 }
 
 export default function ChatComposer({
@@ -156,6 +159,7 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  readOnly = false,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -191,6 +195,15 @@ export default function ChatComposer({
             handlePermissionDecision={handlePermissionDecision}
             handleGrantToolPermission={handleGrantToolPermission}
           />
+        </div>
+      )}
+
+      {readOnly && (
+        <div className="mx-auto mb-2 max-w-4xl">
+          <div className="flex items-center gap-2 rounded-lg border border-amber-200/60 bg-amber-50/80 px-3 py-2 text-xs text-amber-700 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-400">
+            <span className="font-medium">View only</span>
+            <span className="text-amber-600/70 dark:text-amber-500/70">— this agent has no control plane; transcript is read-only.</span>
+          </div>
         </div>
       )}
 
@@ -304,7 +317,8 @@ export default function ChatComposer({
               onFocus={() => onInputFocusChange?.(true)}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
-              placeholder={placeholder}
+              placeholder={readOnly ? 'View only — this agent cannot receive messages' : placeholder}
+              disabled={readOnly}
             />
         </PromptInputBody>
 
@@ -399,7 +413,7 @@ export default function ChatComposer({
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
             <PromptInputSubmit
-              disabled={!input.trim() || isLoading}
+              disabled={!input.trim() || isLoading || readOnly}
               className="h-10 w-10 sm:h-10 sm:w-10"
               onMouseDown={(event) => {
                 event.preventDefault();

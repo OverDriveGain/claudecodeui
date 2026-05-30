@@ -23,6 +23,12 @@ export type FleetAgent = {
   session_id: string;
   transcript: string;
   last_activity?: number;
+  // Self-registration model fields (discover.py ≥ scan-all + opt-in registry).
+  // registered: agent opted in via self-registration (vs legacy roster/socket path).
+  // controllable: agent has a usable control plane (can receive injected prompts).
+  //   false → transcript is readable but sending is not supported.
+  registered?: boolean;
+  controllable?: boolean;
 };
 
 type DiscoveryOptions = {

@@ -43,6 +43,9 @@ export type ProjectListItem = {
   // Fleet-agent metadata (only set for virtual fleet projects).
   fleetAlive?: boolean;
   fleetHost?: string;
+  // controllable: agent has a live control plane (can receive injected prompts).
+  // false → transcript visible, but the composer must be disabled (read-only).
+  fleetControllable?: boolean;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -300,9 +303,12 @@ export async function getProjectsWithSessions(
         geminiSessions: [],
         opencodeSessions: [],
         sessionMeta: { hasMore: false, total: sessions.length },
-        // Pass alive state so the frontend can show offline/online status badge.
+        // Pass alive + control-plane state so the frontend can show the right badge.
         fleetAlive: isAlive,
         fleetHost: a.host,
+        // controllable is only meaningful when alive. Unregistered/legacy agents
+        // that don't carry the field default to controllable when alive (old behaviour).
+        fleetControllable: isAlive ? (a.controllable ?? true) : false,
       });
     }
   } catch {
