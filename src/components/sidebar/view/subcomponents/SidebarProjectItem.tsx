@@ -124,8 +124,8 @@ export default function SidebarProjectItem({
   const isAgentProject = project.projectId.startsWith('agent:');
   const agentState = project.agentState as 'ONLINE' | 'CONTROLLABLE' | 'DISCONNECTED' | undefined;
   const isAgentDisconnected = isAgentProject && agentState === 'DISCONNECTED';
-  const isAgentReadOnly = isAgentProject && agentState === 'ONLINE';
-  const isAgentControllable = isAgentProject && agentState === 'CONTROLLABLE';
+  const isAgentReadOnly = isAgentProject && agentState === 'ONLINE' && !project.agentWritable;
+  const isAgentControllable = isAgentProject && (agentState === 'CONTROLLABLE' || (agentState === 'ONLINE' && Boolean(project.agentWritable)));
 
   return (
     <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none', isFleetOffline && 'opacity-70', isAgentDisconnected && 'opacity-70')}>

@@ -67,14 +67,28 @@ def load_from_disk() -> None:
 
 
 def _compute_state(record: dict) -> str:
-    """Compute current liveness state for a record. No lock needed (read-only)."""
+    """Compute current liveness state for a record. No lock needed (read-only).
+
+    A record with a live reverse-connect channel shim (keyed by session_id) is
+    ONLINE even when no pid is resolved — the shim IS the live write path. If a
+    pid is also live and exposes a control port, CONTROLLABLE wins.
+    """
     pid = record.get("pid", 0)
-    if not pid or not proc.is_claude_pid(pid):
-        return "DISCONNECTED"
-    controllable, _, _ = assess_controllable(pid)
-    if controllable:
-        return "CONTROLLABLE"
-    return "ONLINE"
+    sid = record.get("session_id", "")
+    # Lazy import to avoid an import cycle at daemon startup
+    # (daemon -> registry -> channel would bind a partially-initialized module).
+    from . import channel
+    channel_live = bool(sid) and channel.has_connection(sid)
+
+    if pid and proc.is_claude_pid(pid):
+        controllable, _, _ = assess_controllable(pid)
+        if controllable:
+            return "CONTROLLABLE"
+        return "ONLINE"
+
+    if channel_live:
+        return "ONLINE"
+    return "DISCONNECTED"
 
 
 def snapshot() -> list[dict]:
@@ -174,6 +188,75 @@ def register(
                 "control_port": control_port or 0,
                 "control_bind": control_bind,
                 "dtach_socket": dtach_socket,
+                "registered_at": now,
+                "last_seen": now,
+            }
+            _registry[new_id] = rec
+            _save_raw(dict(_registry))
+            result = dict(rec)
+
+    result["state"] = _compute_state(result)
+    return result
+
+
+def register_channel_session(
+    session_id: str,
+    label: str | None = None,
+    cwd: str | None = None,
+) -> dict:
+    """Register/refresh an agent identified by its Claude session id, WITHOUT a
+    resolved pid. Used by the reverse-connect channel shim's /channel/connect:
+    the shim knows its session id but the daemon may not yet be able to map it to
+    a live claude pid. The record is matched by stored session_id (so a reconnect
+    updates the same record). pid stays 0 until a pid-bearing register() arrives;
+    liveness/state is then driven by the live channel connection (see
+    _compute_state in this module + channel.has_connection in daemon.py).
+    """
+    now = int(time.time())
+    with _lock:
+        # match an existing record by session_id, else by cwd, else create.
+        match_id = None
+        for k, v in _registry.items():
+            if v.get("session_id") and v["session_id"] == session_id:
+                match_id = k
+                break
+        if match_id is None and cwd:
+            for k, v in _registry.items():
+                if v.get("cwd") and v["cwd"] == cwd:
+                    match_id = k
+                    break
+
+        if match_id is not None:
+            rec = dict(_registry[match_id])
+            rec["session_id"] = session_id
+            rec["last_seen"] = now
+            if cwd:
+                rec["cwd"] = cwd
+            if label and label != rec.get("label"):
+                rec["label"] = label
+            _registry[match_id] = rec
+            _save_raw(dict(_registry))
+            result = dict(rec)
+        else:
+            effective_label = label or "unnamed"
+            existing_labels = {v["label"] for v in _registry.values()}
+            if effective_label in existing_labels:
+                suffix = 2
+                candidate = f"{effective_label} ({suffix})"
+                while candidate in existing_labels:
+                    suffix += 1
+                    candidate = f"{effective_label} ({suffix})"
+                effective_label = candidate
+            new_id = str(uuid.uuid4())
+            rec = {
+                "id": new_id,
+                "label": effective_label,
+                "cwd": cwd or "",
+                "pid": 0,
+                "session_id": session_id,
+                "control_port": 0,
+                "control_bind": "127.0.0.1",
+                "dtach_socket": "",
                 "registered_at": now,
                 "last_seen": now,
             }

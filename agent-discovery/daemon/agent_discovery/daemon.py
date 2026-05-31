@@ -8,20 +8,27 @@ import base64
 import hmac
 import json
 import os
+import shutil
+import subprocess
+import sys
 import time
 import threading
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from . import registry as reg
 from . import proc
+from . import channel
 from .control import assess_controllable, load_control_env
 from .sessions import newest_jsonl_path, session_id_from_path
 from .files import resolve_safe_path, file_listing, read_file_content
 
 VERSION = "0.1.0"
+
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
+RESUME_TIMEOUT = float(os.environ.get("AGENT_DISCOVERY_RESUME_TIMEOUT", "120"))
 
 BIND = os.environ.get("BIND", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "9301"))
@@ -121,14 +128,42 @@ def _record_to_api(record: dict) -> dict:
     alive = state in ("ONLINE", "CONTROLLABLE")
     controllable = state == "CONTROLLABLE"
 
+    stored_sid = record.get("session_id", "")
+
+    # If this is a channel-shim record without a resolved pid, try to (re)resolve
+    # the live claude pid from the stored session id so cwd/uptime/rss work.
+    if not pid and stored_sid:
+        resolved = proc.find_claude_by_session(stored_sid)
+        if resolved:
+            pid = resolved
+
     cwd = record.get("cwd", "")
-    if alive and pid:
+    if pid and proc.is_claude_pid(pid):
         live_cwd = proc.cwd_of(pid)
         if live_cwd:
             cwd = live_cwd
+        alive = True
 
     jsonl_path, jsonl_mtime = newest_jsonl_path(cwd) if cwd else ("", 0.0)
-    session_id = session_id_from_path(jsonl_path)
+    # Prefer the shim-reported session id; fall back to the newest-JSONL guess.
+    session_id = stored_sid or session_id_from_path(jsonl_path)
+
+    # If we have a stored session id but the cwd-derived transcript path didn't
+    # match it, locate the transcript by session id directly.
+    if stored_sid and (not jsonl_path or session_id_from_path(jsonl_path) != stored_sid):
+        import glob as _glob
+        import os as _os
+        for _p in _glob.glob(
+            _os.path.expanduser(f"~/.claude/projects/*/{stored_sid}.jsonl")
+        ):
+            jsonl_path = _p
+            try:
+                jsonl_mtime = _os.path.getmtime(_p)
+            except OSError:
+                jsonl_mtime = 0.0
+            break
+
+    channel_connected = bool(stored_sid) and channel.has_connection(stored_sid)
 
     uptime = proc.process_uptime(pid) if alive and pid else 0.0
     rss = proc.rss_bytes(pid) if alive and pid else 0
@@ -158,6 +193,7 @@ def _record_to_api(record: dict) -> dict:
         "uptime_seconds": uptime,
         "rss_bytes":      rss,
         "control_url":    control_url,
+        "channel_connected": channel_connected,
         "dtach_socket":   record.get("dtach_socket", ""),
     }
 
@@ -193,6 +229,109 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _handle_channel_connect(self, qs: dict):
+        """Reverse-connect channel shim dials in here. We register the agent
+        (connect == registration), then hold this response open as an SSE
+        stream and relay any pushed prompts down it until the shim disconnects."""
+        if not self._require_auth():
+            return
+
+        session_id = (qs.get("session") or [""])[0].strip()
+        if not session_id:
+            self._json(400, {"error": "missing required query param: session"})
+            return
+        label = (qs.get("label") or [""])[0].strip() or None
+        cwd = (qs.get("cwd") or [""])[0].strip() or None
+
+        # Park the SSE connection FIRST so has_connection(session) is true
+        # immediately, independent of pid resolution.
+        conn = channel.register_connection(session_id, label, cwd)
+
+        # Resolve the live claude pid from the session id (robust mapping via
+        # /proc environ). The shim may dial in before claude has fully exported
+        # its session env, so retry briefly. cwd from /proc wins over the
+        # shim-reported one.
+        pid = 0
+        for _ in range(20):  # up to ~10s
+            pid = proc.find_claude_by_session(session_id)
+            if pid:
+                break
+            time.sleep(0.5)
+        if pid:
+            live_cwd = proc.cwd_of(pid)
+            if live_cwd:
+                cwd = live_cwd
+
+        # connect == registration. Always upsert a registry record so the agent
+        # appears in /agents and claudeui's POST /agents/<id>/prompt has an id to
+        # target. register() requires a live claude pid (it validates); if we
+        # could not resolve one yet, create a session-keyed record directly so
+        # the agent is visible and the channel-shim deliver path works (the
+        # prompt route checks channel.has_connection by session, not by pid).
+        agent_id = None
+        try:
+            if pid and proc.is_claude_pid(pid):
+                record = reg.register(pid=pid, label=label, cwd=cwd)
+                agent_id = record["id"]
+            else:
+                record = reg.register_channel_session(
+                    session_id=session_id, label=label, cwd=cwd
+                )
+                agent_id = record["id"]
+        except Exception:
+            import traceback
+            sys.stderr.write(
+                "[agent-discovery] channel connect register FAILED:\n"
+                + traceback.format_exc()
+            )
+            sys.stderr.flush()
+
+        sys.stderr.write(
+            f"[agent-discovery] /channel/connect session={session_id} "
+            f"pid={pid} agent_id={agent_id} cwd={cwd}\n"
+        )
+        sys.stderr.flush()
+
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.write(channel.sse_bytes({
+                "type": "hello",
+                "session_id": session_id,
+                "agent_id": agent_id,
+            }))
+            self.wfile.flush()
+        except Exception:
+            channel.drop_connection(session_id, conn)
+            return
+
+        # Block this handler thread, draining the connection's queue. A periodic
+        # keepalive both holds the connection and detects a dead client (broken
+        # pipe on write -> we exit and drop).
+        try:
+            while not conn.closed:
+                try:
+                    payload = conn.q.get(timeout=15.0)
+                except Exception:
+                    payload = None
+                if payload is None:
+                    if conn.closed:
+                        break
+                    # keepalive comment
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                self.wfile.write(channel.sse_bytes(payload))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            channel.drop_connection(session_id, conn)
+
     def do_GET(self):
         parsed = urlsplit(self.path)
         path = parsed.path
@@ -202,6 +341,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ("/health", "/"):
                 self._json(200, {"ok": True, "version": VERSION})
+                return
+
+            if path == "/channel/connect":
+                self._handle_channel_connect(qs)
                 return
 
             if path == "/agents":
@@ -608,6 +751,29 @@ class Handler(BaseHTTPRequestHandler):
                 ctrl_port = record.get("control_port") or 0
                 ctrl_bind = record.get("control_bind") or "127.0.0.1"
 
+                # Preferred live-write path: a reverse-connect channel shim. If
+                # the agent's session has a parked SSE stream, push the prompt
+                # down it -> the shim relays it into the live session as a
+                # notifications/claude/channel message. Images are not supported
+                # over the channel surface; fall through for those.
+                api_for_chan = _record_to_api(record)
+                chan_sid = api_for_chan.get("session_id") or record.get("session_id")
+                if not images and chan_sid and channel.has_connection(chan_sid):
+                    delivered = channel.deliver(
+                        chan_sid,
+                        prompt_text,
+                        meta={"user": "central", "origin": "central"},
+                    )
+                    if delivered:
+                        self._json(202, {
+                            "id":         agent_id,
+                            "routed":     "channel-shim",
+                            "session_id": chan_sid,
+                            "state":      state,
+                        })
+                        return
+                    # fall through to legacy paths if the queue was full/closed
+
                 if not images and ctrl_port and state == "CONTROLLABLE":
                     ctrl_token = os.environ.get("CONTROL_TOKEN", "")
                     plugin_body = json.dumps({"content": prompt_text}).encode("utf-8")
@@ -645,13 +811,54 @@ class Handler(BaseHTTPRequestHandler):
                         })
                     return
 
-                self._json(409, {
-                    "error": (
-                        f"agent {agent_id!r} is ONLINE but not CONTROLLABLE "
-                        "(no live control port). Launch claude with --remote-control <port> "
-                        "to enable prompt injection."
-                    ),
-                    "state": state,
+                # ONLINE (alive, no live control port): fall back to
+                # `claude --print --resume <session_id>`. This writes to the SAME
+                # session JSONL, so the transcript tail streams the reply.
+                api = _record_to_api(record)
+                sid = api.get("session_id") or record.get("session_id")
+                if not sid:
+                    self._json(409, {
+                        "error": f"agent {agent_id!r} has no known session to resume",
+                        "state": state,
+                    })
+                    return
+
+                resume_cwd = api.get("cwd") or record.get("cwd") or os.path.expanduser("~")
+                argv = [
+                    CLAUDE_BIN, "--print", "--resume", sid,
+                    "--permission-mode", "bypassPermissions",
+                ]
+                model = payload.get("model")
+                if model:
+                    argv += ["--model", str(model)]
+                argv.append(prompt_text)
+                try:
+                    cp = subprocess.run(
+                        argv,
+                        capture_output=True,
+                        text=True,
+                        timeout=RESUME_TIMEOUT,
+                        cwd=resume_cwd,
+                    )
+                except subprocess.TimeoutExpired:
+                    self._json(504, {
+                        "error": f"claude --resume timed out after {RESUME_TIMEOUT}s",
+                        "state": state,
+                        "session_id": sid,
+                    })
+                    return
+                except Exception as e:
+                    self._json(502, {"error": f"claude --resume failed: {e}", "state": state})
+                    return
+
+                self._json(200, {
+                    "id":         agent_id,
+                    "routed":     "resume",
+                    "state":      state,
+                    "session_id": sid,
+                    "returncode": cp.returncode,
+                    "stdout":     cp.stdout,
+                    "stderr":     cp.stderr,
                 })
                 return
 
@@ -663,7 +870,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(bind: str = BIND, port: int = PORT):
     reg.load_from_disk()
-    server = HTTPServer((bind, port), Handler)
+    # ThreadingHTTPServer: held-open SSE handlers (GET /channel/connect) must not
+    # block other requests or the scan loop. daemon_threads makes connection
+    # threads die with the server.
+    server = ThreadingHTTPServer((bind, port), Handler)
+    server.daemon_threads = True
     print(
         f"agent-discovery {VERSION} listening on {bind}:{port}",
         flush=True,

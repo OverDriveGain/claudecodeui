@@ -158,3 +158,25 @@ def dtach_socket_of_ancestor(pid) -> str | None:
                     return arg
         current = ppid(str(current))
     return None
+
+
+def find_claude_by_session(session_id: str) -> int:
+    """Return the pid of the live claude process whose CLAUDE_CODE_SESSION_ID
+    env var matches, or 0. This is the robust shim<->agent mapping: the channel
+    shim knows its own session id, and claude exports it into the process env."""
+    if not session_id:
+        return 0
+    needle = "CLAUDE_CODE_SESSION_ID=" + session_id
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            raw = read_file("/proc/%d/environ" % pid).decode("utf-8", errors="replace")
+            if needle not in raw:
+                continue
+            if is_claude_pid(pid):
+                return pid
+        return 0
+    except (FileNotFoundError, OSError):
+        return 0

@@ -1,0 +1,16 @@
+{
+  "name": "channel",
+  "description": "Reverse-connect channel shim for agent-discovery. A dependency-free stdio MCP server that dials OUT to the agent-discovery daemon over SSE and relays its pushed prompts into the live Claude session as notifications/claude/channel. No per-agent inbound port, no cloud.",
+  "version": "0.1.0",
+  "author": {
+    "name": "agent-discovery",
+    "email": "noreply@example.com"
+  },
+  "keywords": [
+    "channel",
+    "remote-control",
+    "mcp",
+    "agent-discovery",
+    "reverse-connect"
+  ]
+}

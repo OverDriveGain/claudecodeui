@@ -53,6 +53,11 @@ export type ProjectListItem = {
   agentId?: string;
   agentCwd?: string;
   agentLastSeen?: number;
+  // channel-shim connected: agent is ONLINE and a reverse-connect channel is live,
+  // so the composer can WRITE into the live session even without a control port.
+  agentChannelConnected?: boolean;
+  // writable: composer should be enabled (CONTROLLABLE, or ONLINE + channel-connected).
+  agentWritable?: boolean;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -358,6 +363,10 @@ export async function getProjectsWithSessions(
         agentId: a.id,
         agentCwd: a.cwd,
         agentLastSeen: a.last_seen,
+        agentChannelConnected: Boolean(a.channel_connected),
+        agentWritable:
+          a.state === 'CONTROLLABLE' ||
+          (a.state === 'ONLINE' && Boolean(a.channel_connected)),
       });
     }
   } catch {

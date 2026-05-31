@@ -27,6 +27,7 @@ export type RegisteredAgent = {
   uptime_seconds?: number;
   rss_bytes?: number;
   control_url?: string | null;
+  channel_connected?: boolean;
   dtach_socket?: string;
 };
 

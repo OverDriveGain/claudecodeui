@@ -311,7 +311,7 @@ function ChatInterface({
   const agentState = selectedProject?.agentState as 'ONLINE' | 'CONTROLLABLE' | 'DISCONNECTED' | undefined;
   const isAgentProject = Boolean(selectedProject?.projectId?.startsWith('agent:'));
   const isAgentDisconnected = isAgentProject && agentState === 'DISCONNECTED';
-  const isAgentOnlineReadOnly = isAgentProject && agentState === 'ONLINE';
+  const isAgentOnlineReadOnly = isAgentProject && agentState === 'ONLINE' && !selectedProject?.agentWritable;
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>

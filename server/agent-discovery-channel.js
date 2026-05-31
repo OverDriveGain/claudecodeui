@@ -32,8 +32,9 @@ export async function queryAgentChannel(command, options = {}, ws) {
     return;
   }
 
-  // Agents that are not CONTROLLABLE cannot receive injected prompts.
-  if (!agent.controllable) {
+  // Writable if it has a live control plane (CONTROLLABLE) OR a connected
+  // reverse-connect channel shim. Only DISCONNECTED is truly blocked.
+  if (!(agent.controllable || agent.channel_connected || agent.state === 'CONTROLLABLE')) {
     const reason = agent.state === 'DISCONNECTED'
       ? 'agent is disconnected — relaunch it and re-register to resume'
       : 'agent has no control plane — transcript is read-only';

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentchan",
+  "description": "agent-discovery local marketplace. Hosts plugin:channel@agentchan — a dependency-free stdio reverse-connect channel shim that dials OUT to the agent-discovery daemon and relays its pushes into the live Claude session as notifications/claude/channel. No per-agent inbound port, no cloud.",
+  "owner": {
+    "name": "agent-discovery",
+    "email": "noreply@example.com"
+  },
+  "plugins": [
+    {
+      "name": "channel",
+      "description": "Reverse-connect channel shim. Dials the agent-discovery daemon (SSE) and relays pushed prompts into the live session.",
+      "category": "productivity",
+      "source": "./channel-plugin"
+    }
+  ]
+}
