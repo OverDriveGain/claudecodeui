@@ -3,19 +3,14 @@ import { useTranslation } from 'react-i18next';
 import ProviderLoginModal from '../../provider-auth/view/ProviderLoginModal';
 import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
-import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
-import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSettingsTab';
-import GitSettingsTab from '../view/tabs/git-settings/GitSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
-import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
-import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
 import type { SettingsProps } from '../types/types';
 
-function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
+function Settings({ isOpen, onClose, projects = [], initialTab = 'appearance' }: SettingsProps) {
   const { t } = useTranslation('settings');
   const {
     activeTab,
@@ -119,26 +114,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 />
               )}
 
-              {activeTab === 'git' && <GitSettingsTab />}
-
-              {activeTab === 'agents' && (
-                <AgentsSettingsTab
-                  providerAuthStatus={providerAuthStatus}
-                  onProviderLogin={openLoginForProvider}
-                  claudePermissions={claudePermissions}
-                  onClaudePermissionsChange={setClaudePermissions}
-                  cursorPermissions={cursorPermissions}
-                  onCursorPermissionsChange={setCursorPermissions}
-                  codexPermissionMode={codexPermissionMode}
-                  onCodexPermissionModeChange={setCodexPermissionMode}
-                  geminiPermissionMode={geminiPermissionMode}
-                  onGeminiPermissionModeChange={setGeminiPermissionMode}
-                  projects={projects}
-                />
-              )}
-
-              {activeTab === 'tasks' && <TasksSettingsTab />}
-
             {activeTab === 'notifications' && (
               <NotificationsSettingsTab
                 notificationPreferences={notificationPreferences}
@@ -150,10 +125,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 onDisablePush={handleDisablePush}
               />
             )}
-
-              {activeTab === 'api' && <CredentialsSettingsTab />}
-
-              {activeTab === 'plugins' && <PluginSettingsTab />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>
