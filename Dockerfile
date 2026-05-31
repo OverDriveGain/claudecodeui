@@ -12,6 +12,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
+# the postinstall hook (scripts/fix-node-pty.js) runs during `npm ci`, so it must
+# be present before install — copy it alongside the manifests to keep caching.
+COPY scripts ./scripts
 RUN npm ci
 
 COPY . .
