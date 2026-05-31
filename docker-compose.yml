@@ -1,0 +1,24 @@
+services:
+  ccui:
+    build: .
+    image: claude-code-cli-ui:1.0.0
+    container_name: claude-code-cli-ui
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-3001}:3001"
+    environment:
+      - SERVER_PORT=3001
+      - HOST=0.0.0.0
+      - DATABASE_PATH=/data/auth.db
+      # Enable live agents (agent-discovery) by pointing at a reachable daemon:
+      # - AGENT_DISCOVERY_URL=http://host.docker.internal:9301
+      # - AGENT_DISCOVERY_TOKEN=changeme
+    volumes:
+      # Persistent auth/settings database.
+      - ccui-data:/data
+      # To browse your real Claude Code sessions, mount your host config (read-only is enough):
+      # - ${HOME}/.claude:/root/.claude:ro
+      # - ${HOME}/.claude.json:/root/.claude.json:ro
+
+volumes:
+  ccui-data:
