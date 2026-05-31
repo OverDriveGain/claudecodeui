@@ -69,7 +69,7 @@ Backup of claude.json before the ledger edit: `~/.claude.json.harborbak`.
 ## 4. Current deploy state (live, on desktop)
 
 - **Daemon 9301**: running the NEW channel build (pid was 735530; `python -m agent_discovery
-  serve`, token `27503c95ca5312fa9f91aefe214315b40aba3884844fdcc48d4c3e76848cf598`).
+  serve`, token `<AGENT_DISCOVERY_TOKEN>`).
   Has `GET /channel/connect` (SSE hub) + prompt routing to the shim. `/channel/connect?session=x`
   returns 401 without auth = endpoint present.
 - **ccui 3001**: systemd `--user` `ccui.service`, serves `~/Projects/claudecodeui/dist` +
@@ -176,7 +176,7 @@ Frontend / bridge (the GUI work — partially done, needs §5):
 ## 8. How to re-verify quickly (next session)
 
 ```bash
-TOK=27503c95ca5312fa9f91aefe214315b40aba3884844fdcc48d4c3e76848cf598
+TOK=<AGENT_DISCOVERY_TOKEN>
 # 1. backend still works?
 curl -s -H "Authorization: Bearer $TOK" http://127.0.0.1:9301/agents | python3 -m json.tool
 # pick a chan=True agent id, then:
