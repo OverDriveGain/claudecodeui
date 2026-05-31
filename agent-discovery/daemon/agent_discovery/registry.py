@@ -122,23 +122,36 @@ def register(
     control_port: int | None = None,
     control_bind: str | None = None,
     dtach_socket: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """Register or reconnect an agent. Returns the final record with state.
 
     If agent_id is given and exists → update (reconnect). pid, last_seen, cwd,
     control_port, control_bind are refreshed.
 
-    If no match by id → create new record with generated UUID.
+    Else if the agent's Claude session id matches an existing record (e.g. the
+    reverse-connect channel shim already created a session-keyed record via
+    register_channel_session) → merge into THAT record instead of creating a
+    duplicate. session_id is taken from the arg or derived from the pid's
+    CLAUDE_CODE_SESSION_ID environ. This is what keeps one live agent from
+    splitting into two records (one holding the channel, one holding the pid).
+
+    If still no match → create a new record with generated UUID, storing the
+    session id so a later channel connect (or vice-versa) reconciles onto it.
 
     Label collision (different ID, same label) → append (2), (3), ... suffix.
     """
     now = int(time.time())
 
+    env = proc.read_environ(pid)
+
     if cwd is None:
         cwd = proc.cwd_of(pid)
 
+    if session_id is None:
+        session_id = env.get("CLAUDE_CODE_SESSION_ID", "").strip() or None
+
     if control_port is None:
-        env = proc.read_environ(pid)
         port_str = env.get("CONTROL_PORT", "").strip()
         if port_str.isdigit():
             control_port = int(port_str)
@@ -152,11 +165,24 @@ def register(
         dtach_socket = proc.dtach_socket_of_ancestor(pid) or ""
 
     with _lock:
+        # Reconcile by id first, then by session id (merge onto a channel-only
+        # record), else create new.
+        match_id = None
         if agent_id and agent_id in _registry:
-            rec = dict(_registry[agent_id])
+            match_id = agent_id
+        elif session_id:
+            for k, v in _registry.items():
+                if v.get("session_id") and v["session_id"] == session_id:
+                    match_id = k
+                    break
+
+        if match_id is not None:
+            rec = dict(_registry[match_id])
             rec["pid"] = pid
             rec["last_seen"] = now
             rec["cwd"] = cwd or rec.get("cwd", "")
+            if session_id:
+                rec["session_id"] = session_id
             if control_port:
                 rec["control_port"] = control_port
             if control_bind:
@@ -165,7 +191,7 @@ def register(
                 rec["dtach_socket"] = dtach_socket
             if label and label != rec.get("label"):
                 rec["label"] = label
-            _registry[agent_id] = rec
+            _registry[match_id] = rec
             _save_raw(dict(_registry))
             result = dict(rec)
         else:
@@ -185,6 +211,7 @@ def register(
                 "label": effective_label,
                 "cwd": cwd or "",
                 "pid": pid,
+                "session_id": session_id or "",
                 "control_port": control_port or 0,
                 "control_bind": control_bind,
                 "dtach_socket": dtach_socket,

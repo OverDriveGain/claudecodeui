@@ -582,10 +582,23 @@ export function useSidebarController({
     [projectSortOrder, projectsWithResolvedStarState],
   );
 
-  const filteredProjects = useMemo(
-    () => filterProjects(sortedProjects, debouncedSearchQuery),
-    [debouncedSearchQuery, sortedProjects],
-  );
+  const filteredProjects = useMemo(() => {
+    const base = filterProjects(sortedProjects, debouncedSearchQuery);
+    if (searchMode === 'liveAgents') {
+      // Only currently-live agents: registered agents that are ONLINE/CONTROLLABLE,
+      // plus legacy fleet agents that are alive.
+      return base.filter((project) => {
+        if (project.projectId.startsWith('agent:')) {
+          return project.agentState === 'ONLINE' || project.agentState === 'CONTROLLABLE';
+        }
+        if (project.projectId.startsWith('fleet:')) {
+          return Boolean(project.fleetAlive);
+        }
+        return false;
+      });
+    }
+    return base;
+  }, [debouncedSearchQuery, sortedProjects, searchMode]);
 
   const filteredArchivedSessions = useMemo(() => {
     const normalizedSearch = debouncedSearchQuery.trim().toLowerCase();

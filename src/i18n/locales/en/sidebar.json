@@ -113,6 +113,7 @@
   "search": {
     "modeProjects": "Projects",
     "modeConversations": "Conversations",
+    "modeLiveAgents": "Agents",
     "conversationsPlaceholder": "Search in conversations...",
     "searching": "Searching...",
     "noResults": "No results found",

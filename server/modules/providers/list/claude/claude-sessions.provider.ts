@@ -308,7 +308,18 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
 
-    if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
+    // A prompt injected through the reverse-connect channel shim is persisted as
+    // an isMeta user row whose content is wrapped in a <channel ...> tag and whose
+    // origin.kind is "channel". It IS the user's real message, so it must render
+    // as a user bubble instead of being filtered out with the other meta rows.
+    const originRecord = readObjectRecord(raw.origin);
+    const isChannelUserMessage =
+      raw.message?.role === 'user' &&
+      (originRecord?.kind === 'channel' ||
+        (typeof raw.message?.content === 'string' &&
+          /^\s*<channel\b[^>]*>[\s\S]*<\/channel>\s*$/.test(raw.message.content as string)));
+
+    if (raw.message?.role === 'user' && raw.message?.content && (raw.isMeta !== true || isChannelUserMessage)) {
       if (Array.isArray(raw.message.content)) {
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
@@ -361,6 +372,25 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }
       } else if (typeof raw.message.content === 'string') {
         const text = raw.message.content;
+
+        // Unwrap a channel-injected prompt to its inner text and render it as a
+        // normal user bubble so it no longer vanishes from history on reload.
+        if (isChannelUserMessage) {
+          const channelMatch = /<channel\b[^>]*>([\s\S]*?)<\/channel>/.exec(text);
+          const promptText = (channelMatch ? channelMatch[1] : text).trim();
+          if (promptText) {
+            messages.push(createNormalizedMessage({
+              id: baseId,
+              sessionId,
+              timestamp: ts,
+              provider: PROVIDER,
+              kind: 'text',
+              role: 'user',
+              content: promptText,
+            }));
+          }
+          return messages;
+        }
 
         /**
          * Claude stores compact summaries as synthetic "user" rows so the CLI

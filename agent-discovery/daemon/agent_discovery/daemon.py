@@ -163,7 +163,10 @@ def _record_to_api(record: dict) -> dict:
                 jsonl_mtime = 0.0
             break
 
-    channel_connected = bool(stored_sid) and channel.has_connection(stored_sid)
+    # Key off the EFFECTIVE session id we report (stored, else derived) — not just
+    # the stored one. A record created by a pid-bearing register() may carry the
+    # live channel under its derived session even with no stored session id.
+    channel_connected = bool(session_id) and channel.has_connection(session_id)
 
     uptime = proc.process_uptime(pid) if alive and pid else 0.0
     rss = proc.rss_bytes(pid) if alive and pid else 0
@@ -271,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         agent_id = None
         try:
             if pid and proc.is_claude_pid(pid):
-                record = reg.register(pid=pid, label=label, cwd=cwd)
+                record = reg.register(pid=pid, label=label, cwd=cwd, session_id=session_id)
                 agent_id = record["id"]
             else:
                 record = reg.register_channel_session(

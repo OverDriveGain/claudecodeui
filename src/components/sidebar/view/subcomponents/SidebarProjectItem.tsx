@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -126,6 +126,81 @@ export default function SidebarProjectItem({
   const isAgentDisconnected = isAgentProject && agentState === 'DISCONNECTED';
   const isAgentReadOnly = isAgentProject && agentState === 'ONLINE' && !project.agentWritable;
   const isAgentControllable = isAgentProject && (agentState === 'CONTROLLABLE' || (agentState === 'ONLINE' && Boolean(project.agentWritable)));
+
+  // A registered agent is a single, non-expandable leaf: clicking it opens the
+  // agent's live session straight away (no folder-style expand into one child).
+  if (isAgentProject) {
+    const rawAgentSession = sessions[0] ?? project.sessions?.[0] ?? null;
+    const agentSession: SessionWithProvider | null = rawAgentSession
+      ? { ...rawAgentSession, __provider: 'claude' as LLMProvider }
+      : null;
+
+    const openAgent = () => {
+      onProjectSelect(project);
+      if (agentSession) {
+        onSessionSelect(agentSession, project.projectId);
+      }
+    };
+
+    const dotClass = isAgentControllable
+      ? 'bg-green-500'
+      : isAgentDisconnected
+        ? 'bg-gray-400'
+        : 'bg-blue-500';
+
+    return (
+      <div className={cn('md:space-y-1', isAgentDisconnected && 'opacity-70')}>
+        <Button
+          variant="ghost"
+          className={cn(
+            'flex h-auto w-full items-center justify-between gap-2 p-2 font-normal hover:bg-accent/50',
+            isSelected && 'bg-accent text-accent-foreground',
+          )}
+          onClick={openAgent}
+          title={project.agentCwd || project.displayName}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <Bot
+              className={cn(
+                'h-4 w-4 flex-shrink-0',
+                isAgentControllable
+                  ? 'text-green-600 dark:text-green-400'
+                  : isAgentDisconnected
+                    ? 'text-muted-foreground'
+                    : 'text-primary',
+              )}
+            />
+            <div className="min-w-0 flex-1 text-left">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-sm font-semibold text-foreground">{project.displayName}</span>
+                {isAgentControllable && (
+                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                    connected
+                  </span>
+                )}
+                {isAgentReadOnly && (
+                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                    read-only
+                  </span>
+                )}
+                {isAgentDisconnected && (
+                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                    disconnected
+                  </span>
+                )}
+              </div>
+              {project.agentCwd && (
+                <div className="truncate text-xs text-muted-foreground" title={project.agentCwd}>
+                  {project.agentCwd}
+                </div>
+              )}
+            </div>
+          </div>
+          <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotClass)} />
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none', isFleetOffline && 'opacity-70', isAgentDisconnected && 'opacity-70')}>
