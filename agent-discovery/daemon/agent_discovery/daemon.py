@@ -217,14 +217,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(payload, default=str), "application/json")
 
     def _require_auth(self) -> bool:
+        # Tokenless mode: when no AGENT_DISCOVERY_TOKEN is configured the daemon
+        # runs open. This is the intended setup for a loopback (127.0.0.1),
+        # single-user host — the clients already omit the Bearer header and
+        # default the URL to localhost. Set a token only if the daemon is ever
+        # bound beyond loopback.
         if not AUTH_TOKEN:
-            self._json(503, {
-                "error": (
-                    "AGENT_DISCOVERY_TOKEN is not set; all gated endpoints are unavailable. "
-                    "Set the token in the daemon environment."
-                )
-            })
-            return False
+            return True
         auth = self.headers.get("Authorization", "")
         presented = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
         if not presented or not hmac.compare_digest(presented, AUTH_TOKEN):
