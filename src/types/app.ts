@@ -78,6 +78,7 @@ export interface Project {
   agentId?: string;
   agentCwd?: string;
   agentLastSeen?: number;
+  agentSessionId?: string;
   [key: string]: unknown;
 }
 

@@ -130,9 +130,14 @@ export default function SidebarProjectItem({
   // A registered agent is a single, non-expandable leaf: clicking it opens the
   // agent's live session straight away (no folder-style expand into one child).
   if (isAgentProject) {
+    // Resolve the agent's live session id. sessions[] is loaded lazily on expand
+    // and the agent leaf never expands, so prefer the explicit agentSessionId from
+    // the project payload; fall back to any loaded/inline session.
+    const agentSessionId =
+      project.agentSessionId || sessions[0]?.id || project.sessions?.[0]?.id || null;
     const rawAgentSession = sessions[0] ?? project.sessions?.[0] ?? null;
-    const agentSession: SessionWithProvider | null = rawAgentSession
-      ? { ...rawAgentSession, __provider: 'claude' as LLMProvider }
+    const agentSession: SessionWithProvider | null = agentSessionId
+      ? { ...(rawAgentSession ?? {}), id: agentSessionId, __provider: 'claude' as LLMProvider }
       : null;
 
     const openAgent = () => {

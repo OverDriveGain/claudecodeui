@@ -58,6 +58,8 @@ export type ProjectListItem = {
   agentChannelConnected?: boolean;
   // writable: composer should be enabled (CONTROLLABLE, or ONLINE + channel-connected).
   agentWritable?: boolean;
+  // the agent's live session id, so the sidebar leaf can open it directly.
+  agentSessionId?: string;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -367,6 +369,10 @@ export async function getProjectsWithSessions(
         agentWritable:
           a.state === 'CONTROLLABLE' ||
           (a.state === 'ONLINE' && Boolean(a.channel_connected)),
+        // Explicit session id for the agent leaf to navigate to directly — the
+        // sidebar loads `sessions` lazily on expand, and the agent leaf never
+        // expands, so it cannot rely on sessions[] being populated.
+        agentSessionId: a.session_id || undefined,
       });
     }
   } catch {
