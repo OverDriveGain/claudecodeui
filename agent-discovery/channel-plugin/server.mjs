@@ -41,6 +41,9 @@ const SESSION_CWD = process.env.CLAUDE_PROJECT_DIR || process.env.PWD || ''
 const DAEMON_URL = (process.env.AGENT_DISCOVERY_URL || 'http://127.0.0.1:9301').replace(/\/+$/, '')
 const TOKEN = process.env.AGENT_DISCOVERY_TOKEN || ''
 const LABEL = process.env.AGENT_CHANNEL_LABEL || ''
+// Optional owner/domain tag for peer fan-out filtering on aggregating daemons.
+// The daemon reads `domain` on GET /channel/connect and stores it on the record.
+const DOMAIN = process.env.AGENT_DOMAIN || ''
 
 function log(msg) {
   try { process.stderr.write(`channel shim: ${msg}\n`) } catch {}
@@ -195,6 +198,7 @@ function connect() {
   u.searchParams.set('session', SESSION_ID)
   if (LABEL) u.searchParams.set('label', LABEL)
   if (SESSION_CWD) u.searchParams.set('cwd', SESSION_CWD)
+  if (DOMAIN) u.searchParams.set('domain', DOMAIN)
 
   const lib = u.protocol === 'https:' ? https : http
   const headers = { Accept: 'text/event-stream' }
