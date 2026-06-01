@@ -196,6 +196,8 @@ All configuration is via environment variables.
 | `AGENT_DISCOVERY_URL` | `http://127.0.0.1:9301` | claudeui: where to reach the daemon |
 | `AGENT_DISCOVERY_CONTROL_ENV` | (unset) | Path to an env file that provides `CONTROL_TOKEN` for prompt injection |
 | `AGENT_DISCOVERY_PEERS` | (unset) | Comma-separated peer daemon URLs for multi-host aggregation (advanced) |
+| `AGENT_DISCOVERY_PEER_DOMAINS` | (unset) | Comma-separated allowlist of agent `domain` tags to surface FROM PEERS. Unset = include all peer agents. Local agents are never filtered. (advanced) |
+| `AGENT_DOMAIN` | (unset) | Set in the agent's launch environment. `agent-discovery register` includes it as the agent's `domain` tag so a peer can be allowlisted. |
 
 ---
 
@@ -259,6 +261,22 @@ AGENT_DISCOVERY_PEERS=http://host-b:9301,http://host-c:9301
 The primary daemon fans out `GET /agents` to each peer and merges results. Each peer is
 called with `?local=true` to prevent recursion. claudeui points at the primary daemon only.
 Each host runs its own daemon with the same token.
+
+### Surfacing only some peer agents (domain allowlist)
+
+By default the fan-out merges *all* of a peer's agents. To surface only agents tagged
+with a specific owner/tenant, launch those agents with `AGENT_DOMAIN=<tag>` in their
+environment (so `register` records the tag) and set on the aggregating daemon:
+
+```bash
+AGENT_DISCOVERY_PEERS=http://host-b:9301
+AGENT_DISCOVERY_PEER_DOMAINS=acme
+```
+
+Now `GET /agents` returns all LOCAL agents (never filtered) plus only the peer agents
+whose `domain` is `acme`. Transcript and prompt proxying follow the same filter — a peer
+agent that is hidden is also not proxyable. An agent with no domain tag is excluded
+whenever an allowlist is set.
 
 ---
 

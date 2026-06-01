@@ -2,8 +2,12 @@
 Persistent agent registry.
 
 Registry is keyed by agent UUID (stable across respawns). Each record:
-  {id, label, cwd, pid, control_port, control_bind, dtach_socket,
+  {id, label, domain, cwd, pid, control_port, control_bind, dtach_socket,
    registered_at, last_seen, state}
+
+`domain` is an optional owner/tenant tag (default ""). It is opaque to the daemon
+except that a peer-aggregating daemon may filter peer agents by it (see
+AGENT_DISCOVERY_PEER_DOMAINS in daemon.py). Local agents are never filtered.
 
 Persistence: atomic write to a JSON file under ~/.local/share/agent-discovery/.
 State (ONLINE/CONTROLLABLE/DISCONNECTED) is computed on read, not stored.
@@ -123,6 +127,7 @@ def register(
     control_bind: str | None = None,
     dtach_socket: str | None = None,
     session_id: str | None = None,
+    domain: str | None = None,
 ) -> dict:
     """Register or reconnect an agent. Returns the final record with state.
 
@@ -191,6 +196,10 @@ def register(
                 rec["dtach_socket"] = dtach_socket
             if label and label != rec.get("label"):
                 rec["label"] = label
+            if domain is not None:
+                rec["domain"] = domain
+            elif "domain" not in rec:
+                rec["domain"] = ""
             _registry[match_id] = rec
             _save_raw(dict(_registry))
             result = dict(rec)
@@ -209,6 +218,7 @@ def register(
             rec = {
                 "id": new_id,
                 "label": effective_label,
+                "domain": domain or "",
                 "cwd": cwd or "",
                 "pid": pid,
                 "session_id": session_id or "",
@@ -230,6 +240,7 @@ def register_channel_session(
     session_id: str,
     label: str | None = None,
     cwd: str | None = None,
+    domain: str | None = None,
 ) -> dict:
     """Register/refresh an agent identified by its Claude session id, WITHOUT a
     resolved pid. Used by the reverse-connect channel shim's /channel/connect:
@@ -261,6 +272,10 @@ def register_channel_session(
                 rec["cwd"] = cwd
             if label and label != rec.get("label"):
                 rec["label"] = label
+            if domain is not None:
+                rec["domain"] = domain
+            elif "domain" not in rec:
+                rec["domain"] = ""
             _registry[match_id] = rec
             _save_raw(dict(_registry))
             result = dict(rec)
@@ -278,6 +293,7 @@ def register_channel_session(
             rec = {
                 "id": new_id,
                 "label": effective_label,
+                "domain": domain or "",
                 "cwd": cwd or "",
                 "pid": 0,
                 "session_id": session_id,
