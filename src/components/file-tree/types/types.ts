@@ -23,6 +23,14 @@ export interface FileTreeImageSelection {
   projectId: string;
 }
 
+export interface FileTreeVideoSelection {
+  name: string;
+  path: string;
+  projectPath?: string;
+  // DB projectId; used by VideoViewer to build the raw content URL.
+  projectId: string;
+}
+
 export interface FileIconData {
   icon: LucideIcon;
   color: string;

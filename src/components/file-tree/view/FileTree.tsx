@@ -9,8 +9,8 @@ import { useFileTreeOperations } from '../hooks/useFileTreeOperations';
 import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
-import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
-import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
+import type { FileTreeImageSelection, FileTreeVideoSelection, FileTreeNode } from '../types/types';
+import { formatFileSize, formatRelativeTime, isImageFile, isVideoFile } from '../utils/fileTreeUtils';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
 import FileTreeBody from './FileTreeBody';
@@ -18,6 +18,7 @@ import FileTreeDetailedColumns from './FileTreeDetailedColumns';
 import FileTreeHeader from './FileTreeHeader';
 import FileTreeLoadingState from './FileTreeLoadingState';
 import ImageViewer from './ImageViewer';
+import VideoViewer from './VideoViewer';
 
 
 type FileTreeProps = {
@@ -28,6 +29,7 @@ type FileTreeProps = {
 export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<FileTreeVideoSelection | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const newItemInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +105,18 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           projectPath: selectedProject.path,
           // Image URL uses the DB projectId so ImageViewer can hit the
           // /api/projects/:projectId/files/content endpoint directly.
+          projectId: selectedProject.projectId,
+        });
+        return;
+      }
+
+      if (isVideoFile(item.name) && selectedProject) {
+        setSelectedVideo({
+          name: item.name,
+          path: item.path,
+          projectPath: selectedProject.path,
+          // Same content endpoint as images; VideoViewer streams it via
+          // native HTTP Range requests for scrubbing.
           projectId: selectedProject.projectId,
         });
         return;
@@ -221,6 +235,13 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         <ImageViewer
           file={selectedImage}
           onClose={() => setSelectedImage(null)}
+        />
+      )}
+
+      {selectedVideo && (
+        <VideoViewer
+          file={selectedVideo}
+          onClose={() => setSelectedVideo(null)}
         />
       )}
 
