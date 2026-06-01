@@ -530,7 +530,50 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         const mimeType = mime.lookup(resolved) || 'application/octet-stream';
         res.setHeader('Content-Type', mimeType);
 
-        // Stream the file
+        // Advertise range support so <video>/<audio> can stream and seek.
+        const stat = await fsPromises.stat(resolved);
+        const fileSize = stat.size;
+        res.setHeader('Accept-Ranges', 'bytes');
+
+        // Honor HTTP Range requests (partial content) — required for video
+        // scrubbing without downloading the whole file first.
+        const range = req.headers.range;
+        if (range) {
+            const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+            if (!match) {
+                res.setHeader('Content-Range', `bytes */${fileSize}`);
+                return res.status(416).end();
+            }
+            let start = match[1] === '' ? null : parseInt(match[1], 10);
+            let end = match[2] === '' ? null : parseInt(match[2], 10);
+            // Suffix range ("bytes=-500" => last 500 bytes).
+            if (start === null) {
+                start = Math.max(0, fileSize - (end ?? 0));
+                end = fileSize - 1;
+            } else if (end === null || end >= fileSize) {
+                end = fileSize - 1;
+            }
+            if (start > end || start >= fileSize) {
+                res.setHeader('Content-Range', `bytes */${fileSize}`);
+                return res.status(416).end();
+            }
+
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+            res.setHeader('Content-Length', end - start + 1);
+            const rangeStream = fs.createReadStream(resolved, { start, end });
+            rangeStream.pipe(res);
+            rangeStream.on('error', (error) => {
+                console.error('Error streaming file range:', error);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: 'Error reading file' });
+                }
+            });
+            return;
+        }
+
+        // No range: stream the whole file.
+        res.setHeader('Content-Length', fileSize);
         const fileStream = fs.createReadStream(resolved);
         fileStream.pipe(res);
 

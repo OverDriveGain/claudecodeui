@@ -16,3 +16,11 @@ export const IMAGE_FILE_EXTENSIONS = new Set([
   'ico',
   'bmp',
 ]);
+
+export const VIDEO_FILE_EXTENSIONS = new Set([
+  'mp4',
+  'webm',
+  'mov',
+  'm4v',
+  'ogv',
+]);
