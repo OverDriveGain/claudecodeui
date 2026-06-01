@@ -102,6 +102,13 @@ def cmd_register(args) -> int:
     if cwd:
         payload["cwd"] = cwd
 
+    # Optional owner/tenant tag. Read from the launcher-exported AGENT_DOMAIN env
+    # var (falls back to the daemon-process environ in case this CLI runs without
+    # it but the claude process has it). Only included if set; backward compatible.
+    domain = os.environ.get("AGENT_DOMAIN", "").strip()
+    if domain:
+        payload["domain"] = domain
+
     env = proc.read_environ(claude_pid)
     ctrl_port = env.get("CONTROL_PORT", "").strip()
     ctrl_bind = env.get("CONTROL_BIND", "").strip()

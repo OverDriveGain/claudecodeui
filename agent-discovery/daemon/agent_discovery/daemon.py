@@ -43,6 +43,30 @@ PEERS: list[str] = [
 ]
 PEER_TIMEOUT = float(os.environ.get("AGENT_DISCOVERY_PEER_TIMEOUT", "2.5"))
 
+# Optional allowlist of agent `domain` tags this daemon will surface FROM PEERS.
+# CSV, e.g. "wael" or "wael,acme". Empty/unset -> no filter (include all peer
+# agents; current backward-compatible behavior). LOCAL agents are NEVER filtered
+# by this — it only gates peer-fetched agents so a multi-tenant fan-out can show a
+# specific tenant's remote agents without pulling in the whole peer fleet.
+PEER_DOMAINS: set[str] = {
+    d.strip()
+    for d in os.environ.get("AGENT_DISCOVERY_PEER_DOMAINS", "").split(",")
+    if d.strip()
+}
+
+
+def _peer_agent_allowed(agent: dict) -> bool:
+    """True if a peer-fetched agent passes the domain allowlist. Fail-safe: a
+    missing/blank/malformed domain == "no domain" -> excluded when an allowlist is
+    set. No allowlist -> everything passes."""
+    if not PEER_DOMAINS:
+        return True
+    dom = agent.get("domain")
+    if not isinstance(dom, str):
+        return False
+    return dom.strip() in PEER_DOMAINS
+
+
 _peer_agent_cache: dict[str, str] = {}
 _peer_cache_lock = threading.Lock()
 
@@ -240,6 +264,7 @@ def _record_to_api(record: dict) -> dict:
     return {
         "id":             record["id"],
         "label":          record.get("label", "unnamed"),
+        "domain":         record.get("domain", ""),
         "state":          state,
         "alive":          alive,
         "controllable":   controllable,
@@ -301,6 +326,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         label = (qs.get("label") or [""])[0].strip() or None
         cwd = (qs.get("cwd") or [""])[0].strip() or None
+        domain = (qs.get("domain") or [""])[0].strip() or None
 
         # Park the SSE connection FIRST so has_connection(session) is true
         # immediately, independent of pid resolution.
@@ -330,11 +356,13 @@ class Handler(BaseHTTPRequestHandler):
         agent_id = None
         try:
             if pid and proc.is_claude_pid(pid):
-                record = reg.register(pid=pid, label=label, cwd=cwd, session_id=session_id)
+                record = reg.register(
+                    pid=pid, label=label, cwd=cwd, session_id=session_id, domain=domain
+                )
                 agent_id = record["id"]
             else:
                 record = reg.register_channel_session(
-                    session_id=session_id, label=label, cwd=cwd
+                    session_id=session_id, label=label, cwd=cwd, domain=domain
                 )
                 agent_id = record["id"]
         except Exception:
@@ -424,6 +452,16 @@ class Handler(BaseHTTPRequestHandler):
 
                 def _fetch(idx, peer_url):
                     agents, err = _fetch_peer_agents(peer_url)
+                    if not err:
+                        # Drop non-allowlisted peer agents BEFORE both the merge and
+                        # the peer cache, so /agents output and the transcript/prompt
+                        # proxy target set stay consistent (a hidden agent must not be
+                        # proxyable). Entries lacking an "id" (e.g. {_peers_failed})
+                        # are kept so the caller still sees them.
+                        agents = [
+                            a for a in agents
+                            if not a.get("id") or _peer_agent_allowed(a)
+                        ]
                     with lock:
                         if err:
                             peers_failed.append(err)
@@ -665,6 +703,8 @@ class Handler(BaseHTTPRequestHandler):
                 control_port = payload.get("control_port") or None
                 control_bind = payload.get("control_bind") or None
                 dtach_socket = payload.get("dtach_socket") or None
+                domain = payload.get("domain")
+                domain = str(domain).strip() if domain else None
 
                 record = reg.register(
                     pid=pid,
@@ -674,6 +714,7 @@ class Handler(BaseHTTPRequestHandler):
                     control_port=control_port,
                     control_bind=control_bind,
                     dtach_socket=dtach_socket,
+                    domain=domain,
                 )
                 self._json(200, {
                     "id":            record["id"],
