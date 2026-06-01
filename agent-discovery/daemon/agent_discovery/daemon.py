@@ -52,6 +52,63 @@ IMAGE_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 PROMPT_MAX_CONTENT_LENGTH = IMAGE_MAX_TOTAL_BYTES + 512 * 1024
 ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
+# Subdir (under the agent's cwd) where channel-delivered attachments are written.
+ATTACHMENT_DIRNAME = ".ccui-attachments"
+_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+
+def _materialize_images(images: list, cwd: str) -> dict:
+    """Write decoded image bytes into <cwd>/.ccui-attachments/ and return a meta
+    dict referencing them by PATH — mirroring how claude's own channels (e.g. the
+    official telegram plugin) deliver media: the binary lives on disk and the
+    notification carries `image_path` / `attachment_*` in meta, not the bytes.
+
+    Returns {} on failure (caller falls back to text-only delivery).
+    """
+    if not images or not cwd:
+        return {}
+    try:
+        adir = os.path.join(cwd, ATTACHMENT_DIRNAME)
+        os.makedirs(adir, exist_ok=True)
+        paths = []
+        for idx, img in enumerate(images):
+            decoded = img.get("decoded")
+            if not decoded:
+                continue
+            base = os.path.basename(img.get("name") or f"image{idx}") or f"image{idx}"
+            ext = _MIME_EXT.get(img.get("mimeType", ""), "")
+            if ext and not base.lower().endswith(ext):
+                base = base + ext
+            # Prefix with the unix time + index so repeated sends don't clobber.
+            fname = f"{int(time.time())}-{idx}-{base}"
+            fpath = os.path.join(adir, fname)
+            with open(fpath, "wb") as f:
+                f.write(decoded)
+            paths.append({"path": fpath, "mime": img.get("mimeType", ""), "name": base})
+        if not paths:
+            return {}
+        meta = {
+            # Primary image (claude reads `image_path` like the telegram channel).
+            "image_path": paths[0]["path"],
+            "attachment_kind": "image",
+            "attachment_mime": paths[0]["mime"],
+            "attachment_name": paths[0]["name"],
+            "attachment_count": str(len(paths)),
+        }
+        # Extra images get numbered keys so the agent can find them too.
+        for i, p in enumerate(paths[1:], start=1):
+            meta[f"image_path_{i}"] = p["path"]
+        return meta
+    except Exception as e:
+        sys.stderr.write(f"[agent-discovery] _materialize_images failed: {e}\n")
+        sys.stderr.flush()
+        return {}
+
 
 def _update_peer_cache(peer_url: str, agents: list) -> None:
     with _peer_cache_lock:
@@ -756,24 +813,40 @@ class Handler(BaseHTTPRequestHandler):
                 # Preferred live-write path: a reverse-connect channel shim. If
                 # the agent's session has a parked SSE stream, push the prompt
                 # down it -> the shim relays it into the live session as a
-                # notifications/claude/channel message. Images are not supported
-                # over the channel surface; fall through for those.
+                # notifications/claude/channel message. Attachments are written to
+                # disk under the agent's cwd and referenced by PATH in meta
+                # (image_path / attachment_*), mirroring claude's own channels;
+                # the live agent reads them from those paths.
                 api_for_chan = _record_to_api(record)
                 chan_sid = api_for_chan.get("session_id") or record.get("session_id")
-                if not images and chan_sid and channel.has_connection(chan_sid):
-                    delivered = channel.deliver(
-                        chan_sid,
-                        prompt_text,
-                        meta={"user": "central", "origin": "central"},
-                    )
-                    if delivered:
-                        self._json(202, {
-                            "id":         agent_id,
-                            "routed":     "channel-shim",
-                            "session_id": chan_sid,
-                            "state":      state,
-                        })
-                        return
+                if chan_sid and channel.has_connection(chan_sid):
+                    chan_meta = {"user": "central", "origin": "central"}
+                    chan_text = prompt_text
+                    if images:
+                        img_meta = _materialize_images(images, api_for_chan.get("cwd") or record.get("cwd", ""))
+                        if img_meta:
+                            chan_meta.update(img_meta)
+                            # Append explicit path refs so the agent sees them in
+                            # the prompt text too (not just attributes).
+                            refs = [img_meta["image_path"]] + [
+                                img_meta[k] for k in sorted(img_meta) if k.startswith("image_path_")
+                            ]
+                            chan_text = (prompt_text + "\n\n" if prompt_text else "") + \
+                                "[attached file%s: %s]" % ("s" if len(refs) > 1 else "", ", ".join(refs))
+                        else:
+                            # materialization failed -> don't silently drop; fall through
+                            chan_meta = None
+                    if chan_meta is not None:
+                        delivered = channel.deliver(chan_sid, chan_text, meta=chan_meta)
+                        if delivered:
+                            self._json(202, {
+                                "id":         agent_id,
+                                "routed":     "channel-shim",
+                                "session_id": chan_sid,
+                                "state":      state,
+                                "images":     len(images),
+                            })
+                            return
                     # fall through to legacy paths if the queue was full/closed
 
                 if not images and ctrl_port and state == "CONTROLLABLE":
