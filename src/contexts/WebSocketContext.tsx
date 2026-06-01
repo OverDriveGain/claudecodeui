@@ -30,6 +30,11 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false); // Track if component is unmounted
   const hasConnectedRef = useRef(false); // Track if we've ever connected (to detect reconnects)
+  // Messages sent before the socket is OPEN (e.g. the very first message after a
+  // fresh page load, while the WS is still CONNECTING) are buffered here and
+  // flushed in onopen, instead of being silently dropped.
+  const sendQueueRef = useRef<string[]>([]);
+  const MAX_QUEUED_MESSAGES = 50;
   const [latestMessage, setLatestMessage] = useState<any>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -58,10 +63,25 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
       
       const websocket = new WebSocket(wsUrl);
+      // Assign immediately (not just in onopen) so sendMessage can observe the
+      // CONNECTING state and queue rather than drop.
+      wsRef.current = websocket;
 
       websocket.onopen = () => {
         setIsConnected(true);
         wsRef.current = websocket;
+        // Flush anything queued while the socket was connecting/reconnecting.
+        if (sendQueueRef.current.length > 0) {
+          const queued = sendQueueRef.current;
+          sendQueueRef.current = [];
+          for (const payload of queued) {
+            try {
+              websocket.send(payload);
+            } catch (error) {
+              console.error('Failed to flush queued WebSocket message:', error);
+            }
+          }
+        }
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
           setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
@@ -99,11 +119,19 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   }, [token]); // everytime token changes, we reconnect
 
   const sendMessage = useCallback((message: any) => {
+    const payload = JSON.stringify(message);
     const socket = wsRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-    } else {
-      console.warn('WebSocket not connected');
+      socket.send(payload);
+      return;
+    }
+    // Socket is still connecting or temporarily down (reconnecting). Queue the
+    // message and let onopen flush it, so the first message after a fresh load
+    // isn't lost. Cap the buffer so a never-connecting socket can't grow it
+    // unbounded; drop the oldest if we somehow exceed the cap.
+    sendQueueRef.current.push(payload);
+    if (sendQueueRef.current.length > MAX_QUEUED_MESSAGES) {
+      sendQueueRef.current.shift();
     }
   }, []);
 
