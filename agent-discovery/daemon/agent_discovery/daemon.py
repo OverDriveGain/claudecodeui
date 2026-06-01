@@ -825,14 +825,12 @@ class Handler(BaseHTTPRequestHandler):
                     if images:
                         img_meta = _materialize_images(images, api_for_chan.get("cwd") or record.get("cwd", ""))
                         if img_meta:
+                            # Paths go in meta ONLY (they surface to the agent as
+                            # <channel ... image_path="..."> attributes — the same
+                            # convention claude's telegram channel uses). The prompt
+                            # text is left clean so the GUI keeps rendering the
+                            # uploaded image inline instead of showing a path.
                             chan_meta.update(img_meta)
-                            # Append explicit path refs so the agent sees them in
-                            # the prompt text too (not just attributes).
-                            refs = [img_meta["image_path"]] + [
-                                img_meta[k] for k in sorted(img_meta) if k.startswith("image_path_")
-                            ]
-                            chan_text = (prompt_text + "\n\n" if prompt_text else "") + \
-                                "[attached file%s: %s]" % ("s" if len(refs) > 1 else "", ", ".join(refs))
                         else:
                             # materialization failed -> don't silently drop; fall through
                             chan_meta = None

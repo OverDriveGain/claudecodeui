@@ -107,6 +107,11 @@ function handleRpc(msg) {
         'There is no outbound tool — replies are not delivered anywhere. Treat an',
         'inbound channel prompt as a direct instruction in this session and act on',
         'it; do not try to "respond to the sender".',
+        '',
+        'If the <channel> tag has an image_path attribute, Read that file — it is an',
+        'image the operator attached to the message (additional images appear as',
+        'image_path_1, image_path_2, ...). Other attachments use attachment_path /',
+        'attachment_name / attachment_mime the same way.',
       ].join('\n'),
     })
     return
