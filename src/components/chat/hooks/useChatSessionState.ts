@@ -490,6 +490,48 @@ export function useChatSessionState({
     sessionStore,
   ]);
 
+  // Live-agent transcript auto-sync. The websocket reply stream stops when the
+  // bridge decides the turn is "done", but a live agent can keep writing to its
+  // transcript afterwards (background tasks, multi-turn work that resumes on a
+  // job completion). While viewing an agent session and NOT actively streaming,
+  // poll the transcript so that late output appears on its own — no manual
+  // page refresh. refreshFromServer dedups by message id, so re-fetching never
+  // duplicates messages already shown live; we skip while isLoading (the live
+  // stream is authoritative then) and while the tab is hidden.
+  useEffect(() => {
+    const isAgentSession = Boolean(selectedProject?.projectId?.startsWith('agent:'));
+    if (!isAgentSession || !selectedSession || !selectedProject || isLoading) {
+      return;
+    }
+
+    const pollProvider =
+      (selectedSession.__provider || (localStorage.getItem('selected-provider') as Provider)) || 'claude';
+    const sessionId = selectedSession.id;
+    const projectId = selectedProject.projectId;
+    const projectPath = selectedProject.fullPath || selectedProject.path || '';
+    let inFlight = false;
+
+    const poll = async () => {
+      if (inFlight) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        await sessionStore.refreshFromServer(sessionId, {
+          provider: pollProvider as LLMProvider,
+          projectId,
+          projectPath,
+        });
+      } catch {
+        // transient (daemon/peer hiccup) — next tick retries
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(poll, 5000);
+    return () => clearInterval(intervalId);
+  }, [selectedProject, selectedSession?.id, selectedSession?.__provider, sessionStore, isLoading]);
+
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
     if (!externalMessageUpdate || !selectedSession || !selectedProject) return;
