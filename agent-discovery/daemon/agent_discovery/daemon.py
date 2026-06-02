@@ -227,24 +227,37 @@ def _record_to_api(record: dict) -> dict:
             cwd = live_cwd
         alive = True
 
-    jsonl_path, jsonl_mtime = newest_jsonl_path(cwd) if cwd else ("", 0.0)
-    # Prefer the shim-reported session id; fall back to the newest-JSONL guess.
-    session_id = stored_sid or session_id_from_path(jsonl_path)
+    cwd_newest_path, cwd_newest_mtime = newest_jsonl_path(cwd) if cwd else ("", 0.0)
+    # The stored sid is the launch-time session and stays the CHANNEL routing key.
+    # The live TRANSCRIPT is resolved independently: a /clear or respawn starts a
+    # NEWER jsonl in the same cwd while the channel stays keyed on the stored sid,
+    # so binding the transcript to the stored sid would strand the GUI on the old
+    # (pre-clear) file. We therefore report the stored sid but follow the live file.
+    session_id = stored_sid or session_id_from_path(cwd_newest_path)
 
-    # If we have a stored session id but the cwd-derived transcript path didn't
-    # match it, locate the transcript by session id directly.
-    if stored_sid and (not jsonl_path or session_id_from_path(jsonl_path) != stored_sid):
+    # Locate the stored-sid transcript directly (it may not be the cwd's newest).
+    stored_path, stored_mtime = "", 0.0
+    if stored_sid:
         import glob as _glob
         import os as _os
         for _p in _glob.glob(
             _os.path.expanduser(f"~/.claude/projects/*/{stored_sid}.jsonl")
         ):
-            jsonl_path = _p
+            stored_path = _p
             try:
-                jsonl_mtime = _os.path.getmtime(_p)
+                stored_mtime = _os.path.getmtime(_p)
             except OSError:
-                jsonl_mtime = 0.0
+                stored_mtime = 0.0
             break
+
+    # Pin to the stored-sid transcript by default; but if the agent is ALIVE and its
+    # cwd holds a strictly newer transcript, the session has moved on (post-/clear) —
+    # follow that, so the history load and the follow stream agree on the current
+    # session. Falls back to the cwd newest when the stored-sid file is gone.
+    if stored_path and not (alive and cwd_newest_path and cwd_newest_mtime > stored_mtime):
+        jsonl_path, jsonl_mtime = stored_path, stored_mtime
+    else:
+        jsonl_path, jsonl_mtime = cwd_newest_path, cwd_newest_mtime
 
     # Key off the EFFECTIVE session id we report (stored, else derived) — not just
     # the stored one. A record created by a pid-bearing register() may carry the
