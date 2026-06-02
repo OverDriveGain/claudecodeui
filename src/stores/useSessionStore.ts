@@ -431,6 +431,17 @@ export function useSessionStore() {
       msg.sessionId === resolvedSessionId
         ? msg
         : { ...msg, sessionId: resolvedSessionId };
+    // Dedup by id: the same transcript record can arrive from BOTH the per-send
+    // reply stream and the continuous live-follow (SSE) stream. Drop the
+    // duplicate so it doesn't render twice. stream_delta chunks are exempt —
+    // they legitimately repeat an id while accumulating partial text.
+    if (
+      normalizedMessage.id &&
+      normalizedMessage.kind !== 'stream_delta' &&
+      slot.realtimeMessages.some((m) => m.id === normalizedMessage.id)
+    ) {
+      return;
+    }
     let updated = [...slot.realtimeMessages, normalizedMessage];
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);

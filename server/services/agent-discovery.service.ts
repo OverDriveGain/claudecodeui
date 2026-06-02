@@ -92,6 +92,15 @@ export async function discoveryRawResponse(
   return fetch(url, { headers, signal: AbortSignal.timeout(300000) });
 }
 
+// Open the daemon's live transcript-follow (SSE) for an agent. Long-lived; the
+// caller aborts via the signal when the browser disconnects. The daemon tails
+// the agent's transcript and pushes each newly-appended record as it's written.
+export async function discoveryFollowResponse(agentId: string, signal?: AbortSignal): Promise<Response> {
+  const { base } = cfg();
+  const url = `${base}/agents/${encodeURIComponent(agentId)}/transcript/follow`;
+  return fetch(url, { headers: authHeaders(), signal });
+}
+
 // List all registered agents (ONLINE, CONTROLLABLE, DISCONNECTED). Cached ~8s.
 // Never throws — returns last-known/[] if daemon is unreachable.
 export async function listAgents({ force = false }: { force?: boolean } = {}): Promise<RegisteredAgent[]> {

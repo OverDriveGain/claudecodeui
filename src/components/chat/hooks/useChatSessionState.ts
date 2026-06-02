@@ -490,47 +490,37 @@ export function useChatSessionState({
     sessionStore,
   ]);
 
-  // Live-agent transcript auto-sync. The websocket reply stream stops when the
-  // bridge decides the turn is "done", but a live agent can keep writing to its
-  // transcript afterwards (background tasks, multi-turn work that resumes on a
-  // job completion). While viewing an agent session and NOT actively streaming,
-  // poll the transcript so that late output appears on its own — no manual
-  // page refresh. refreshFromServer dedups by message id, so re-fetching never
-  // duplicates messages already shown live; we skip while isLoading (the live
-  // stream is authoritative then) and while the tab is hidden.
+  // Live-agent transcript follow. A live agent keeps writing to its transcript
+  // after the per-send reply stream stops (background tasks, multi-turn work),
+  // and that late output otherwise only appeared on a manual refresh. While
+  // viewing an agent session, open a server-sent-events stream that the daemon
+  // drives by tailing the transcript — each new record is pushed and appended
+  // live. appendRealtime dedups by message id, so records that also arrived via
+  // the per-send websocket stream are not duplicated. EventSource auto-reconnects.
   useEffect(() => {
     const isAgentSession = Boolean(selectedProject?.projectId?.startsWith('agent:'));
-    if (!isAgentSession || !selectedSession || !selectedProject || isLoading) {
+    if (!isAgentSession || !selectedSession || !selectedProject || typeof window === 'undefined') {
       return;
     }
 
-    const pollProvider =
-      (selectedSession.__provider || (localStorage.getItem('selected-provider') as Provider)) || 'claude';
     const sessionId = selectedSession.id;
-    const projectId = selectedProject.projectId;
-    const projectPath = selectedProject.fullPath || selectedProject.path || '';
-    let inFlight = false;
+    const token = localStorage.getItem('auth-token') || '';
+    const url =
+      `/api/projects/${selectedProject.projectId}/transcript/follow` +
+      `?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`;
 
-    const poll = async () => {
-      if (inFlight) return;
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      inFlight = true;
+    const es = new EventSource(url);
+    es.onmessage = (ev) => {
       try {
-        await sessionStore.refreshFromServer(sessionId, {
-          provider: pollProvider as LLMProvider,
-          projectId,
-          projectPath,
-        });
+        const msg = JSON.parse(ev.data);
+        sessionStore.appendRealtime(sessionId, msg);
       } catch {
-        // transient (daemon/peer hiccup) — next tick retries
-      } finally {
-        inFlight = false;
+        // malformed frame — ignore
       }
     };
-
-    const intervalId = setInterval(poll, 5000);
-    return () => clearInterval(intervalId);
-  }, [selectedProject, selectedSession?.id, selectedSession?.__provider, sessionStore, isLoading]);
+    // On error EventSource retries automatically; nothing to do.
+    return () => es.close();
+  }, [selectedProject, selectedSession?.id, sessionStore]);
 
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
