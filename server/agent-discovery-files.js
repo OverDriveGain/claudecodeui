@@ -3,6 +3,7 @@
 // file endpoints. Agents are addressed by stable UUID.
 
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { discoveryCall, agentIdFromProjectId, discoveryRawResponse } from './services/agent-discovery.service.js';
 
 const TREE_MAX_DEPTH = 3;
@@ -100,9 +101,19 @@ export async function agentFileContentRaw(projectId, filePath, req, res) {
       res.end();
       return;
     }
-    Readable.fromWeb(upstream.body).pipe(res);
+    // pipeline() (not .pipe) so an upstream error/timeout or a client disconnect
+    // is handled here instead of throwing an unhandled stream 'error' that would
+    // crash the whole server process. It also destroys the source on res close,
+    // aborting the upstream read when the browser seeks away / closes.
+    await pipeline(Readable.fromWeb(upstream.body), res);
   } catch (e) {
-    if (!res.headersSent) res.status(502).json({ error: `agent content unreachable: ${e?.message || e}` });
+    // Client aborted (normal for media scrubbing) or upstream errored. Headers
+    // are already sent once streaming starts, so just tear down quietly.
+    if (!res.headersSent) {
+      res.status(502).json({ error: `agent content unreachable: ${e?.message || e}` });
+    } else {
+      res.destroy();
+    }
   }
 }
 
