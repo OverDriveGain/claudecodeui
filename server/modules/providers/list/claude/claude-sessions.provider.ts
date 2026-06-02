@@ -211,12 +211,17 @@ async function getSessionMessages(
  */
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
+  // Harness-injected background-task completion notice. Claude persists it as a
+  // plain user row (NOT isMeta), so without this it renders as a user bubble the
+  // operator never typed.
+  '<task-notification>',
   'Caveat:',
   '[Request interrupted',
 ] as const;
 
 function isInternalContent(content: string): boolean {
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
+  const trimmed = content.trimStart();
+  return INTERNAL_CONTENT_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
 }
 
 /**
