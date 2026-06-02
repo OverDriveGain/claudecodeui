@@ -2,7 +2,8 @@
 // ccui's per-project file endpoints by routing to the daemon's cwd-jailed
 // file endpoints. Agents are addressed by stable UUID.
 
-import { discoveryCall, agentIdFromProjectId } from './services/agent-discovery.service.js';
+import { Readable } from 'node:stream';
+import { discoveryCall, agentIdFromProjectId, discoveryRawResponse } from './services/agent-discovery.service.js';
 
 const TREE_MAX_DEPTH = 3;
 const TREE_MAX_DIRS = 300;
@@ -76,6 +77,30 @@ export async function agentFileContent(projectId, filePath, res) {
       : Buffer.from(json.content || '', 'utf8');
     res.setHeader('Content-Type', json.mime || 'application/octet-stream');
     res.send(buf);
+  } catch (e) {
+    if (!res.headersSent) res.status(502).json({ error: `agent content unreachable: ${e?.message || e}` });
+  }
+}
+
+// Stream an agent's file bytes with HTTP Range passthrough — used for media
+// (video/audio) and any binary. Forwards the browser's Range header to the
+// daemon's /raw endpoint and pipes the (206/200) response straight through,
+// so the file streams and seeks instead of buffering a truncated base64 blob.
+export async function agentFileContentRaw(projectId, filePath, req, res) {
+  const agentId = agentIdFromProjectId(projectId);
+  if (!filePath) return res.status(400).json({ error: 'Invalid file path' });
+  try {
+    const upstream = await discoveryRawResponse(agentId, filePath, req.headers.range);
+    res.status(upstream.status);
+    for (const h of ['content-type', 'content-range', 'accept-ranges', 'content-length']) {
+      const v = upstream.headers.get(h);
+      if (v) res.setHeader(h, v);
+    }
+    if (!upstream.body) {
+      res.end();
+      return;
+    }
+    Readable.fromWeb(upstream.body).pipe(res);
   } catch (e) {
     if (!res.headersSent) res.status(502).json({ error: `agent content unreachable: ${e?.message || e}` });
   }
