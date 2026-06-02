@@ -76,6 +76,22 @@ export async function discoveryCall(
   return { status: r.status, json };
 }
 
+// Stream a registered agent's file bytes from the daemon's /raw endpoint,
+// forwarding the browser's Range header so <video>/<audio> can stream + seek.
+// Returns the raw fetch Response (status + headers + body stream) for the
+// caller to pipe through. 5-minute timeout covers large media downloads.
+export async function discoveryRawResponse(
+  agentId: string,
+  filePath: string,
+  rangeHeader?: string | null,
+): Promise<Response> {
+  const { base } = cfg();
+  const url = `${base}/agents/${encodeURIComponent(agentId)}/raw?path=${encodeURIComponent(filePath)}`;
+  const headers: Record<string, string> = authHeaders();
+  if (rangeHeader) headers['range'] = rangeHeader;
+  return fetch(url, { headers, signal: AbortSignal.timeout(300000) });
+}
+
 // List all registered agents (ONLINE, CONTROLLABLE, DISCONNECTED). Cached ~8s.
 // Never throws — returns last-known/[] if daemon is unreachable.
 export async function listAgents({ force = false }: { force?: boolean } = {}): Promise<RegisteredAgent[]> {

@@ -7,7 +7,9 @@ Single-process, stdlib-only. Serves the registration API and agent metadata.
 import base64
 import hmac
 import json
+import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -312,6 +314,113 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorized"})
             return False
         return True
+
+    def _serve_file_range(self, abs_path: str):
+        """Stream a local file with HTTP Range support (206 partial content)."""
+        try:
+            file_size = os.stat(abs_path).st_size
+        except OSError as e:
+            self._json(500, {"error": f"stat failed: {e}"})
+            return
+        mime, _ = mimetypes.guess_type(abs_path)
+        if not mime:
+            mime = "application/octet-stream"
+
+        start, end, is_range = 0, file_size - 1, False
+        range_header = self.headers.get("Range", "")
+        if range_header:
+            m = re.match(r"^bytes=(\d*)-(\d*)$", range_header.strip())
+            if not m:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{file_size}")
+                self.end_headers()
+                return
+            g1, g2 = m.group(1), m.group(2)
+            if g1 == "":  # suffix range: last N bytes
+                start = max(0, file_size - (int(g2) if g2 else 0))
+                end = file_size - 1
+            else:
+                start = int(g1)
+                end = int(g2) if g2 else file_size - 1
+                if end >= file_size:
+                    end = file_size - 1
+            if start > end or start >= file_size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{file_size}")
+                self.end_headers()
+                return
+            is_range = True
+
+        length = end - start + 1
+        self.send_response(206 if is_range else 200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if is_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        try:
+            with open(abs_path, "rb") as fh:
+                fh.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = fh.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client closed (e.g. seeked away) — normal for media
+        except OSError:
+            pass
+
+    def _proxy_raw_to_peer(self, peer_base: str, agent_id: str, qs_raw: str):
+        """Stream-proxy a /raw (range) request to the peer that owns the agent,
+        forwarding the Range header and streaming the body without buffering."""
+        url = f"{peer_base}/agents/{agent_id}/raw"
+        if qs_raw:
+            url = f"{url}?{qs_raw}"
+        req = urllib.request.Request(url, method="GET")
+        if AUTH_TOKEN:
+            req.add_header("Authorization", f"Bearer {AUTH_TOKEN}")
+        rng = self.headers.get("Range")
+        if rng:
+            req.add_header("Range", rng)
+        try:
+            resp = urllib.request.urlopen(req, timeout=PEER_TIMEOUT + 120)
+        except urllib.error.HTTPError as e:
+            body = b""
+            try:
+                body = e.read()
+            except Exception:
+                pass
+            self.send_response(e.code)
+            self.send_header("Content-Type", (e.headers.get("Content-Type") if e.headers else None) or "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        except Exception as e:
+            self._json(502, {"error": f"peer raw proxy failed: {e}"})
+            return
+        try:
+            self.send_response(resp.status)
+            for hk in ("Content-Type", "Content-Range", "Accept-Ranges", "Content-Length"):
+                val = resp.headers.get(hk)
+                if val:
+                    self.send_header(hk, val)
+            self.end_headers()
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            resp.close()
 
     def _handle_channel_connect(self, qs: dict):
         """Reverse-connect channel shim dials in here. We register the agent
@@ -664,6 +773,36 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(500, {"error": f"file read failed: {e}"})
                     return
                 self._json(200, {"id": agent_id, "cwd": cwd, "path": canonical_rel, **info})
+                return
+
+            # Raw byte streaming with HTTP Range support — for media (video/audio)
+            # and any binary too large for the base64-over-JSON /file endpoint.
+            if path.startswith("/agents/") and path.endswith("/raw"):
+                if not self._require_auth():
+                    return
+                agent_id = path[len("/agents/"):-len("/raw")]
+                record = reg.get_record(agent_id)
+                if not record:
+                    # Peer-owned agent: stream-proxy the (range) request to the owner.
+                    peer = _peer_for_agent(agent_id)
+                    if peer:
+                        self._proxy_raw_to_peer(peer, agent_id, qs_raw)
+                        return
+                    self._json(404, {"error": f"agent {agent_id!r} not found"})
+                    return
+                cwd = record.get("cwd", "")
+                rel = (qs.get("path") or [""])[0]
+                if not rel:
+                    self._json(400, {"error": "missing required query param: path"})
+                    return
+                abs_target = resolve_safe_path(cwd, rel)
+                if abs_target is None:
+                    self._json(400, {"error": "path escapes agent cwd"})
+                    return
+                if not os.path.exists(abs_target) or os.path.isdir(abs_target):
+                    self._json(404, {"error": f"path {rel!r} is not a readable file"})
+                    return
+                self._serve_file_range(abs_target)
                 return
 
             self._send(404, "not found\n")

@@ -38,7 +38,7 @@ import { fleetFileTree, fleetReadFile, fleetFileContent, fleetReadOnly } from '.
 // Registered agents (agent-discovery) — general, ID-addressed, register-only.
 import { queryAgentChannel, isAgentSession } from './agent-discovery-channel.js';
 import { isAgentProjectId } from './services/agent-discovery.service.js';
-import { agentFileTree, agentReadFile, agentFileContent, agentReadOnly } from './agent-discovery-files.js';
+import { agentFileTree, agentReadFile, agentFileContent, agentFileContentRaw, agentReadOnly } from './agent-discovery-files.js';
 import {
     spawnCursor,
     abortCursorSession,
@@ -496,7 +496,9 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         const { path: filePath } = req.query;
 
         if (isFleetProjectId(projectId)) return fleetFileContent(projectId, filePath, res);
-        if (isAgentProjectId(projectId)) return agentFileContent(projectId, filePath, res);
+        // Stream agent files with Range support (video/audio seeking, large binaries)
+        // instead of the truncated base64-over-JSON path.
+        if (isAgentProjectId(projectId)) return agentFileContentRaw(projectId, filePath, req, res);
 
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
