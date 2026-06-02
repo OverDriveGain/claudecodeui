@@ -62,6 +62,11 @@ export async function queryFleetChannel(command, options = {}, ws) {
   const baseline = await discoveryTranscript(name);
   let seen = baseline.records.length;
   let sid = baseline.sessionId || sessionId;
+  // Stamp ALL outbound messages with the GUI's session id, not the agent's
+  // internal transcript session id — the frontend only re-renders messages
+  // matching the active view, so a foreign sid leaves the reply invisible
+  // until a refresh. `sid` stays internal (transcript tailing/indexing only).
+  const viewSid = sessionId;
   const transcriptAvailable = baseline.ok;
 
   // 1. inject the prompt into the live agent.
@@ -94,13 +99,13 @@ export async function queryFleetChannel(command, options = {}, ws) {
       const reason = json?.error || json?.detail || `inject failed (HTTP ${status})`;
       // Remember the refusal so repeated sends don't re-hammer discovery.
       if (status === 409) blocked.set(name, { reason, until: Date.now() + BLOCK_TTL_MS });
-      ws.send(createNormalizedMessage({ kind: 'error', content: reason, sessionId: sid, provider: 'claude' }));
-      ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId: sid, provider: 'claude' }));
+      ws.send(createNormalizedMessage({ kind: 'error', content: reason, sessionId: viewSid, provider: 'claude' }));
+      ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId: viewSid, provider: 'claude' }));
       return;
     }
   } catch (e) {
-    ws.send(createNormalizedMessage({ kind: 'error', content: `agent unreachable: ${e?.message || e}`, sessionId: sid, provider: 'claude' }));
-    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId: sid, provider: 'claude' }));
+    ws.send(createNormalizedMessage({ kind: 'error', content: `agent unreachable: ${e?.message || e}`, sessionId: viewSid, provider: 'claude' }));
+    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId: viewSid, provider: 'claude' }));
     return;
   }
 
@@ -110,10 +115,10 @@ export async function queryFleetChannel(command, options = {}, ws) {
     ws.send(createNormalizedMessage({
       kind: 'status',
       content: `Prompt delivered to ${name}. Live reply streaming needs the discovery transcript endpoint (not available yet).`,
-      sessionId: sid,
+      sessionId: viewSid,
       provider: 'claude',
     }));
-    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId: sid, provider: 'claude' }));
+    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId: viewSid, provider: 'claude' }));
     return;
   }
 
@@ -130,7 +135,7 @@ export async function queryFleetChannel(command, options = {}, ws) {
     let done = false;
     for (const raw of fresh) {
       try {
-        const norm = sessionsService.normalizeMessage('claude', raw, sid);
+        const norm = sessionsService.normalizeMessage('claude', raw, viewSid);
         if (Array.isArray(norm)) for (const m of norm) ws.send(m);
       } catch {
         // exotic record — skip, keep streaming
@@ -143,5 +148,5 @@ export async function queryFleetChannel(command, options = {}, ws) {
     if (done) break;
   }
 
-  ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId: sid, provider: 'claude' }));
+  ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId: viewSid, provider: 'claude' }));
 }
