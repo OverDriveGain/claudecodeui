@@ -37,7 +37,9 @@ import { isFleetProjectId } from './services/fleet.service.js';
 import { fleetFileTree, fleetReadFile, fleetFileContent, fleetReadOnly } from './fleet-files.js';
 // Registered agents (agent-discovery) — general, ID-addressed, register-only.
 import { queryAgentChannel, isAgentSession } from './agent-discovery-channel.js';
-import { isAgentProjectId } from './services/agent-discovery.service.js';
+import { isAgentProjectId, agentIdFromProjectId, discoveryFollowResponse } from './services/agent-discovery.service.js';
+import { sessionsService } from './modules/providers/services/sessions.service.js';
+import { Readable as NodeReadable } from 'node:stream';
 import { agentFileTree, agentReadFile, agentFileContent, agentFileContentRaw, agentReadOnly } from './agent-discovery-files.js';
 import {
     spawnCursor,
@@ -591,6 +593,69 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         }
+    }
+});
+
+// Live transcript follow (SSE) for a registered/live agent. The daemon tails
+// the agent's transcript and pushes each new record the moment it's written;
+// here we normalize each one and re-emit it as SSE to the browser, so the chat
+// shows agent output continuously — including background-task / multi-turn work
+// that lands after the per-send reply stream stops. Replaces client polling.
+app.get('/api/projects/:projectId/transcript/follow', authenticateToken, async (req, res) => {
+    const { projectId } = req.params;
+    if (!isAgentProjectId(projectId)) {
+        return res.status(404).json({ error: 'transcript follow is only for agent sessions' });
+    }
+    const agentId = agentIdFromProjectId(projectId);
+    const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+    const ac = new AbortController();
+    req.on('close', () => ac.abort());
+
+    let upstream;
+    try {
+        upstream = await discoveryFollowResponse(agentId, ac.signal);
+    } catch {
+        return res.end();
+    }
+    if (!upstream.ok || !upstream.body) {
+        return res.end();
+    }
+
+    try {
+        const nodeStream = NodeReadable.fromWeb(upstream.body);
+        const decoder = new TextDecoder();
+        let buf = '';
+        for await (const chunk of nodeStream) {
+            buf += decoder.decode(chunk, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+                const line = buf.slice(0, nl);
+                buf = buf.slice(nl + 1);
+                if (!line.startsWith('data: ')) continue; // skip pings / event: lines
+                const payload = line.slice(6).trim();
+                if (!payload) continue;
+                try {
+                    const record = JSON.parse(payload);
+                    const norm = sessionsService.normalizeMessage('claude', record, sessionId);
+                    if (Array.isArray(norm)) {
+                        for (const m of norm) res.write(`data: ${JSON.stringify(m)}\n\n`);
+                    }
+                } catch {
+                    // non-record line (e.g. session event) — ignore
+                }
+            }
+        }
+    } catch {
+        // client disconnected or upstream aborted — normal teardown
+    } finally {
+        res.end();
     }
 });
 

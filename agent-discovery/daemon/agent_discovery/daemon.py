@@ -422,6 +422,103 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             resp.close()
 
+    def _serve_transcript_follow(self, record: dict):
+        """tail -f the agent's transcript jsonl and stream each newly appended
+        line as an SSE `data:` event. Starts at the current end of file (the
+        client already loaded history), so it emits only NEW output. Survives a
+        session respawn (newest jsonl changes) by re-resolving and resetting."""
+        cwd = record.get("cwd", "")
+        api = _record_to_api(record)
+        tpath = api.get("transcript", "")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        try:
+            offset = os.stat(tpath).st_size if tpath and os.path.exists(tpath) else 0
+        except OSError:
+            offset = 0
+        buf = b""
+        last_ping = time.time()
+        try:
+            while True:
+                # Follow a session respawn: if a newer transcript appears, switch to it.
+                if cwd:
+                    new_tpath, _ = newest_jsonl_path(cwd)
+                    if new_tpath and new_tpath != tpath:
+                        tpath = new_tpath
+                        offset = 0
+                        buf = b""
+                        self.wfile.write(
+                            b"event: session\ndata: "
+                            + json.dumps({"session_id": session_id_from_path(tpath)}).encode("utf-8")
+                            + b"\n\n"
+                        )
+                        self.wfile.flush()
+                try:
+                    sz = os.stat(tpath).st_size if tpath else 0
+                except OSError:
+                    sz = 0
+                if sz < offset:  # truncated/rotated — restart from top
+                    offset = 0
+                    buf = b""
+                if sz > offset:
+                    with open(tpath, "rb") as f:
+                        f.seek(offset)
+                        chunk = f.read(sz - offset)
+                    offset = sz
+                    buf += chunk
+                    parts = buf.split(b"\n")
+                    buf = parts.pop()  # keep trailing partial line
+                    for line in parts:
+                        line = line.strip()
+                        if line:
+                            self.wfile.write(b"data: " + line + b"\n\n")
+                    self.wfile.flush()
+                    last_ping = time.time()
+                else:
+                    time.sleep(0.3)
+                    if time.time() - last_ping > 15:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        last_ping = time.time()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client closed the stream — normal
+
+    def _proxy_sse_to_peer(self, peer_base: str, agent_id: str, qs_raw: str):
+        """Stream-proxy the SSE transcript-follow to the owning peer, forwarding
+        each line as it arrives (no buffering). Keepalive pings keep the urlopen
+        read from idling out."""
+        url = f"{peer_base}/agents/{agent_id}/transcript/follow"
+        if qs_raw:
+            url = f"{url}?{qs_raw}"
+        req = urllib.request.Request(url, method="GET")
+        if AUTH_TOKEN:
+            req.add_header("Authorization", f"Bearer {AUTH_TOKEN}")
+        try:
+            resp = urllib.request.urlopen(req, timeout=60)
+        except Exception as e:
+            self._json(502, {"error": f"peer sse proxy failed: {e}"})
+            return
+        try:
+            self.send_response(resp.status)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            for raw in resp:  # iterates line-by-line, flushing as the peer emits
+                self.wfile.write(raw)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            resp.close()
+
     def _handle_channel_connect(self, qs: dict):
         """Reverse-connect channel shim dials in here. We register the agent
         (connect == registration), then hold this response open as an SSE
@@ -593,6 +690,24 @@ class Handler(BaseHTTPRequestHandler):
                 if peers_failed:
                     merged.append({"_peers_failed": peers_failed})
                 self._json(200, merged)
+                return
+
+            # Live transcript follow (tail -f over SSE) — pushes each new
+            # transcript line the moment it's appended, so the UI shows agent
+            # output continuously without polling or "turn done" cutoffs.
+            if path.startswith("/agents/") and path.endswith("/transcript/follow"):
+                if not self._require_auth():
+                    return
+                agent_id = path[len("/agents/"):-len("/transcript/follow")]
+                record = reg.get_record(agent_id)
+                if not record:
+                    peer = _peer_for_agent(agent_id)
+                    if peer:
+                        self._proxy_sse_to_peer(peer, agent_id, qs_raw)
+                        return
+                    self._json(404, {"error": f"agent {agent_id!r} not found"})
+                    return
+                self._serve_transcript_follow(record)
                 return
 
             if path.startswith("/agents/") and path.endswith("/transcript"):
