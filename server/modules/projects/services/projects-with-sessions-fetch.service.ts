@@ -322,7 +322,11 @@ export async function getProjectsWithSessions(
         fleetHost: a.host,
         // controllable is only meaningful when alive. Unregistered/legacy agents
         // that don't carry the field default to controllable when alive (old behaviour).
-        fleetControllable: isAlive ? (a.controllable ?? true) : false,
+        // Writable if the control plane is usable OR a channel-shim is connected —
+        // mirrors the virtual-agent path so channel-only fleets (e.g. Wael's, which
+        // launch --remote-control with no control plugin → controllable:false) are
+        // not read-only-gated. fleetControllable feeds ONLY the read-only gates.
+        fleetControllable: isAlive ? ((a.controllable ?? true) || Boolean(a.channel_connected)) : false,
       });
     }
   } catch {

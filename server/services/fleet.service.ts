@@ -29,6 +29,9 @@ export type FleetAgent = {
   //   false → transcript is readable but sending is not supported.
   registered?: boolean;
   controllable?: boolean;
+  // channel_connected: agent has a live channel-shim connection (writable via the
+  //   channel path even when there is no control plane / controllable is false).
+  channel_connected?: boolean;
 };
 
 type DiscoveryOptions = {
