@@ -31,10 +31,15 @@ _BY_SESSION: dict[str, "Connection"] = {}
 class Connection:
     """One live shim SSE stream, identified by Claude session id."""
 
-    def __init__(self, session_id: str, label: str | None, cwd: str | None):
+    def __init__(self, session_id: str, label: str | None, cwd: str | None,
+                 client_pid: int = 0):
         self.session_id = session_id
         self.label = label or ""
         self.cwd = cwd or ""
+        # pid of the shim (channel-plugin server.mjs) that opened this SSE — a
+        # direct child of the claude agent. Used to detect a zombie connection
+        # (shim outlived its agent). 0 if it couldn't be resolved at connect.
+        self.client_pid = int(client_pid or 0)
         self.connected_at = time.time()
         # Bounded queue of already-serialized SSE payload dicts to deliver.
         self.q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
@@ -59,10 +64,11 @@ class Connection:
             pass
 
 
-def register_connection(session_id: str, label: str | None, cwd: str | None) -> Connection:
+def register_connection(session_id: str, label: str | None, cwd: str | None,
+                        client_pid: int = 0) -> Connection:
     """Park a new connection for a session. Replaces any prior one (a fresh
     shim for the same session wins; the old stream is closed)."""
-    conn = Connection(session_id, label, cwd)
+    conn = Connection(session_id, label, cwd, client_pid=client_pid)
     with _LOCK:
         old = _BY_SESSION.get(session_id)
         if old is not None:
@@ -88,6 +94,26 @@ def has_connection(session_id: str) -> bool:
     with _LOCK:
         conn = _BY_SESSION.get(session_id)
         return conn is not None and not conn.closed
+
+
+def agent_alive(session_id: str) -> bool:
+    """True if a live claude agent is actually behind this session's shim.
+
+    Verifies the shim (server.mjs) process — a direct child of the claude agent —
+    still has a live claude parent. Detects a ZOMBIE connection: an orphaned shim
+    that outlived its agent (claude crashed/killed; shim reparented to init) but
+    still holds the SSE open, which would otherwise accept injects into the void.
+    If the shim pid wasn't captured at connect (client_pid==0), returns True so we
+    don't regress to false-negatives — worst case we miss a zombie, as before."""
+    with _LOCK:
+        conn = _BY_SESSION.get(session_id)
+        if conn is None or conn.closed:
+            return False
+        client_pid = conn.client_pid
+    if not client_pid:
+        return True
+    from . import proc  # lazy import to avoid an import cycle at startup
+    return proc.agent_alive_via_shim(client_pid)
 
 
 def connected_sessions() -> list[str]:

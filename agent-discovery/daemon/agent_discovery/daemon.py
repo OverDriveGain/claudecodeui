@@ -262,7 +262,15 @@ def _record_to_api(record: dict) -> dict:
     # Key off the EFFECTIVE session id we report (stored, else derived) — not just
     # the stored one. A record created by a pid-bearing register() may carry the
     # live channel under its derived session even with no stored session id.
-    channel_connected = bool(session_id) and channel.has_connection(session_id)
+    # Gate on state so a zombie shim (parked SSE, no live agent behind it) reports
+    # channel_connected=False — the GUI's send-bridge then blocks the send with a
+    # clear "relaunch it" instead of injecting into the void. state is already
+    # zombie-aware (registry._compute_state requires a live backing claude).
+    channel_connected = (
+        bool(session_id)
+        and channel.has_connection(session_id)
+        and state in ("ONLINE", "CONTROLLABLE")
+    )
 
     uptime = proc.process_uptime(pid) if alive and pid else 0.0
     rss = proc.rss_bytes(pid) if alive and pid else 0
@@ -547,9 +555,18 @@ class Handler(BaseHTTPRequestHandler):
         cwd = (qs.get("cwd") or [""])[0].strip() or None
         domain = (qs.get("domain") or [""])[0].strip() or None
 
+        # Resolve the shim (server.mjs) pid at the far end of this loopback
+        # connection — it is a direct child of the claude agent, so it gives a
+        # rotation-proof liveness signal (channel.agent_alive). Best-effort.
+        shim_pid = 0
+        try:
+            shim_pid = proc.pid_owning_local_tcp_port(self.client_address[1])
+        except Exception:
+            shim_pid = 0
+
         # Park the SSE connection FIRST so has_connection(session) is true
         # immediately, independent of pid resolution.
-        conn = channel.register_connection(session_id, label, cwd)
+        conn = channel.register_connection(session_id, label, cwd, client_pid=shim_pid)
 
         # Resolve the live claude pid from the session id (robust mapping via
         # /proc environ). The shim may dial in before claude has fully exported
@@ -1128,6 +1145,23 @@ class Handler(BaseHTTPRequestHandler):
                 api_for_chan = _record_to_api(record)
                 chan_sid = api_for_chan.get("session_id") or record.get("session_id")
                 if chan_sid and channel.has_connection(chan_sid):
+                    # Zombie guard: a channel-plugin shim can outlive its claude
+                    # agent (orphaned process), leaving this SSE parked with no
+                    # live agent behind it. Delivering would return a misleading
+                    # 202 while the prompt vanishes. channel.agent_alive() checks
+                    # the shim's parent is still a live claude (survives /clear
+                    # rotation). If not, drop the stale connection and fail loudly
+                    # so the caller + GUI see the agent as gone.
+                    if not channel.agent_alive(chan_sid):
+                        stale = channel.get_connection(chan_sid)
+                        if stale is not None:
+                            channel.drop_connection(chan_sid, stale)
+                        self._json(503, {
+                            "error":      "agent process is gone (zombie channel) — relaunch the agent",
+                            "id":         agent_id,
+                            "session_id": chan_sid,
+                        })
+                        return
                     chan_meta = {"user": "central", "origin": "central"}
                     chan_text = prompt_text
                     if images:

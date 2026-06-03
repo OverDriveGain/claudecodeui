@@ -180,3 +180,71 @@ def find_claude_by_session(session_id: str) -> int:
         return 0
     except (FileNotFoundError, OSError):
         return 0
+
+
+def agent_alive_via_shim(shim_pid) -> bool:
+    """A channel-plugin shim (server.mjs) is launched as a direct child of its
+    claude agent. The agent is alive iff the shim's CURRENT parent is still a
+    live claude process. This survives /clear session rotation (no env/session
+    matching): when the agent dies the shim reparents to init (ppid 1), so the
+    parent is no longer claude. Returns False if the shim pid is gone."""
+    try:
+        sp = int(shim_pid)
+    except (TypeError, ValueError):
+        return False
+    if sp <= 1:
+        return False
+    parent = ppid(sp)
+    return parent > 1 and is_claude_pid(parent)
+
+
+def pid_owning_local_tcp_port(port) -> int:
+    """Return the pid that owns a TCP socket whose LOCAL port == port, or 0.
+
+    Used to identify the process at the far end of an accepted loopback
+    connection (TCP has no SO_PEERCRED): given the peer's ephemeral port from
+    accept(), find which process holds that socket. Resolves port -> socket
+    inode (via /proc/net/tcp[6]) -> owning pid (via /proc/*/fd). Best-effort;
+    a single O(procs x fds) scan, run once at connect time."""
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return 0
+    if port <= 0:
+        return 0
+    inodes: set[str] = set()
+    for proto in ("tcp", "tcp6"):
+        try:
+            with open("/proc/net/" + proto) as f:
+                next(f, None)  # skip header
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 10:
+                        continue
+                    try:
+                        lport = int(parts[1].rsplit(":", 1)[1], 16)
+                    except (IndexError, ValueError):
+                        continue
+                    if lport == port:
+                        inodes.add(parts[9])
+        except (FileNotFoundError, OSError):
+            continue
+    if not inodes:
+        return 0
+    wanted = {"socket:[" + ino + "]" for ino in inodes}
+    try:
+        pids = [e for e in os.listdir("/proc") if e.isdigit()]
+    except OSError:
+        return 0
+    for entry in pids:
+        fd_dir = "/proc/%s/fd" % entry
+        try:
+            for fd in os.listdir(fd_dir):
+                try:
+                    if os.readlink(fd_dir + "/" + fd) in wanted:
+                        return int(entry)
+                except OSError:
+                    continue
+        except (FileNotFoundError, OSError, PermissionError):
+            continue
+    return 0
