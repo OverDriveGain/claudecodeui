@@ -90,7 +90,14 @@ def _compute_state(record: dict) -> str:
             return "CONTROLLABLE"
         return "ONLINE"
 
-    if channel_live:
+    # A parked channel SSE is only proof of life if a live claude process is
+    # actually behind the shim. An orphaned channel-plugin shim (server.mjs) can
+    # outlive its agent, leaving a zombie SSE that would accept injects (202) into
+    # the void and report a misleading ONLINE. channel.agent_alive() verifies the
+    # shim's parent is still a live claude (survives /clear session rotation,
+    # unlike session-env matching). When the shim pid wasn't captured it returns
+    # True (no regression vs. the old unconditional trust).
+    if channel_live and channel.agent_alive(sid):
         return "ONLINE"
     return "DISCONNECTED"
 
