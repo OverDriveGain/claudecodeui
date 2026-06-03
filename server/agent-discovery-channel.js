@@ -52,6 +52,7 @@ export async function queryAgentChannel(command, options = {}, ws) {
   const agentId = agent.id;
   // Stable id for everything we emit to the client.
   const viewSid = sessionId;
+  console.log('[DBG-send] queryAgentChannel agent=%s label=%s channel_connected=%s controllable=%s state=%s', agentId, agent.label, agent.channel_connected, agent.controllable, agent.state); // DBG
 
   // Baseline record count before injecting, so we tail only the new records.
   const baseline = await discoveryTranscript(agentId);
@@ -73,6 +74,7 @@ export async function queryAgentChannel(command, options = {}, ws) {
       body,
       timeoutMs: 125000,
     });
+    console.log('[DBG-send] inject POST /agents/%s/prompt -> status=%s json=%s', agentId, status, JSON.stringify(json).slice(0, 200)); // DBG
     if (status < 200 || status >= 300) {
       const reason = json?.error || json?.detail || `inject failed (HTTP ${status})`;
       ws.send(createNormalizedMessage({ kind: 'error', content: reason, sessionId: viewSid, provider: 'claude' }));
