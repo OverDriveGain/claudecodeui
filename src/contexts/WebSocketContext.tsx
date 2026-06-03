@@ -35,21 +35,51 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   // flushed in onopen, instead of being silently dropped.
   const sendQueueRef = useRef<string[]>([]);
   const MAX_QUEUED_MESSAGES = 50;
+  // App-level heartbeat. Reverse proxies (Cloudflare / nginx / the Vite dev
+  // proxy) idle-close a quiet websocket after ~60-120s; a send into that
+  // not-yet-detected-dead socket is silently lost. Pinging every 25s keeps the
+  // socket non-idle, and a missing pong forces a fast reconnect so we never
+  // send into a half-open socket.
+  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
+  const pongTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const HEARTBEAT_MS = 25000;
+  const PONG_TIMEOUT_MS = 10000;
   const [latestMessage, setLatestMessage] = useState<any>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { token } = useAuth();
 
+  const clearTimers = () => {
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+    if (pongTimerRef.current) {
+      clearTimeout(pongTimerRef.current);
+      pongTimerRef.current = null;
+    }
+  };
+
   useEffect(() => {
+    // Reset on every (re)mount. Without this, React 18 StrictMode's
+    // mount→cleanup→mount cycle in dev latches unmountedRef=true on the first
+    // cleanup, and the second mount's connect() bails forever — leaving the app
+    // with NO websocket (REST still works, so the UI looks fine, but nothing the
+    // user sends ever reaches the server). Re-arming here makes connect() run on
+    // the real (second) mount and on every token change.
+    unmountedRef.current = false;
     connect();
-    
+
     return () => {
       unmountedRef.current = true;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
+      clearTimers();
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, [token]); // everytime token changes, we reconnect
@@ -68,6 +98,13 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       wsRef.current = websocket;
 
       websocket.onopen = () => {
+        // Stale/aborted connection: the provider unmounted or a newer socket
+        // (StrictMode's real mount, or a token change) already superseded this
+        // one. Don't flip state live — just close this orphan.
+        if (unmountedRef.current || (wsRef.current && wsRef.current !== websocket)) {
+          try { websocket.close(); } catch { /* noop */ }
+          return;
+        }
         setIsConnected(true);
         wsRef.current = websocket;
         // Flush anything queued while the socket was connecting/reconnecting.
@@ -87,11 +124,40 @@ const useWebSocketProviderState = (): WebSocketContextType => {
           setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
         }
         hasConnectedRef.current = true;
+
+        // Start the keep-alive heartbeat.
+        clearTimers();
+        heartbeatRef.current = setInterval(() => {
+          if (websocket.readyState !== WebSocket.OPEN) return;
+          try {
+            websocket.send(JSON.stringify({ type: 'ping' }));
+          } catch {
+            return;
+          }
+          // Expect a pong; if none arrives, the socket is half-dead — force a
+          // close so onclose schedules a reconnect (and sends then queue/flush).
+          if (pongTimerRef.current) clearTimeout(pongTimerRef.current);
+          pongTimerRef.current = setTimeout(() => {
+            try {
+              websocket.close();
+            } catch {
+              /* noop */
+            }
+          }, PONG_TIMEOUT_MS);
+        }, HEARTBEAT_MS);
       };
 
       websocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          // Heartbeat reply — connection is alive; not a real app message.
+          if (data && data.type === 'pong') {
+            if (pongTimerRef.current) {
+              clearTimeout(pongTimerRef.current);
+              pongTimerRef.current = null;
+            }
+            return;
+          }
           setLatestMessage(data);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
@@ -99,10 +165,17 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       };
 
       websocket.onclose = () => {
+        clearTimers();
+        // Only the *active* socket drives state + reconnect. A superseded socket
+        // (StrictMode's discarded first mount, or an old token's socket) closing
+        // must not flip isConnected or spawn a duplicate reconnect loop.
+        if (wsRef.current !== websocket) return;
         setIsConnected(false);
         wsRef.current = null;
-        
+        if (unmountedRef.current) return; // unmounted / token changed — no reconnect
+
         // Attempt to reconnect after 3 seconds
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = setTimeout(() => {
           if (unmountedRef.current) return; // Prevent reconnection if unmounted
           connect();

@@ -127,6 +127,17 @@ export function handleChatConnection(
         throw new Error('Message type is required');
       }
 
+      // Keep-alive heartbeat from the client — reply so it knows the socket is
+      // live (and so reverse proxies don't idle-close a quiet connection).
+      if (messageType === 'ping') {
+        try {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        } catch {
+          /* socket already closing */
+        }
+        return;
+      }
+
       if (messageType === 'claude-command') {
         // Hybrid: if this session is driven by plugin:control@kaxtus (a live
         // --remote-control session), inject the prompt into it instead of
