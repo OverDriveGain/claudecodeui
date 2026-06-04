@@ -37,6 +37,31 @@ export default defineConfig(({ mode }) => {
       }
     : undefined
 
+  // Vite 7 gates the dev server (incl. the HMR websocket) on the request
+  // Origin via `server.cors.origin`, which defaults to localhost-only. When the
+  // dev server is exposed on a public hostname behind a reverse proxy, a real
+  // browser sends `Origin: https://<public host>` and Vite answers 400 to the
+  // HMR ws upgrade -> no hot reload. So when a public host is configured
+  // (VITE_HMR_HOST, or https hosts listed in VITE_ALLOWED_HOSTS), allow those
+  // origins IN ADDITION to Vite's default localhost regex. No-op for plain
+  // localhost dev (cors stays undefined => Vite's secure default).
+  const defaultLocalhostOrigins = /^https?:\/\/(?:(?:[^:]+\.)?localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/
+  const publicHostOrigins = []
+  if (env.VITE_HMR_HOST) {
+    const proto = env.VITE_HMR_PROTOCOL || 'wss'
+    const scheme = proto === 'wss' || proto === 'https' ? 'https' : 'http'
+    publicHostOrigins.push(`${scheme}://${env.VITE_HMR_HOST}`)
+  }
+  if (allowedHostsEnv && allowedHostsEnv !== 'all') {
+    for (const h of allowedHostsEnv.split(',').map((s) => s.trim()).filter(Boolean)) {
+      if (h === 'localhost') continue
+      publicHostOrigins.push(`https://${h}`, `http://${h}`)
+    }
+  }
+  const cors = publicHostOrigins.length
+    ? { origin: [defaultLocalhostOrigins, ...new Set(publicHostOrigins)] }
+    : undefined
+
   return {
     plugins: [react()],
     resolve: {
@@ -49,6 +74,7 @@ export default defineConfig(({ mode }) => {
       port: parseInt(env.VITE_PORT) || 5173,
       ...(allowedHosts !== undefined ? { allowedHosts } : {}),
       ...(hmr ? { hmr } : {}),
+      ...(cors ? { cors } : {}),
       proxy: {
         '/api': `http://${proxyHost}:${serverPort}`,
         '/ws': {
