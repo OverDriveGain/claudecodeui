@@ -36,6 +36,14 @@ BIND = os.environ.get("BIND", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "9301"))
 SCAN_INTERVAL = float(os.environ.get("SCAN_INTERVAL_SECONDS", "10.0"))
 
+# Stale-record reaping: a DISCONNECTED agent (dead pid AND no live channel shim)
+# is removed from the registry once it's been gone longer than REAP_TTL. Without
+# this, every agent ever launched accumulates as a dead record forever. A
+# reconnect refreshes last_seen so a restarting agent is never reaped.
+# REAP_TTL <= 0 disables reaping.
+REAP_TTL = float(os.environ.get("AGENT_DISCOVERY_REAP_TTL_SECONDS", "1800"))
+REAP_INTERVAL = float(os.environ.get("AGENT_DISCOVERY_REAP_INTERVAL_SECONDS", "300"))
+
 AUTH_TOKEN = os.environ.get("AGENT_DISCOVERY_TOKEN", "").strip()
 
 PEERS: list[str] = [
@@ -1283,6 +1291,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, f"error: {e}\n")
 
 
+def _reaper_loop():
+    """Background thread: periodically drop stale DISCONNECTED records so dead
+    and orphaned agents don't pile up in the registry (and the GUI)."""
+    while True:
+        time.sleep(REAP_INTERVAL)
+        try:
+            removed = reg.reap_stale(int(REAP_TTL))
+            if removed:
+                print(f"agent-discovery: reaped {len(removed)} stale record(s): {', '.join(removed)}", flush=True)
+        except Exception as e:
+            print(f"agent-discovery: reaper error: {e}", flush=True)
+
+
 def serve(bind: str = BIND, port: int = PORT):
     reg.load_from_disk()
     # ThreadingHTTPServer: held-open SSE handlers (GET /channel/connect) must not
@@ -1290,6 +1311,12 @@ def serve(bind: str = BIND, port: int = PORT):
     # threads die with the server.
     server = ThreadingHTTPServer((bind, port), Handler)
     server.daemon_threads = True
+    if REAP_TTL > 0:
+        threading.Thread(target=_reaper_loop, daemon=True).start()
+        print(
+            f"agent-discovery: reaper on — drop DISCONNECTED records older than {int(REAP_TTL)}s every {int(REAP_INTERVAL)}s",
+            flush=True,
+        )
     print(
         f"agent-discovery {VERSION} listening on {bind}:{port}",
         flush=True,

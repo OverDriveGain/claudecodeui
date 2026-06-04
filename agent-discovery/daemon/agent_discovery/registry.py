@@ -338,3 +338,44 @@ def remove(agent_id: str | None = None, label: str | None = None, pid: int | Non
                     _save_raw(dict(_registry))
                     return True
     return False
+
+
+def reap_stale(ttl_seconds: int) -> list[str]:
+    """Remove records that have been DISCONNECTED (dead pid AND no live channel
+    shim) for longer than `ttl_seconds`, so dead/orphaned agents don't pile up
+    in the registry forever. Returns the labels of removed records.
+    `ttl_seconds <= 0` disables reaping (returns []).
+
+    A reconnect refreshes `last_seen`, so an agent that's merely restarting is
+    not reaped; the last_seen check is re-verified under the lock to avoid
+    racing a registration that lands mid-reap.
+    """
+    if ttl_seconds <= 0:
+        return []
+    now = time.time()
+    # Compute state outside the mutation lock (mirrors snapshot()).
+    with _lock:
+        items = [(k, dict(v)) for k, v in _registry.items()]
+    candidates = []
+    for k, rec in items:
+        if _compute_state(rec) != "DISCONNECTED":
+            continue
+        last_seen = rec.get("last_seen", 0) or 0
+        if now - last_seen >= ttl_seconds:
+            candidates.append((k, rec.get("label", "?")))
+    if not candidates:
+        return []
+    removed = []
+    with _lock:
+        for k, label in candidates:
+            v = _registry.get(k)
+            if v is None:
+                continue
+            # Re-verify it hasn't reconnected since we computed state.
+            if now - (v.get("last_seen", 0) or 0) < ttl_seconds:
+                continue
+            del _registry[k]
+            removed.append(label)
+        if removed:
+            _save_raw(dict(_registry))
+    return removed
