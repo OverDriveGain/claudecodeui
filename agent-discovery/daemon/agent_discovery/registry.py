@@ -12,8 +12,9 @@ AGENT_DISCOVERY_PEER_DOMAINS in daemon.py). Local agents are never filtered.
 Persistence: atomic write to a JSON file under ~/.local/share/agent-discovery/.
 State (ONLINE/CONTROLLABLE/DISCONNECTED) is computed on read, not stored.
 
-Dead records are NEVER auto-deleted (D7). They remain DISCONNECTED.
-Pruning is explicit: unregister endpoint or direct call to remove().
+Pruning: the unregister endpoint / remove(), plus reap_stale() — a background
+reaper (see daemon.py) drops records that have been DISCONNECTED past a TTL so
+dead/orphaned agents don't accumulate forever.
 """
 
 import json
