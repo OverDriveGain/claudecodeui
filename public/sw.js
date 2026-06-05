@@ -1,7 +1,7 @@
 // Service Worker for ZAI PWA
 // Cache only manifest (needed for PWA install). HTML and JS are never pre-cached
 // so a rebuild + refresh always picks up the latest assets.
-const CACHE_NAME = 'claude-ui-v3';
+const CACHE_NAME = 'claude-ui-v4';
 const urlsToCache = [
   '/manifest.json'
 ];
@@ -44,14 +44,16 @@ self.addEventListener('fetch', event => {
         const clone = response.clone();
         caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         return response;
-      }).catch(() => caches.match(event.request))
+      }).catch(() => caches.match(event.request).then((cached) => cached || new Response(null, { status: 504, statusText: 'Gateway Timeout' })))
     );
     return;
   }
 
-  // Everything else — network-first
+  // Everything else — network-first. Always resolve to a real Response: a bare
+  // caches.match() miss returns undefined, and respondWith(undefined) throws
+  // "Failed to convert value to 'Response'" — which would blank the whole app.
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request).catch(() => caches.match(event.request).then((cached) => cached || new Response(null, { status: 504, statusText: 'Gateway Timeout' })))
   );
 });
 
