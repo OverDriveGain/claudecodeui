@@ -3,6 +3,13 @@
 All notable changes to CloudCLI UI will be documented in this file.
 
 
+## [1.2.0](https://github.com/OverDriveGain/claudecodeui/compare/v1.1.0...v1.2.0) (2026-06-05)
+
+### New Features
+
+* **sidebar:** always hide agent/fleet entries from the Projects list; registered `agent:*` and legacy `fleet:*` entries now appear only in the liveAgents ("Agents") view ([490892e](https://github.com/OverDriveGain/claudecodeui/commit/490892eecd73f8c7ca85732d04d1907e7a6c8cde))
+
+
 ## [1.32.0](https://github.com/siteboon/claudecodeui/compare/v1.31.5...v1.32.0) (2026-05-13)
 
 ### Bug Fixes
