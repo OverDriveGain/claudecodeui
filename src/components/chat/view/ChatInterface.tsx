@@ -474,6 +474,7 @@ function ChatInterface({
             isAgentOnlineReadOnly
           }
           disconnected={isAgentDisconnected}
+          isAgent={isAgentProject}
         />
       </div>
 
