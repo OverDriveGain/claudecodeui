@@ -107,6 +107,10 @@ interface ChatComposerProps {
   // When true the agent is registered but not running (DISCONNECTED state).
   // Composer is disabled; the reconnect guidance panel is shown above in ChatInterface.
   disconnected?: boolean;
+  // When true this is a live agent session (we only inject prompts). Local-session
+  // controls that don't apply to a remote agent — the permission-mode switch and
+  // the token-usage pie (no per-agent budget, always 0) — are hidden.
+  isAgent?: boolean;
 }
 
 export default function ChatComposer({
@@ -164,6 +168,7 @@ export default function ChatComposer({
   sendByCtrlEnter,
   readOnly = false,
   disconnected = false,
+  isAgent = false,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -344,6 +349,7 @@ export default function ChatComposer({
               <ImageIcon />
             </PromptInputButton>
 
+            {!isAgent && (
             <button
               type="button"
               onClick={onModeSwitch}
@@ -383,12 +389,15 @@ export default function ChatComposer({
                 </span>
               </div>
             </button>
+            )}
 
-            {provider === 'claude' && (
+            {!isAgent && provider === 'claude' && (
               <ThinkingModeSelector selectedMode={thinkingMode} onModeChange={setThinkingMode} onClose={() => {}} className="" />
             )}
 
-            <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />
+            {!isAgent && (
+              <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />
+            )}
 
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
