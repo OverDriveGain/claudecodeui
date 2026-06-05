@@ -597,7 +597,13 @@ export function useSidebarController({
         return false;
       });
     }
-    return base;
+    // Agents never belong in the normal project list. Registered agent:* and
+    // legacy fleet:* entries are unconditionally dropped here; they remain
+    // visible in the liveAgents ("Agents") mode above, which is their home.
+    return base.filter(
+      (project) =>
+        !project.projectId.startsWith('agent:') && !project.projectId.startsWith('fleet:'),
+    );
   }, [debouncedSearchQuery, sortedProjects, searchMode]);
 
   const filteredArchivedSessions = useMemo(() => {
