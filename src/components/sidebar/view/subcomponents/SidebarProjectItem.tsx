@@ -131,22 +131,50 @@ export default function SidebarProjectItem({
   const isAgentReadOnly = isAgentProject && agentState === 'ONLINE' && !project.agentWritable;
   const isAgentControllable = isAgentProject && (agentState === 'CONTROLLABLE' || (agentState === 'ONLINE' && Boolean(project.agentWritable)));
 
-  // A registered agent is a single, non-expandable leaf: clicking it opens the
-  // agent's live session straight away (no folder-style expand into one child).
-  if (isAgentProject) {
-    // Live health (actively polled) takes precedence over the cached list state.
-    const agentId = project.projectId.slice('agent:'.length);
-    const health = agentHealth[agentId] || null;
+  // An agent — whether a live channel agent (agent:) OR a fleet-roster agent
+  // (fleet:) — is a single, non-expandable leaf: clicking opens it straight away.
+  // NEITHER renders as a folder (no expand, no session list, no "new session"
+  // dropdown). Channel agents get live health; fleet agents use the roster state.
+  const isAgentLeaf = isAgentProject || isFleetProject;
+  if (isAgentLeaf) {
+    const agentId = isAgentProject ? project.projectId.slice('agent:'.length) : '';
+    const health = isAgentProject ? (agentHealth[agentId] || null) : null;
 
-    // Working = channel live AND a real backing process (zombie-checked daemon-side).
-    const liveWorking = health ? health.working : isAgentControllable;
-    const liveDisconnected = health
-      ? (health.state === 'DISCONNECTED' || !health.alive)
-      : isAgentDisconnected;
-    // Registered/alive but not actually working (e.g. channel dropped / zombie shim,
-    // or read-only transcript) — distinct from fully disconnected.
-    const liveNotResponding = !liveWorking && !liveDisconnected;
+    // Unified status -> dot colour, icon colour, single badge, faded-when-offline.
+    let dotClass = 'bg-gray-400';
+    let iconClass = 'text-muted-foreground';
+    let badgeText = '';
+    let badgeClass = 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400';
+    let faded = false;
+    const GREEN = 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
+    const BLUE = 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+    const AMBER = 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
+    const GRAY = 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400';
 
+    if (isAgentProject) {
+      // Working = channel live AND a real backing process (zombie-checked daemon-side).
+      const working = health ? health.working : isAgentControllable;
+      const disconnected = health ? (health.state === 'DISCONNECTED' || !health.alive) : isAgentDisconnected;
+      if (working) {
+        dotClass = 'bg-green-500'; iconClass = 'text-green-600 dark:text-green-400';
+        badgeText = isAgentReadOnly ? 'live' : 'working'; badgeClass = GREEN;
+      } else if (disconnected) {
+        dotClass = 'bg-gray-400'; iconClass = 'text-muted-foreground'; badgeText = 'disconnected'; badgeClass = GRAY; faded = true;
+      } else {
+        dotClass = 'bg-amber-500'; iconClass = 'text-amber-600 dark:text-amber-400'; badgeText = 'not responding'; badgeClass = AMBER;
+      }
+    } else {
+      // Fleet roster agent: alive+controllable -> working; alive only -> read-only; else offline.
+      if (!project.fleetAlive) {
+        dotClass = 'bg-gray-400'; iconClass = 'text-muted-foreground'; badgeText = 'offline'; badgeClass = GRAY; faded = true;
+      } else if (project.fleetControllable) {
+        dotClass = 'bg-green-500'; iconClass = 'text-green-600 dark:text-green-400'; badgeText = 'working'; badgeClass = GREEN;
+      } else {
+        dotClass = 'bg-blue-500'; iconClass = 'text-blue-600 dark:text-blue-400'; badgeText = 'read-only'; badgeClass = BLUE;
+      }
+    }
+
+    // Last-seen line (channel agents only — sourced from live health).
     const lastSeenSec = health?.last_seen;
     const agoSec = lastSeenSec ? Math.max(0, Math.floor(currentTime.getTime() / 1000 - lastSeenSec)) : null;
     const lastSeenText =
@@ -155,33 +183,31 @@ export default function SidebarProjectItem({
       : agoSec < 3600 ? `${Math.floor(agoSec / 60)}m ago`
       : agoSec < 86400 ? `${Math.floor(agoSec / 3600)}h ago`
       : `${Math.floor(agoSec / 86400)}d ago`;
-    const statusWord = liveWorking ? 'working' : liveDisconnected ? 'disconnected' : 'not responding';
-    const statusTitle = `${statusWord}${lastSeenText ? ` · last seen ${lastSeenText}` : ''}`;
-    // Resolve the agent's live session id. sessions[] is loaded lazily on expand
-    // and the agent leaf never expands, so prefer the explicit agentSessionId from
-    // the project payload; fall back to any loaded/inline session.
-    const agentSessionId =
-      project.agentSessionId || sessions[0]?.id || project.sessions?.[0]?.id || null;
-    const rawAgentSession = sessions[0] ?? project.sessions?.[0] ?? null;
-    const agentSession: SessionWithProvider | null = agentSessionId
-      ? { ...(rawAgentSession ?? {}), id: agentSessionId, __provider: 'claude' as LLMProvider }
+    const statusTitle = `${badgeText}${lastSeenText ? ` · last seen ${lastSeenText}` : ''}`;
+
+    const leafCwd = isAgentProject
+      ? (project.agentCwd || '')
+      : (project.fullPath && project.fullPath !== project.displayName ? project.fullPath : '');
+
+    // Resolve the agent's session id (the leaf never expands to load sessions[],
+    // so prefer explicit ids from the project payload).
+    const sessionId = isAgentProject
+      ? (project.agentSessionId || sessions[0]?.id || project.sessions?.[0]?.id || null)
+      : (sessions[0]?.id || project.sessions?.[0]?.id || null);
+    const rawSession = sessions[0] ?? project.sessions?.[0] ?? null;
+    const leafSession: SessionWithProvider | null = sessionId
+      ? { ...(rawSession ?? {}), id: sessionId, __provider: 'claude' as LLMProvider }
       : null;
 
     const openAgent = () => {
       onProjectSelect(project);
-      if (agentSession) {
-        onSessionSelect(agentSession, project.projectId);
+      if (leafSession) {
+        onSessionSelect(leafSession, project.projectId);
       }
     };
 
-    const dotClass = liveWorking
-      ? 'bg-green-500'
-      : liveDisconnected
-        ? 'bg-gray-400'
-        : 'bg-amber-500';
-
     return (
-      <div className={cn('md:space-y-1', liveDisconnected && 'opacity-70')}>
+      <div className={cn('md:space-y-1', faded && 'opacity-70')}>
         <Button
           variant="ghost"
           className={cn(
@@ -189,45 +215,26 @@ export default function SidebarProjectItem({
             isSelected && 'bg-accent text-accent-foreground',
           )}
           onClick={openAgent}
-          title={project.agentCwd || project.displayName}
+          title={leafCwd || project.displayName}
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <Bot
-              className={cn(
-                'h-4 w-4 flex-shrink-0',
-                liveWorking
-                  ? 'text-green-600 dark:text-green-400'
-                  : liveDisconnected
-                    ? 'text-muted-foreground'
-                    : 'text-amber-600 dark:text-amber-400',
-              )}
-            />
+            <Bot className={cn('h-4 w-4 flex-shrink-0', iconClass)} />
             <div className="min-w-0 flex-1 text-left">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate text-sm font-semibold text-foreground">{project.displayName}</span>
-                {liveWorking && (
-                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                    {isAgentReadOnly ? 'live' : 'working'}
-                  </span>
-                )}
-                {liveNotResponding && (
-                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                    not responding
-                  </span>
-                )}
-                {liveDisconnected && (
-                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                    disconnected
+                {badgeText && (
+                  <span className={cn('flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none', badgeClass)}>
+                    {badgeText}
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                {lastSeenText && <span className="flex-shrink-0">{lastSeenText}</span>}
-                {lastSeenText && project.agentCwd && <span className="flex-shrink-0 opacity-40">·</span>}
-                {project.agentCwd && (
-                  <span className="truncate" title={project.agentCwd}>{project.agentCwd}</span>
-                )}
-              </div>
+              {(lastSeenText || leafCwd) && (
+                <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                  {lastSeenText && <span className="flex-shrink-0">{lastSeenText}</span>}
+                  {lastSeenText && leafCwd && <span className="flex-shrink-0 opacity-40">·</span>}
+                  {leafCwd && <span className="truncate" title={leafCwd}>{leafCwd}</span>}
+                </div>
+              )}
             </div>
           </div>
           <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotClass)} title={statusTitle} />
