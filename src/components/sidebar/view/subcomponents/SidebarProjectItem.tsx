@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
+import { useAgentHealth } from '../../../../hooks/useAgentHealth';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
@@ -100,6 +101,9 @@ export default function SidebarProjectItem({
   const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
 
+  // Live agent health (actively polled, zombie-checked). Shared singleton poller.
+  const agentHealth = useAgentHealth();
+
   const toggleProject = () => onToggleProject(project.projectId);
   const toggleStarProject = () => onToggleStarProject(project.projectId);
 
@@ -130,6 +134,29 @@ export default function SidebarProjectItem({
   // A registered agent is a single, non-expandable leaf: clicking it opens the
   // agent's live session straight away (no folder-style expand into one child).
   if (isAgentProject) {
+    // Live health (actively polled) takes precedence over the cached list state.
+    const agentId = project.projectId.slice('agent:'.length);
+    const health = agentHealth[agentId] || null;
+
+    // Working = channel live AND a real backing process (zombie-checked daemon-side).
+    const liveWorking = health ? health.working : isAgentControllable;
+    const liveDisconnected = health
+      ? (health.state === 'DISCONNECTED' || !health.alive)
+      : isAgentDisconnected;
+    // Registered/alive but not actually working (e.g. channel dropped / zombie shim,
+    // or read-only transcript) — distinct from fully disconnected.
+    const liveNotResponding = !liveWorking && !liveDisconnected;
+
+    const lastSeenSec = health?.last_seen;
+    const agoSec = lastSeenSec ? Math.max(0, Math.floor(currentTime.getTime() / 1000 - lastSeenSec)) : null;
+    const lastSeenText =
+      agoSec == null ? null
+      : agoSec < 60 ? `${agoSec}s ago`
+      : agoSec < 3600 ? `${Math.floor(agoSec / 60)}m ago`
+      : agoSec < 86400 ? `${Math.floor(agoSec / 3600)}h ago`
+      : `${Math.floor(agoSec / 86400)}d ago`;
+    const statusWord = liveWorking ? 'working' : liveDisconnected ? 'disconnected' : 'not responding';
+    const statusTitle = `${statusWord}${lastSeenText ? ` · last seen ${lastSeenText}` : ''}`;
     // Resolve the agent's live session id. sessions[] is loaded lazily on expand
     // and the agent leaf never expands, so prefer the explicit agentSessionId from
     // the project payload; fall back to any loaded/inline session.
@@ -147,14 +174,14 @@ export default function SidebarProjectItem({
       }
     };
 
-    const dotClass = isAgentControllable
+    const dotClass = liveWorking
       ? 'bg-green-500'
-      : isAgentDisconnected
+      : liveDisconnected
         ? 'bg-gray-400'
-        : 'bg-blue-500';
+        : 'bg-amber-500';
 
     return (
-      <div className={cn('md:space-y-1', isAgentDisconnected && 'opacity-70')}>
+      <div className={cn('md:space-y-1', liveDisconnected && 'opacity-70')}>
         <Button
           variant="ghost"
           className={cn(
@@ -168,40 +195,42 @@ export default function SidebarProjectItem({
             <Bot
               className={cn(
                 'h-4 w-4 flex-shrink-0',
-                isAgentControllable
+                liveWorking
                   ? 'text-green-600 dark:text-green-400'
-                  : isAgentDisconnected
+                  : liveDisconnected
                     ? 'text-muted-foreground'
-                    : 'text-primary',
+                    : 'text-amber-600 dark:text-amber-400',
               )}
             />
             <div className="min-w-0 flex-1 text-left">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate text-sm font-semibold text-foreground">{project.displayName}</span>
-                {isAgentControllable && (
+                {liveWorking && (
                   <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                    connected
+                    {isAgentReadOnly ? 'live' : 'working'}
                   </span>
                 )}
-                {isAgentReadOnly && (
-                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                    read-only
+                {liveNotResponding && (
+                  <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                    not responding
                   </span>
                 )}
-                {isAgentDisconnected && (
+                {liveDisconnected && (
                   <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium leading-none bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                     disconnected
                   </span>
                 )}
               </div>
-              {project.agentCwd && (
-                <div className="truncate text-xs text-muted-foreground" title={project.agentCwd}>
-                  {project.agentCwd}
-                </div>
-              )}
+              <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                {lastSeenText && <span className="flex-shrink-0">{lastSeenText}</span>}
+                {lastSeenText && project.agentCwd && <span className="flex-shrink-0 opacity-40">·</span>}
+                {project.agentCwd && (
+                  <span className="truncate" title={project.agentCwd}>{project.agentCwd}</span>
+                )}
+              </div>
             </div>
           </div>
-          <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotClass)} />
+          <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotClass)} title={statusTitle} />
         </Button>
       </div>
     );

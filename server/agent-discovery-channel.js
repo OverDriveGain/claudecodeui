@@ -9,7 +9,7 @@
 // in-memory telegram block-cache present in fleet-channel.js are removed — those
 // were Manar-fleet-specific workarounds.
 
-import { lookupBySession, listAgents, discoveryCall, discoveryTranscript } from './services/agent-discovery.service.js';
+import { lookupBySession, listAgents, discoveryCall, discoveryTranscript, discoveryPendingAsk, discoveryAnswer, getAgentById } from './services/agent-discovery.service.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
@@ -96,33 +96,109 @@ export async function queryAgentChannel(command, options = {}, ws) {
     return;
   }
 
-  // Tail transcript until the assistant turn ends or we time out.
+  // Stream the agent's reply, surfacing an interactive ask if it parks on one.
+  await tailAndSurface(agentId, viewSid, seen, sid, ws);
+}
+
+// Tail an agent's transcript, streaming each new record to the GUI (stamped with
+// the GUI's viewSid so it renders live), until EITHER:
+//   - the assistant turn ends  -> send `complete` (composer resets), or
+//   - the agent parks on an interactive `ask` -> emit a `permission_request` and
+//     STOP WITHOUT a `complete`. A trailing `complete` would make the frontend
+//     clear pendingPermissionRequests, wiping the picker before the user sees it
+//     (the turn isn't over — it resumes when they answer via answerAgentChannel).
+async function tailAndSurface(agentId, viewSid, startSeen, startSid, ws) {
+  let seen = startSeen;
+  let sid = startSid;
   const deadline = Date.now() + 180000;
   while (Date.now() < deadline) {
     await sleep(700);
     const t = await discoveryTranscript(agentId);
     if (!t.ok) continue;
     if (t.sessionId && t.sessionId !== sid) { sid = t.sessionId; seen = 0; }
-    if (t.records.length <= seen) continue;
-    const fresh = t.records.slice(seen);
-    seen = t.records.length;
     let done = false;
-    for (const raw of fresh) {
-      try {
-        // Stamp with viewSid (the GUI session), not the transcript's internal
-        // session id, so the reply renders in the active conversation live.
-        const norm = sessionsService.normalizeMessage('claude', raw, viewSid);
-        if (Array.isArray(norm)) for (const m of norm) ws.send(m);
-      } catch {
-        // exotic record — skip
-      }
-      if (raw?.type === 'assistant') {
-        const sr = raw.message?.stop_reason;
-        if (sr && sr !== 'tool_use') done = true;
+    if (t.records.length > seen) {
+      const fresh = t.records.slice(seen);
+      seen = t.records.length;
+      for (const raw of fresh) {
+        try {
+          const norm = sessionsService.normalizeMessage('claude', raw, viewSid);
+          if (Array.isArray(norm)) for (const m of norm) ws.send(m);
+        } catch {
+          // exotic record — skip
+        }
+        if (raw?.type === 'assistant') {
+          const sr = raw.message?.stop_reason;
+          if (sr && sr !== 'tool_use') done = true;
+        }
       }
     }
     if (done) break;
+
+    // Parked on an interactive ask -> surface as a permission_request (rendered by
+    // the existing AskUserQuestion panel) and return WITHOUT completing.
+    const ask = await discoveryPendingAsk(agentId);
+    if (ask) {
+      ws.send(createNormalizedMessage({
+        kind: 'permission_request',
+        requestId: `chask:${agentId}:${ask.request_id}`,
+        toolName: 'AskUserQuestion',
+        input: { questions: ask.questions },
+        sessionId: viewSid,
+        provider: 'claude',
+      }));
+      return;
+    }
+  }
+  // Turn ended (or timed out) — safe to complete now.
+  ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId: viewSid, provider: 'claude' }));
+}
+
+// Route an operator's answer to a channel-ask back to the daemon (which pushes it
+// down the agent's SSE to unblock the `ask` tool), then resume streaming the
+// agent's continuation so the GUI shows what happens next. requestId is the
+// namespaced id `chask:<agentId>:<request_id>`; decision is the GUI permission
+// decision ({ allow, updatedInput: { answers } }). `ws` lets us stream the resume.
+export async function answerAgentChannel(requestId, decision = {}, ws = null) {
+  if (typeof requestId !== 'string' || !requestId.startsWith('chask:')) return;
+  // chask:<agentId>:<request_id> — both parts are UUIDs (no embedded colons).
+  const parts = requestId.split(':');
+  if (parts.length !== 3) return;
+  const agentId = parts[1];
+  const reqId = parts[2];
+  // A denied/skipped decision still resolves the ask, just with no selection.
+  const updatedInput = decision && typeof decision === 'object' ? decision.updatedInput : null;
+  const answers =
+    updatedInput && typeof updatedInput === 'object' && updatedInput.answers && typeof updatedInput.answers === 'object'
+      ? updatedInput.answers
+      : {};
+
+  // Resolve the GUI session id (to stamp the resumed stream) + transcript baseline.
+  let agent = getAgentById(agentId);
+  if (!agent) { await listAgents({ force: true }); agent = getAgentById(agentId); }
+  const viewSid = agent?.session_id || '';
+
+  let seen = 0;
+  let sid = viewSid;
+  if (ws) {
+    const base = await discoveryTranscript(agentId);
+    if (base.ok) { seen = base.records.length; sid = base.sessionId || viewSid; }
   }
 
-  ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId: viewSid, provider: 'claude' }));
+  try {
+    await discoveryAnswer(agentId, reqId, answers);
+  } catch {
+    // best-effort; the plugin times out the ask if no answer arrives
+    return;
+  }
+
+  // Stream the continuation (and any follow-up ask), ending with `complete`.
+  if (ws && viewSid) {
+    await tailAndSurface(agentId, viewSid, seen, sid, ws);
+  }
+}
+
+// True if a requestId belongs to the channel-ask flow (vs the local SDK runner).
+export function isAgentAskRequestId(requestId) {
+  return typeof requestId === 'string' && requestId.startsWith('chask:');
 }

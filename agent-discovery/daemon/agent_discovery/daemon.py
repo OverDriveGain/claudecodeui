@@ -730,6 +730,65 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, merged)
                 return
 
+            # Active health snapshot for ALL local agents — for the GUI's live
+            # "is it actually working" indicator. Beyond the cached registry, this
+            # runs the zombie check (channel.agent_alive walks the shim's process
+            # tree) so a shim that outlived its claude reports working=false.
+            if path == "/agents/health":
+                if not self._require_auth():
+                    return
+                out = []
+                for r in reg.snapshot():
+                    api = _record_to_api(r)
+                    sid = api.get("session_id") or r.get("session_id") or ""
+                    state = api.get("state", "DISCONNECTED")
+                    live_channel = bool(sid) and channel.has_connection(sid) and channel.agent_alive(sid)
+                    working = state in ("ONLINE", "CONTROLLABLE") and live_channel
+                    out.append({
+                        "id": api.get("id"),
+                        "label": api.get("label"),
+                        "state": state,
+                        "working": working,
+                        "alive": bool(api.get("alive")),
+                        "channel_connected": live_channel,
+                        "controllable": bool(api.get("controllable")),
+                        "last_seen": api.get("last_seen"),
+                        "last_activity": api.get("last_activity"),
+                    })
+                self._json(200, out)
+                return
+
+            # Outstanding interactive ask for an agent (agent called its channel
+            # `ask` tool and is blocked waiting for the operator's selection).
+            # Returns {"pending": {...}} or {"pending": null}. claudeui polls this
+            # while bridging a send and renders an answerable prompt when present.
+            if path.startswith("/agents/") and path.endswith("/pending-ask"):
+                if not self._require_auth():
+                    return
+                agent_id = path[len("/agents/"):-len("/pending-ask")]
+                record = reg.get_record(agent_id)
+                if not record:
+                    peer = _peer_for_agent(agent_id)
+                    if peer:
+                        try:
+                            status, hdrs, data = _proxy_to_peer(
+                                peer, f"/agents/{agent_id}/pending-ask", qs_raw)
+                        except Exception as e:
+                            self._json(502, {"error": f"peer proxy failed: {e}"})
+                            return
+                        self.send_response(status)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
+                    self._json(404, {"error": f"agent {agent_id!r} not found"})
+                    return
+                api = _record_to_api(record)
+                sid = api.get("session_id") or record.get("session_id") or ""
+                self._json(200, {"pending": channel.get_pending_ask(sid) if sid else None})
+                return
+
             # Live transcript follow (tail -f over SSE) — pushes each new
             # transcript line the moment it's appended, so the UI shows agent
             # output continuously without polling or "turn done" cutoffs.
@@ -1014,6 +1073,89 @@ class Handler(BaseHTTPRequestHandler):
                     "state":         record["state"],
                     "registered_at": record["registered_at"],
                 })
+                return
+
+            # Interactive ask FROM the agent's channel plugin. The plugin's `ask`
+            # tool POSTs the question here and blocks; we stash it keyed by the
+            # plugin's session id so claudeui can render it and POST the answer to
+            # /agents/<id>/answer, which is pushed back down the SSE to unblock it.
+            if path == "/channel/ask":
+                if not self._require_auth():
+                    return
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if length <= 0 or length > 256 * 1024:
+                    self._json(400, {"error": "Content-Length missing or out of range"})
+                    return
+                try:
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                except json.JSONDecodeError as e:
+                    self._json(400, {"error": f"invalid JSON: {e}"})
+                    return
+                sid = (payload.get("session") or "").strip()
+                request_id = (payload.get("request_id") or "").strip()
+                questions = payload.get("questions")
+                if not sid or not request_id or not isinstance(questions, list):
+                    self._json(400, {"error": "require 'session', 'request_id', and 'questions' (array)"})
+                    return
+                channel.set_pending_ask(sid, {
+                    "request_id": request_id,
+                    "questions": questions,
+                    "ts": time.time(),
+                })
+                self._json(202, {"ok": True, "request_id": request_id})
+                return
+
+            # Operator's answer to an interactive ask (from claudeui). Pushed down
+            # the agent's SSE channel as a `channel_answer` payload; the plugin
+            # matches request_id and returns it as the blocked tool's result.
+            if path.startswith("/agents/") and path.endswith("/answer"):
+                if not self._require_auth():
+                    return
+                agent_id = path[len("/agents/"):-len("/answer")]
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                body_bytes = self.rfile.read(length) if 0 < length <= 256 * 1024 else b""
+                record = reg.get_record(agent_id)
+                if not record:
+                    peer = _peer_for_agent(agent_id)
+                    if peer:
+                        try:
+                            status, hdrs, data = _proxy_to_peer(
+                                peer, f"/agents/{agent_id}/answer", "",
+                                method="POST", body_bytes=body_bytes,
+                                extra_headers={"Content-Type": "application/json"},
+                            )
+                        except Exception as e:
+                            self._json(502, {"error": f"peer proxy failed: {e}"})
+                            return
+                        self.send_response(status)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
+                    self._json(404, {"error": f"agent {agent_id!r} not found"})
+                    return
+                try:
+                    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+                except json.JSONDecodeError as e:
+                    self._json(400, {"error": f"invalid JSON: {e}"})
+                    return
+                request_id = (payload.get("request_id") or "").strip()
+                answers = payload.get("answers")
+                if not request_id or not isinstance(answers, dict):
+                    self._json(400, {"error": "require 'request_id' and 'answers' (object)"})
+                    return
+                api = _record_to_api(record)
+                sid = api.get("session_id") or record.get("session_id") or ""
+                delivered = False
+                if sid:
+                    delivered = channel.deliver_raw(sid, {
+                        "type": "channel_answer",
+                        "request_id": request_id,
+                        "answers": answers,
+                    })
+                    channel.clear_pending_ask(sid, request_id)
+                self._json(200, {"ok": delivered, "delivered": delivered, "request_id": request_id})
                 return
 
             if path == "/agents/unregister":

@@ -36,8 +36,8 @@ import { queryFleetChannel, isFleetSession } from './fleet-channel.js';
 import { isFleetProjectId } from './services/fleet.service.js';
 import { fleetFileTree, fleetReadFile, fleetFileContent, fleetReadOnly } from './fleet-files.js';
 // Registered agents (agent-discovery) — general, ID-addressed, register-only.
-import { queryAgentChannel, isAgentSession } from './agent-discovery-channel.js';
-import { isAgentProjectId, agentIdFromProjectId, discoveryFollowResponse } from './services/agent-discovery.service.js';
+import { queryAgentChannel, isAgentSession, answerAgentChannel } from './agent-discovery-channel.js';
+import { isAgentProjectId, agentIdFromProjectId, discoveryFollowResponse, discoveryAgentsHealth } from './services/agent-discovery.service.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { Readable as NodeReadable } from 'node:stream';
 import { agentFileTree, agentReadFile, agentFileContent, agentFileContentRaw, agentReadOnly } from './agent-discovery-files.js';
@@ -117,6 +117,7 @@ const wss = createWebSocketServer(server, {
         isFleetSession,
         queryAgentChannel,
         isAgentSession,
+        answerAgentChannel,
         spawnCursor,
         queryCodex,
         spawnGemini,
@@ -327,6 +328,18 @@ const expandWorkspacePath = (inputPath) => {
 };
 
 // Browse filesystem endpoint for project suggestions - uses existing getFileTree
+// Live health for all registered agents — powers the sidebar's active
+// "is it actually working" indicator. Returns [] if the daemon is unreachable.
+app.get('/api/agents/health', authenticateToken, async (req, res) => {
+    try {
+        const health = await discoveryAgentsHealth();
+        res.json({ agents: health });
+    } catch (error) {
+        console.error('[API] agents health error:', error?.message || error);
+        res.json({ agents: [] });
+    }
+});
+
 app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
     try {
         const { path: dirPath } = req.query;

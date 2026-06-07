@@ -150,6 +150,76 @@ export async function discoveryTranscript(
   }
 }
 
+// Live per-agent health (active check incl. zombie detection). Never throws.
+export type AgentHealth = {
+  id: string;
+  label?: string;
+  state: AgentState;
+  working: boolean;
+  alive: boolean;
+  channel_connected: boolean;
+  controllable?: boolean;
+  last_seen?: number;
+  last_activity?: number;
+};
+
+export async function discoveryAgentsHealth(
+  { timeoutMs = 5000 }: { timeoutMs?: number } = {},
+): Promise<AgentHealth[]> {
+  try {
+    const { status, json } = await discoveryCall('GET', '/agents/health', { timeoutMs });
+    if (status < 200 || status >= 300 || !Array.isArray(json)) return [];
+    return json.filter((h: any) => h && typeof h.id === 'string') as AgentHealth[];
+  } catch {
+    return [];
+  }
+}
+
+// An outstanding interactive ask raised by the agent's channel `ask` tool.
+export type PendingAsk = {
+  request_id: string;
+  questions: any[];
+  ts?: number;
+};
+
+// Read the agent's current outstanding interactive ask (null if none). Cheap;
+// polled by the send-bridge while a turn is in flight. Never throws.
+export async function discoveryPendingAsk(
+  agentId: string,
+  { timeoutMs = 5000 }: { timeoutMs?: number } = {},
+): Promise<PendingAsk | null> {
+  try {
+    const { status, json } = await discoveryCall('GET', `/agents/${encodeURIComponent(agentId)}/pending-ask`, { timeoutMs });
+    if (status < 200 || status >= 300) return null;
+    const pending = json?.pending;
+    if (pending && typeof pending === 'object' && pending.request_id && Array.isArray(pending.questions)) {
+      return pending as PendingAsk;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Submit the operator's answer to an interactive ask. The daemon pushes it down
+// the agent's channel SSE, unblocking the `ask` tool. Returns whether delivered.
+export async function discoveryAnswer(
+  agentId: string,
+  requestId: string,
+  answers: Record<string, string>,
+  { timeoutMs = 6000 }: { timeoutMs?: number } = {},
+): Promise<{ ok: boolean; status: number }> {
+  try {
+    const { status, json } = await discoveryCall('POST', `/agents/${encodeURIComponent(agentId)}/answer`, {
+      body: { request_id: requestId, answers },
+      timeoutMs,
+    });
+    return { ok: Boolean(json?.delivered), status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
 export function lookupBySession(sessionId: string | null | undefined): RegisteredAgent | null {
   return (sessionId && registry.get(sessionId)) || null;
 }

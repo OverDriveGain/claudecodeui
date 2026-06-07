@@ -27,6 +27,14 @@ _LOCK = threading.RLock()
 # session_id -> Connection
 _BY_SESSION: dict[str, "Connection"] = {}
 
+# session_id -> pending interactive ask, e.g.
+#   {"request_id": "...", "questions": [...], "ts": 169...}
+# Set when the agent's channel plugin calls its `ask` tool (POST /channel/ask)
+# and cleared when answered (POST /agents/<id>/answer) or superseded. Read by
+# claudeui to render an answerable prompt. Only one outstanding ask per session
+# (a second ask replaces the first — matches the plugin which blocks per-call).
+_PENDING_ASKS: dict[str, dict] = {}
+
 
 class Connection:
     """One live shim SSE stream, identified by Claude session id."""
@@ -82,6 +90,9 @@ def drop_connection(session_id: str, conn: Connection) -> None:
     with _LOCK:
         if _BY_SESSION.get(session_id) is conn:
             del _BY_SESSION[session_id]
+            # A dropped stream means the agent is gone/rotating — a question it
+            # left pending can never be answered into it, so don't strand it.
+            _PENDING_ASKS.pop(session_id, None)
     conn.close()
 
 
@@ -129,6 +140,43 @@ def deliver(session_id: str, content: str, meta: dict | None = None) -> bool:
     if conn is None or conn.closed:
         return False
     return conn.push({"content": content, "meta": meta or {}})
+
+
+def deliver_raw(session_id: str, payload: dict) -> bool:
+    """Push an arbitrary control payload (e.g. an interactive-ask answer) down
+    the shim's SSE stream verbatim. The shim dispatches on payload["type"].
+    Returns True if a live connection accepted it."""
+    with _LOCK:
+        conn = _BY_SESSION.get(session_id)
+    if conn is None or conn.closed:
+        return False
+    return conn.push(payload)
+
+
+# --------------------------------------------------------------------------
+# Interactive ask state (agent -> operator question, answered from claudeui)
+# --------------------------------------------------------------------------
+
+def set_pending_ask(session_id: str, ask: dict) -> None:
+    """Record an outstanding interactive ask for a session (replaces any prior)."""
+    with _LOCK:
+        _PENDING_ASKS[session_id] = ask
+
+
+def get_pending_ask(session_id: str) -> dict | None:
+    with _LOCK:
+        return _PENDING_ASKS.get(session_id)
+
+
+def clear_pending_ask(session_id: str, request_id: str | None = None) -> None:
+    """Clear the pending ask. If request_id is given, only clear when it matches
+    (avoids a late answer wiping a newer question)."""
+    with _LOCK:
+        cur = _PENDING_ASKS.get(session_id)
+        if cur is None:
+            return
+        if request_id is None or cur.get("request_id") == request_id:
+            _PENDING_ASKS.pop(session_id, None)
 
 
 def sse_bytes(payload: dict) -> bytes:

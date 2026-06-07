@@ -28,6 +28,7 @@
 
 import http from 'node:http'
 import https from 'node:https'
+import { randomUUID } from 'node:crypto'
 
 // ---------------------------------------------------------------------------
 // Identity & config (from env claude provides + env we define)
@@ -86,6 +87,147 @@ function injectPrompt(content, meta) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Interactive ask tool — agent -> operator question, answered from claudeui.
+//
+// The built-in AskUserQuestion only works against an attached terminal, so over
+// the channel it hangs. This MCP tool round-trips instead: POST the question to
+// the daemon (/channel/ask), block the tool call, and resolve it when the daemon
+// pushes a `channel_answer` back down our SSE stream (operator answered in the
+// GUI). Mirrors AskUserQuestion's input so claudeui renders the same picker.
+// ---------------------------------------------------------------------------
+
+const ASK_TOOL = {
+  name: 'ask',
+  description:
+    "Ask the operator a multiple-choice question and wait for their answer. " +
+    "USE THIS INSTEAD OF the built-in AskUserQuestion tool — this session is " +
+    "driven over a channel with no interactive terminal, so AskUserQuestion " +
+    "would hang. Returns the operator's selection(s).",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      questions: {
+        type: 'array',
+        description: 'One or more questions to ask (usually one).',
+        items: {
+          type: 'object',
+          properties: {
+            question: { type: 'string', description: 'The question text.' },
+            header: { type: 'string', description: 'Short category label (<=12 chars).' },
+            multiSelect: { type: 'boolean', description: 'Allow multiple selections.' },
+            options: {
+              type: 'array',
+              description: '2-4 choices.',
+              items: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string' },
+                  description: { type: 'string' },
+                },
+                required: ['label'],
+              },
+            },
+          },
+          required: ['question', 'options'],
+        },
+      },
+    },
+    required: ['questions'],
+  },
+}
+
+// request_id -> { rpcId, timer }
+const pendingAsks = new Map()
+const ASK_TIMEOUT_MS = 30 * 60 * 1000 // 30 min — operator may be away
+
+// POST JSON to the daemon. Resolves {ok, status, body}; never throws.
+function postJson(pathname, body) {
+  return new Promise(resolve => {
+    let u
+    try {
+      u = new URL(`${DAEMON_URL}${pathname}`)
+    } catch (e) {
+      log(`postJson bad url: ${e}`)
+      resolve({ ok: false, status: 0 })
+      return
+    }
+    const lib = u.protocol === 'https:' ? https : http
+    const data = Buffer.from(JSON.stringify(body))
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': data.length }
+    if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`
+    const req = lib.request(u, { method: 'POST', headers }, res => {
+      let buf = ''
+      res.setEncoding('utf8')
+      res.on('data', c => (buf += c))
+      res.on('end', () =>
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: buf }))
+    })
+    req.on('error', e => {
+      log(`postJson error: ${e}`)
+      resolve({ ok: false, status: 0 })
+    })
+    req.write(data)
+    req.end()
+  })
+}
+
+// Render the operator's answer as a tool-result text the agent can act on.
+function formatAnswer(questions, answers) {
+  const a = answers && typeof answers === 'object' ? answers : {}
+  const lines = []
+  for (const q of Array.isArray(questions) ? questions : []) {
+    const key = q && q.question
+    const val = key && a[key]
+    lines.push(`${key}\n→ ${val ? val : '(no selection / skipped)'}`)
+  }
+  if (!lines.length) return 'The operator did not provide an answer.'
+  return `The operator answered:\n\n${lines.join('\n\n')}`
+}
+
+// Begin an ask: park the rpc id, POST the question to the daemon, arm a timeout.
+async function startAsk(rpcId, questions) {
+  const request_id = randomUUID()
+  const timer = setTimeout(() => {
+    if (!pendingAsks.has(request_id)) return
+    pendingAsks.delete(request_id)
+    reply(rpcId, {
+      content: [{ type: 'text', text: 'No answer from the operator (timed out after 30 minutes).' }],
+    })
+  }, ASK_TIMEOUT_MS)
+  if (timer.unref) timer.unref()
+  pendingAsks.set(request_id, { rpcId, timer, questions })
+
+  const res = await postJson('/channel/ask', { session: SESSION_ID, request_id, questions })
+  if (!res.ok) {
+    // Couldn't queue the question — unblock the tool with an error instead of hanging.
+    const entry = pendingAsks.get(request_id)
+    if (entry) {
+      clearTimeout(entry.timer)
+      pendingAsks.delete(request_id)
+    }
+    reply(rpcId, {
+      content: [{ type: 'text', text: `Could not deliver the question to the operator (daemon HTTP ${res.status}).` }],
+      isError: true,
+    })
+    return
+  }
+  log(`ask queued request_id=${request_id} (${(questions || []).length} question(s))`)
+}
+
+// Resolve a parked ask with the operator's answer (from a channel_answer SSE event).
+function resolveAsk(request_id, answers) {
+  const entry = pendingAsks.get(request_id)
+  if (!entry) {
+    log(`channel_answer for unknown request_id=${request_id}; ignored`)
+    return
+  }
+  clearTimeout(entry.timer)
+  pendingAsks.delete(request_id)
+  reply(entry.rpcId, { content: [{ type: 'text', text: formatAnswer(entry.questions, answers) }] })
+  log(`ask resolved request_id=${request_id}`)
+}
+
 function handleRpc(msg) {
   // Notifications have no id; requests do.
   const { id, method } = msg
@@ -115,19 +257,46 @@ function handleRpc(msg) {
         'image the operator attached to the message (additional images appear as',
         'image_path_1, image_path_2, ...). Other attachments use attachment_path /',
         'attachment_name / attachment_mime the same way.',
+        '',
+        'To ask the operator a multiple-choice question, ALWAYS use the `ask` tool',
+        'from this server — NOT the built-in AskUserQuestion tool. This session has',
+        'no interactive terminal, so AskUserQuestion will hang forever; `ask`',
+        'round-trips the question to the operator and returns their selection.',
       ].join('\n'),
     })
     return
   }
 
   if (method === 'tools/list') {
-    reply(id, { tools: [] })
+    reply(id, { tools: [ASK_TOOL] })
     return
   }
 
   if (method === 'tools/call') {
+    const name = msg.params && msg.params.name
+    if (name === 'ask') {
+      const args = (msg.params && msg.params.arguments) || {}
+      const questions = Array.isArray(args.questions) ? args.questions : null
+      if (!questions || !questions.length) {
+        reply(id, {
+          content: [{ type: 'text', text: "ask requires a non-empty 'questions' array" }],
+          isError: true,
+        })
+        return
+      }
+      // Park + dispatch asynchronously; the reply happens when the operator answers
+      // (or on timeout/error). Never throw out of the stdin handler.
+      startAsk(id, questions).catch(e => {
+        log(`startAsk failed (ignored): ${e}`)
+        reply(id, {
+          content: [{ type: 'text', text: `ask failed: ${e && e.message ? e.message : e}` }],
+          isError: true,
+        })
+      })
+      return
+    }
     reply(id, {
-      content: [{ type: 'text', text: 'channel shim exposes no tools' }],
+      content: [{ type: 'text', text: `unknown tool: ${name}` }],
       isError: true,
     })
     return
@@ -246,6 +415,15 @@ function connect() {
             continue
           }
           if (payload && payload.type === 'ping') continue
+          // Operator's answer to a parked `ask` tool call.
+          if (payload && payload.type === 'channel_answer') {
+            try {
+              resolveAsk(payload.request_id, payload.answers)
+            } catch (e) {
+              log(`resolveAsk failed (ignored): ${e}`)
+            }
+            continue
+          }
           const content = payload && typeof payload.content === 'string' ? payload.content : null
           if (!content) {
             log('SSE event without content; ignored')

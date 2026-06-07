@@ -35,6 +35,9 @@ type ChatWebSocketDependencies = {
   // Registered agent bridge (agent-discovery, see server/agent-discovery-channel.js).
   queryAgentChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   isAgentSession: (sessionId: string) => Promise<boolean>;
+  // Answer a registered agent's interactive `ask` (routes the GUI selection to
+  // the daemon). requestId is namespaced `chask:<agentId>:<request_id>`.
+  answerAgentChannel: (requestId: string, decision: unknown, writer?: WebSocketWriter) => Promise<void>;
   spawnCursor: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   queryCodex: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   spawnGemini: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
@@ -233,12 +236,21 @@ export function handleChatConnection(
 
       if (messageType === 'claude-permission-response') {
         if (typeof data.requestId === 'string' && data.requestId.length > 0) {
-          dependencies.resolveToolApproval(data.requestId, {
-            allow: Boolean(data.allow),
-            updatedInput: data.updatedInput,
-            message: typeof data.message === 'string' ? data.message : undefined,
-            rememberEntry: data.rememberEntry,
-          });
+          // A `chask:` requestId is a registered agent's interactive ask — route
+          // the answer to the daemon instead of the local SDK approval registry.
+          if (data.requestId.startsWith('chask:')) {
+            await dependencies.answerAgentChannel(data.requestId, {
+              allow: Boolean(data.allow),
+              updatedInput: data.updatedInput,
+            }, writer);
+          } else {
+            dependencies.resolveToolApproval(data.requestId, {
+              allow: Boolean(data.allow),
+              updatedInput: data.updatedInput,
+              message: typeof data.message === 'string' ? data.message : undefined,
+              rememberEntry: data.rememberEntry,
+            });
+          }
         }
         return;
       }
