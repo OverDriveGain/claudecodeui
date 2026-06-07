@@ -86,10 +86,10 @@ export default function SidebarFooter({
         </button>
       </div>
 
-      {/* Desktop version brand line (OSS mode only) */}
+      {/* Version brand line (OSS mode only) — our release, shown on all sizes */}
       {!IS_PLATFORM && (
-        <div className="hidden px-3 py-2 text-center md:block">
-          <span className="text-[10px] text-muted-foreground/40">
+        <div className="px-3 py-2 text-center">
+          <span className="text-[11px] font-medium text-muted-foreground/70">
             ZAI v{currentVersion}
           </span>
         </div>

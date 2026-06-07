@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import { version } from '../../package.json';
 import { ReleaseInfo } from '../types/sharedTypes';
 
@@ -23,66 +22,19 @@ const compareVersions = (v1: string, v2: string) => {
 
 export type InstallMode = 'git' | 'npm';
 
-export const useVersionCheck = (owner: string, repo: string) => {
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
-  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
-  const [installMode, setInstallMode] = useState<InstallMode>('git');
-
-  useEffect(() => {
-    const fetchInstallMode = async () => {
-      try {
-        const response = await fetch('/health');
-        const data = await response.json();
-        if (data.installMode === 'npm' || data.installMode === 'git') {
-          setInstallMode(data.installMode);
-        }
-      } catch {
-        // Default to git on error
-      }
-    };
-    fetchInstallMode();
-  }, []);
-
-  useEffect(() => {
-    const checkVersion = async () => {
-      try {
-        const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
-        const data = await response.json();
-
-        // Handle the case where there might not be any releases
-        if (data.tag_name) {
-          const latest = data.tag_name.replace(/^v/, '');
-          setLatestVersion(latest);
-          // Only show update if latest version is actually newer
-          setUpdateAvailable(compareVersions(latest, version) > 0);
-
-          // Store release information
-          setReleaseInfo({
-            title: data.name || data.tag_name,
-            body: data.body || '',
-            htmlUrl: data.html_url || `https://github.com/${owner}/${repo}/releases/latest`,
-            publishedAt: data.published_at
-          });
-        } else {
-          // No releases found, don't show update notification
-          setUpdateAvailable(false);
-          setLatestVersion(null);
-          setReleaseInfo(null);
-        }
-      } catch (error) {
-        console.error('Version check failed:', error);
-        // On error, don't show update notification
-        setUpdateAvailable(false);
-        setLatestVersion(null);
-        setReleaseInfo(null);
-      }
-    };
-
-    checkVersion();
-    const interval = setInterval(checkVersion, 5 * 60 * 1000); // Check every 5 minutes
-    return () => clearInterval(interval);
-  }, [owner, repo]);
-
-  return { updateAvailable, latestVersion, currentVersion: version, releaseInfo, installMode };
+// This product ships its own release line and does NOT track the upstream
+// claudecodeui repo. The external GitHub version check + "update available"
+// banner were removed: the hook now only reports our own current version
+// (from package.json) and never makes a network call. `compareVersions` is
+// kept for callers/tests that still import it. The owner/repo args are
+// accepted for backward compatibility but ignored.
+export const useVersionCheck = (_owner?: string, _repo?: string) => {
+  void compareVersions; // retained for API compatibility; no upstream comparison
+  return {
+    updateAvailable: false,
+    latestVersion: null as string | null,
+    currentVersion: version,
+    releaseInfo: null as ReleaseInfo | null,
+    installMode: 'git' as InstallMode,
+  };
 }; 
