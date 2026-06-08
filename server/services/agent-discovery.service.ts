@@ -237,6 +237,23 @@ export async function isLiveAgentCwd(cwd: string | null | undefined): Promise<bo
   }
 }
 
+// Tell the daemon a session id is FOREIGN — a session claudeui spawned (via the
+// SDK), never a channel agent's own session. The daemon excludes it from an
+// agent's cwd-newest transcript resolution, so a Projects session opened inside
+// a live agent's folder can't be mistaken for the agent's transcript (no
+// cross-talk; the dedup no longer hides the user's new session). Fire-and-forget;
+// never throws. Only meaningful inside a live agent's cwd, but harmless anywhere
+// (the daemon only ever consults the foreign-set during transcript resolution,
+// which only happens for registered agents).
+export async function markForeignSession(sessionId: string | null | undefined): Promise<void> {
+  if (!sessionId) return;
+  try {
+    await discoveryCall('POST', '/foreign-session', { body: { session_id: sessionId }, timeoutMs: 3000 });
+  } catch {
+    /* best-effort */
+  }
+}
+
 export function lookupBySession(sessionId: string | null | undefined): RegisteredAgent | null {
   return (sessionId && registry.get(sessionId)) || null;
 }

@@ -24,7 +24,7 @@ from . import registry as reg
 from . import proc
 from . import channel
 from .control import assess_controllable, load_control_env
-from .sessions import newest_jsonl_path, session_id_from_path
+from .sessions import newest_jsonl_path, session_id_from_path, mark_foreign_session
 from .files import resolve_safe_path, file_listing, read_file_content
 
 VERSION = "0.1.0"
@@ -1073,6 +1073,35 @@ class Handler(BaseHTTPRequestHandler):
                     "state":         record["state"],
                     "registered_at": record["registered_at"],
                 })
+                return
+
+            # claudeui flags a session it opened/spawned in some folder as FOREIGN —
+            # i.e. NOT an agent's own session. The daemon then excludes that session
+            # id from cwd-newest transcript resolution, so a Projects session opened
+            # inside a live agent's folder can never be mistaken for the agent's
+            # transcript (no cross-talk; the dedup no longer hides the user's new
+            # session). Accepts {"session_id": "..."} or {"session_ids": [...]}.
+            if path == "/foreign-session":
+                if not self._require_auth():
+                    return
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if length <= 0 or length > 256 * 1024:
+                    self._json(400, {"error": "Content-Length missing or out of range"})
+                    return
+                try:
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                except json.JSONDecodeError as e:
+                    self._json(400, {"error": f"invalid JSON: {e}"})
+                    return
+                sids = payload.get("session_ids")
+                if not isinstance(sids, list):
+                    sids = [payload.get("session_id")]
+                marked = 0
+                for sid in sids:
+                    if isinstance(sid, str) and sid.strip():
+                        mark_foreign_session(sid.strip())
+                        marked += 1
+                self._json(200, {"ok": True, "marked": marked})
                 return
 
             # Interactive ask FROM the agent's channel plugin. The plugin's `ask`

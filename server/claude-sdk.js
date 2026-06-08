@@ -28,6 +28,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { isLiveAgentCwd, markForeignSession } from './services/agent-discovery.service.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -495,6 +496,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let tempImagePaths = [];
   let tempDir = null;
 
+  // Resuming an existing Projects session inside a live agent's folder: flag it
+  // foreign up front (the new-session path below covers freshly-created ones).
+  // A claudeui SDK session is never a channel agent's own session. Fire-and-forget.
+  if (sessionId && options.cwd) {
+    isLiveAgentCwd(options.cwd)
+      .then((live) => (live ? markForeignSession(sessionId) : undefined))
+      .catch(() => {});
+  }
+
   const emitNotification = (event) => {
     notifyUserIfEnabled({
       userId: ws?.userId || null,
@@ -667,6 +677,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
         capturedSessionId = message.session_id;
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
+
+        // This is a claudeui-spawned SDK session — never a channel agent's own
+        // session. If it lives inside a live agent's folder, tell the daemon so
+        // the agent's cwd-newest transcript resolution skips it (no cross-talk;
+        // the user's new session stays visible). Fire-and-forget.
+        if (options.cwd) {
+          isLiveAgentCwd(options.cwd)
+            .then((live) => (live ? markForeignSession(capturedSessionId) : undefined))
+            .catch(() => {});
+        }
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
