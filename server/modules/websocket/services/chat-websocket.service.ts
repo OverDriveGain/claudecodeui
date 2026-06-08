@@ -38,6 +38,9 @@ type ChatWebSocketDependencies = {
   // Answer a registered agent's interactive `ask` (routes the GUI selection to
   // the daemon). requestId is namespaced `chask:<agentId>:<request_id>`.
   answerAgentChannel: (requestId: string, decision: unknown, writer?: WebSocketWriter) => Promise<void>;
+  // True if `cwd` is a live registered agent's working folder — used to refuse
+  // spawning a competing local SDK session there.
+  isLiveAgentCwd: (cwd: string) => Promise<boolean>;
   spawnCursor: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   queryCodex: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   spawnGemini: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
@@ -165,6 +168,24 @@ export function handleChatConnection(
           (await dependencies.isControlSession(controlSid, controlCwd))
         ) {
           await dependencies.queryControlChannel(data.command ?? '', data.options, writer);
+          return;
+        }
+        // Refuse to spawn a local SDK session inside a LIVE agent's working folder:
+        // a 2nd claude there collides with the running --remote-control agent
+        // (disconnects it + merges the conversation). Drive the agent via the
+        // Agents entry (channel) instead.
+        if (controlCwd && (await dependencies.isLiveAgentCwd(controlCwd))) {
+          writer.send(
+            createNormalizedMessage({
+              kind: 'error',
+              content:
+                'This folder belongs to a live agent. Open it from the Agents list to talk to it — ' +
+                'sending here would start a second session that collides with the running agent.',
+              sessionId: controlSid || null,
+              provider: 'claude',
+            }),
+          );
+          writer.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId: controlSid || null, provider: 'claude' }));
           return;
         }
         await dependencies.queryClaudeSDK(data.command ?? '', data.options, writer);

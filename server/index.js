@@ -37,6 +37,7 @@ import { isFleetProjectId } from './services/fleet.service.js';
 import { fleetFileTree, fleetReadFile, fleetFileContent, fleetReadOnly } from './fleet-files.js';
 // Registered agents (agent-discovery) — general, ID-addressed, register-only.
 import { queryAgentChannel, isAgentSession, answerAgentChannel } from './agent-discovery-channel.js';
+import { isLiveAgentCwd } from './services/agent-discovery.service.js';
 import { isAgentProjectId, agentIdFromProjectId, discoveryFollowResponse, discoveryAgentsHealth } from './services/agent-discovery.service.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { Readable as NodeReadable } from 'node:stream';
@@ -118,6 +119,7 @@ const wss = createWebSocketServer(server, {
         queryAgentChannel,
         isAgentSession,
         answerAgentChannel,
+        isLiveAgentCwd,
         spawnCursor,
         queryCodex,
         spawnGemini,

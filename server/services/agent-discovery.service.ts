@@ -220,6 +220,23 @@ export async function discoveryAnswer(
   }
 }
 
+// True if `cwd` is the working folder of a currently-live (ONLINE/CONTROLLABLE)
+// registered agent. Used to block spawning a competing local SDK session in a live
+// agent's folder (which would collide with the running --remote-control agent).
+export async function isLiveAgentCwd(cwd: string | null | undefined): Promise<boolean> {
+  if (!cwd) return false;
+  const norm = (p: string) => p.replace(/\/+$/, '');
+  const target = norm(cwd);
+  try {
+    const agents = await listAgents();
+    return agents.some(
+      (a) => (a.state === 'ONLINE' || a.state === 'CONTROLLABLE') && a.cwd && norm(a.cwd) === target,
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function lookupBySession(sessionId: string | null | undefined): RegisteredAgent | null {
   return (sessionId && registry.get(sessionId)) || null;
 }

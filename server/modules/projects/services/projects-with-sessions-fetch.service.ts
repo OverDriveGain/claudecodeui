@@ -9,10 +9,10 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
-// Last-known set of LIVE agent working-dirs — fallback when the discovery daemon
-// is momentarily unreachable, so a transient blip doesn't re-expose a live agent's
-// folder (and let a colliding SDK session spawn in it).
-let lastLiveAgentCwds = new Set<string>();
+// Last-known "live agent session ids, by working-dir" — fallback when the
+// discovery daemon is momentarily unreachable, so a transient blip doesn't
+// re-show the live agent's duplicate session. Keyed by normalized cwd.
+let lastLiveSessionsByCwd = new Map<string, Set<string>>();
 const normalizeCwd = (p: string): string => (p || '').replace(/\/+$/, '');
 
 type SessionSummary = {
@@ -251,27 +251,31 @@ export async function getProjectsWithSessions(
   let processedProjects = 0;
 
   // A registered agent's working folder is ALSO discovered as a regular DB project.
-  // While the agent is LIVE, opening any of its sessions from the Projects panel and
-  // sending spawns a second `claude` (SDK) process in that folder — which COLLIDES
-  // with the running --remote-control agent: the agent's channel drops (it shows
-  // "disconnected") and the Projects message lands in the agent's shared session.
-  // So while an agent is live, hide its whole working folder from the Projects panel
-  // — the Agents entry (channel-routed) is the only safe way to drive it. Dormant
-  // agents' folders stay visible (no live process to collide with → safe to browse).
+  // Keep the folder (and its history) visible, but hide the agent's CURRENT live
+  // session from the project's list so the live conversation isn't duplicated in
+  // both the Projects panel and the Agents entry. (Sends into a live agent's folder
+  // are separately blocked server-side — see chat-websocket — so no colliding SDK
+  // session can spawn there.) Map live session ids per working-dir.
   //
-  // Edge cases: (1) only ONLINE/CONTROLLABLE agents are hidden — a DISCONNECTED agent
-  // has no live process, so its folder + history stay browsable. (2) On a daemon blip
-  // we fall back to the last-known live set so the folder doesn't flicker back open.
-  let liveAgentCwds = new Set<string>();
+  // Edge cases: (1) only ONLINE/CONTROLLABLE agents are protected — a DISCONNECTED
+  // agent's sessions/history stay fully visible. (2) On a daemon blip, fall back to
+  // the last-known map so the duplicate doesn't flicker back. (4) cover both the
+  // launch sid and the followed jsonl.
+  let liveSessionsByCwd = new Map<string, Set<string>>();
   try {
     for (const a of await listRegisteredAgents()) {
       if (a.state !== 'ONLINE' && a.state !== 'CONTROLLABLE') continue; // (1)
       const cwd = normalizeCwd(a.cwd || '');
-      if (cwd) liveAgentCwds.add(cwd);
+      if (!cwd) continue;
+      let ids = liveSessionsByCwd.get(cwd);
+      if (!ids) { ids = new Set<string>(); liveSessionsByCwd.set(cwd, ids); }
+      if (a.session_id) ids.add(a.session_id);
+      const m = (a.transcript || '').match(/([^/]+)\.jsonl$/);
+      if (m) ids.add(m[1]); // (4)
     }
-    lastLiveAgentCwds = liveAgentCwds; // remember last-known good
+    lastLiveSessionsByCwd = liveSessionsByCwd; // remember last-known good
   } catch {
-    liveAgentCwds = lastLiveAgentCwds; // (2) daemon blip — keep hiding last-known
+    liveSessionsByCwd = lastLiveSessionsByCwd; // (2) daemon blip — keep hiding last-known
   }
 
   for (const row of projectRows) {
@@ -279,12 +283,6 @@ export async function getProjectsWithSessions(
 
     const projectId = row.project_id;
     const projectPath = row.project_path;
-
-    // Hide a LIVE agent's working folder (see note above) — prevents the colliding
-    // SDK session. Dormant-agent and normal-project folders fall through unchanged.
-    if (liveAgentCwds.has(normalizeCwd(projectPath))) {
-      continue;
-    }
 
     broadcastProgress({
       phase: 'loading',
@@ -303,20 +301,29 @@ export async function getProjectsWithSessions(
       offset: options.sessionsOffset,
     });
 
+    // Hide the live agent's current session from this folder's list (no duplicate
+    // of the live conversation; the Agents entry is the way to drive it).
+    const projectLiveIds = liveSessionsByCwd.get(normalizeCwd(projectPath));
+    const allClaudeSessions = sessionsPage.sessionsByProvider.claude;
+    const claudeSessions = projectLiveIds && projectLiveIds.size
+      ? allClaudeSessions.filter((s) => !projectLiveIds.has(s.id))
+      : allClaudeSessions;
+    const hiddenCount = allClaudeSessions.length - claudeSessions.length;
+
     projects.push({
       projectId,
       path: projectPath,
       displayName,
       fullPath: projectPath,
       isStarred: Boolean(row.isStarred),
-      sessions: sessionsPage.sessionsByProvider.claude,
+      sessions: claudeSessions,
       cursorSessions: sessionsPage.sessionsByProvider.cursor,
       codexSessions: sessionsPage.sessionsByProvider.codex,
       geminiSessions: sessionsPage.sessionsByProvider.gemini,
       opencodeSessions: sessionsPage.sessionsByProvider.opencode,
       sessionMeta: {
         hasMore: sessionsPage.hasMore,
-        total: sessionsPage.total,
+        total: Math.max(0, sessionsPage.total - hiddenCount),
       },
     });
   }
