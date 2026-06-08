@@ -24,7 +24,7 @@ from . import registry as reg
 from . import proc
 from . import channel
 from .control import assess_controllable, load_control_env
-from .sessions import newest_jsonl_path, session_id_from_path
+from .sessions import newest_jsonl_path, newest_channel_jsonl_path, session_id_from_path
 from .files import resolve_safe_path, file_listing, read_file_content
 
 VERSION = "0.1.0"
@@ -235,12 +235,20 @@ def _record_to_api(record: dict) -> dict:
             cwd = live_cwd
         alive = True
 
-    cwd_newest_path, cwd_newest_mtime = newest_jsonl_path(cwd) if cwd else ("", 0.0)
+    # Follow the newest jsonl WITH CHANNEL ACTIVITY (the agent's own session), not
+    # just the newest file. A plain SDK/foreign session opened in the same folder
+    # (e.g. a CCUI Projects "new session") has no channel messages, so it must NOT
+    # be picked up as the agent's transcript — otherwise the agent's view shows the
+    # foreign chat and the dedup hides the wrong session. Fall back to plain newest
+    # only when no channel session exists yet (e.g. a brand-new agent pre-first-msg).
+    cwd_newest_path, cwd_newest_mtime = (newest_channel_jsonl_path(cwd) if cwd else ("", 0.0))
+    if not cwd_newest_path and cwd:
+        cwd_newest_path, cwd_newest_mtime = newest_jsonl_path(cwd)
     # The stored sid is the launch-time session and stays the CHANNEL routing key.
     # The live TRANSCRIPT is resolved independently: a /clear or respawn starts a
-    # NEWER jsonl in the same cwd while the channel stays keyed on the stored sid,
-    # so binding the transcript to the stored sid would strand the GUI on the old
-    # (pre-clear) file. We therefore report the stored sid but follow the live file.
+    # NEWER (channel) jsonl in the same cwd while the channel stays keyed on the
+    # stored sid, so binding the transcript to the stored sid would strand the GUI
+    # on the old (pre-clear) file. We therefore report the stored sid but follow it.
     session_id = stored_sid or session_id_from_path(cwd_newest_path)
 
     # Locate the stored-sid transcript directly (it may not be the cwd's newest).
@@ -475,9 +483,11 @@ class Handler(BaseHTTPRequestHandler):
         last_ping = time.time()
         try:
             while True:
-                # Follow a session respawn: if a newer transcript appears, switch to it.
+                # Follow a session respawn: if a newer CHANNEL transcript appears,
+                # switch to it. Channel-aware so a foreign/SDK session in the same
+                # folder is never followed (see newest_channel_jsonl_path).
                 if cwd:
-                    new_tpath, _ = newest_jsonl_path(cwd)
+                    new_tpath, _ = newest_channel_jsonl_path(cwd)
                     if new_tpath and new_tpath != tpath:
                         tpath = new_tpath
                         offset = 0
