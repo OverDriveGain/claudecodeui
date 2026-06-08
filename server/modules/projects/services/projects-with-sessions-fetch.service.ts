@@ -244,21 +244,22 @@ export async function getProjectsWithSessions(
   const projects: ProjectListItem[] = [];
   let processedProjects = 0;
 
-  // A registered agent's working folder gets discovered as a regular DB project
-  // too (it accrues .claude session history). Surfacing it in the Projects panel
-  // means the SAME live session shows twice — once here and once as the Agents
-  // entry — and opening it from the Projects path drives the session OUTSIDE the
-  // channel route, which "eats" the live output. Collect live-agent cwds up front
-  // and skip the duplicate regular project; the Agents entry is the canonical way
-  // in. (Cached call — cheap; on daemon-down we just don't filter.)
-  const liveAgentCwds = new Set<string>();
-  const normCwd = (p: string) => (p || '').replace(/\/+$/, '');
+  // A registered agent's working folder is also discovered as a regular DB project,
+  // and the agent's CURRENT live session then shows in BOTH the Projects panel and
+  // the Agents entry. Driving it from the Projects side bypasses the channel route
+  // and "eats" the live output. So we keep the project (and its history) visible but
+  // HIDE only the agent's live session from the project's session list — the Agents
+  // entry is the canonical, channel-routed way to drive it. Collect the live session
+  // ids up front: the registered launch sid AND the jsonl the daemon is following.
+  const liveAgentSessionIds = new Set<string>();
   try {
     for (const a of await listRegisteredAgents()) {
-      if (a.cwd) liveAgentCwds.add(normCwd(a.cwd));
+      if (a.session_id) liveAgentSessionIds.add(a.session_id);
+      const m = (a.transcript || '').match(/([^/]+)\.jsonl$/);
+      if (m) liveAgentSessionIds.add(m[1]);
     }
   } catch {
-    // daemon unreachable — show projects unfiltered this round
+    // daemon unreachable — don't filter this round
   }
 
   for (const row of projectRows) {
@@ -266,11 +267,6 @@ export async function getProjectsWithSessions(
 
     const projectId = row.project_id;
     const projectPath = row.project_path;
-
-    // Skip the duplicate of a live agent's working folder (see note above).
-    if (liveAgentCwds.has(normCwd(projectPath))) {
-      continue;
-    }
 
     broadcastProgress({
       phase: 'loading',
@@ -289,20 +285,28 @@ export async function getProjectsWithSessions(
       offset: options.sessionsOffset,
     });
 
+    // Drop the live agent's current session from this project's list (it's the
+    // duplicate that "eats" output when driven here; use the Agents entry instead).
+    const allClaudeSessions = sessionsPage.sessionsByProvider.claude;
+    const claudeSessions = liveAgentSessionIds.size
+      ? allClaudeSessions.filter((s) => !liveAgentSessionIds.has(s.id))
+      : allClaudeSessions;
+    const hiddenCount = allClaudeSessions.length - claudeSessions.length;
+
     projects.push({
       projectId,
       path: projectPath,
       displayName,
       fullPath: projectPath,
       isStarred: Boolean(row.isStarred),
-      sessions: sessionsPage.sessionsByProvider.claude,
+      sessions: claudeSessions,
       cursorSessions: sessionsPage.sessionsByProvider.cursor,
       codexSessions: sessionsPage.sessionsByProvider.codex,
       geminiSessions: sessionsPage.sessionsByProvider.gemini,
       opencodeSessions: sessionsPage.sessionsByProvider.opencode,
       sessionMeta: {
         hasMore: sessionsPage.hasMore,
-        total: sessionsPage.total,
+        total: Math.max(0, sessionsPage.total - hiddenCount),
       },
     });
   }
