@@ -244,11 +244,33 @@ export async function getProjectsWithSessions(
   const projects: ProjectListItem[] = [];
   let processedProjects = 0;
 
+  // A registered agent's working folder gets discovered as a regular DB project
+  // too (it accrues .claude session history). Surfacing it in the Projects panel
+  // means the SAME live session shows twice — once here and once as the Agents
+  // entry — and opening it from the Projects path drives the session OUTSIDE the
+  // channel route, which "eats" the live output. Collect live-agent cwds up front
+  // and skip the duplicate regular project; the Agents entry is the canonical way
+  // in. (Cached call — cheap; on daemon-down we just don't filter.)
+  const liveAgentCwds = new Set<string>();
+  const normCwd = (p: string) => (p || '').replace(/\/+$/, '');
+  try {
+    for (const a of await listRegisteredAgents()) {
+      if (a.cwd) liveAgentCwds.add(normCwd(a.cwd));
+    }
+  } catch {
+    // daemon unreachable — show projects unfiltered this round
+  }
+
   for (const row of projectRows) {
     processedProjects += 1;
 
     const projectId = row.project_id;
     const projectPath = row.project_path;
+
+    // Skip the duplicate of a live agent's working folder (see note above).
+    if (liveAgentCwds.has(normCwd(projectPath))) {
+      continue;
+    }
 
     broadcastProgress({
       phase: 'loading',
