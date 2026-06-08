@@ -267,10 +267,24 @@ def register_channel_session(
                 match_id = k
                 break
         if match_id is None and cwd:
+            # Lazy import to avoid an import cycle at module load.
+            from . import channel
             for k, v in _registry.items():
-                if v.get("cwd") and v["cwd"] == cwd:
-                    match_id = k
-                    break
+                if not (v.get("cwd") and v["cwd"] == cwd):
+                    continue
+                old_sid = v.get("session_id") or ""
+                # Don't let a DIFFERENT session in the same folder steal a record
+                # whose agent is still LIVE (e.g. a second claude — a Projects/SDK
+                # session — opened in the agent's working dir). Reuse-by-cwd is only
+                # for a genuine reconnect/restart, where the old session's channel is
+                # already gone. If the old session still has a live shim, leave it be
+                # and fall through to create a SEPARATE record for the new session.
+                if (old_sid and old_sid != session_id
+                        and channel.has_connection(old_sid)
+                        and channel.agent_alive(old_sid)):
+                    continue
+                match_id = k
+                break
 
         if match_id is not None:
             rec = dict(_registry[match_id])
