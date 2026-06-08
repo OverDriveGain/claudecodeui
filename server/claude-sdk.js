@@ -155,6 +155,18 @@ function mapCliOptionsToSDK(options = {}) {
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = { ...process.env };
 
+  // Strip the agent-discovery channel config so a CCUI-spawned SDK session does
+  // NOT auto-register as a channel agent. The CCUI server runs with
+  // AGENT_DISCOVERY_URL set (to talk to the daemon), which the SDK subprocess
+  // would otherwise inherit — the globally-enabled channel plugin would then dial
+  // the daemon and register this session as an agent in its cwd, colliding with /
+  // stealing a real live agent that lives in the same folder. These sessions are
+  // plain Claude sessions, not managed agents; they must never join the channel.
+  delete sdkOptions.env.AGENT_DISCOVERY_URL;
+  delete sdkOptions.env.AGENT_CHANNEL_LABEL;
+  delete sdkOptions.env.AGENT_DISCOVERY_TOKEN;
+  delete sdkOptions.env.AGENT_DOMAIN;
+
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
   // which does not reliably follow npm's shell wrappers like cross-spawn does.
   sdkOptions.pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH);

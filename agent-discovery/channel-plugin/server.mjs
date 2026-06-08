@@ -473,5 +473,17 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('uncaughtException', e => log(`uncaughtException (ignored): ${e && e.stack ? e.stack : e}`))
 process.on('unhandledRejection', e => log(`unhandledRejection (ignored): ${e}`))
 
-log(`starting. session=${SESSION_ID || 'UNKNOWN'} cwd=${SESSION_CWD || '?'} daemon=${DAEMON_URL} token=${TOKEN ? 'set' : 'MISSING'}`)
-connect()
+log(`starting. session=${SESSION_ID || 'UNKNOWN'} cwd=${SESSION_CWD || '?'} daemon=${DAEMON_URL} token=${TOKEN ? 'set' : 'MISSING'} label=${LABEL || 'NONE'}`)
+
+// Channel registration is OPT-IN: only dial the agent-discovery daemon when this
+// session was explicitly launched as a managed agent (AGENT_CHANNEL_LABEL set).
+// Otherwise this is just an ordinary Claude session that happens to load the
+// globally-enabled plugin — e.g. a CCUI Projects/SDK session spawned inside an
+// agent's working folder. Such sessions must NOT register: doing so creates a
+// stray "unnamed" agent in the folder and (same cwd) collides with / steals the
+// real live agent's record. No label → load as a harmless no-op MCP server.
+if (LABEL) {
+  connect()
+} else {
+  log('no AGENT_CHANNEL_LABEL — not registering with the daemon (channel is opt-in)')
+}
