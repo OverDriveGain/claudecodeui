@@ -170,24 +170,6 @@ export function handleChatConnection(
           await dependencies.queryControlChannel(data.command ?? '', data.options, writer);
           return;
         }
-        // Refuse to spawn a local SDK session inside a LIVE agent's working folder:
-        // a 2nd claude there collides with the running --remote-control agent
-        // (disconnects it + merges the conversation). Drive the agent via the
-        // Agents entry (channel) instead.
-        if (controlCwd && (await dependencies.isLiveAgentCwd(controlCwd))) {
-          writer.send(
-            createNormalizedMessage({
-              kind: 'error',
-              content:
-                'This folder belongs to a live agent. Open it from the Agents list to talk to it — ' +
-                'sending here would start a second session that collides with the running agent.',
-              sessionId: controlSid || null,
-              provider: 'claude',
-            }),
-          );
-          writer.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId: controlSid || null, provider: 'claude' }));
-          return;
-        }
         await dependencies.queryClaudeSDK(data.command ?? '', data.options, writer);
         return;
       }
