@@ -1,7 +1,23 @@
 /**
  * Centralized tool configuration registry
- * Defines display behavior for all tool types 
+ * Defines display behavior for all tool types
  */
+
+// AskUserQuestion's `questions` is normally an array, but some agents/transcripts
+// emit it as a JSON-encoded string. Coerce to an array so the renderer never maps
+// over a string (which would throw "e.map is not a function" and crash the chat).
+function normalizeQuestions(raw: any): any[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 export interface ToolDisplayConfig {
   input: {
@@ -468,10 +484,11 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     input: {
       type: 'collapsible',
       title: (input: any) => {
-        const count = input.questions?.length || 0;
+        const questions = normalizeQuestions(input.questions);
+        const count = questions.length;
         const hasAnswers = input.answers && Object.keys(input.answers).length > 0;
         if (count === 1) {
-          const header = input.questions[0]?.header || 'Question';
+          const header = questions[0]?.header || 'Question';
           return hasAnswers ? `${header} — answered` : header;
         }
         return hasAnswers ? `${count} questions — answered` : `${count} questions`;
@@ -479,7 +496,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       defaultOpen: true,
       contentType: 'question-answer',
       getContentProps: (input: any) => ({
-        questions: input.questions || [],
+        questions: normalizeQuestions(input.questions),
         answers: input.answers || {}
       }),
     },

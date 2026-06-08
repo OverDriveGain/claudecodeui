@@ -6,8 +6,22 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   request,
   onDecision,
 }) => {
-  const input = request.input as { questions?: Question[] } | undefined;
-  const questions: Question[] = input?.questions || [];
+  const input = request.input as { questions?: Question[] | string } | undefined;
+  // `questions` is usually an array but can arrive as a JSON string; coerce so we
+  // never index/map a string (which would crash the whole chat).
+  const questions: Question[] = (() => {
+    const raw = input?.questions;
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  })();
 
   const [currentStep, setCurrentStep] = useState(0);
   const [selections, setSelections] = useState<Map<number, Set<string>>>(() => new Map());
@@ -219,7 +233,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
         {/* Options — tight spacing */}
         <div className="scrollbar-thin max-h-48 overflow-y-auto px-4 pb-2" role={multi ? 'group' : 'radiogroup'} aria-label={q.question}>
           <div className="space-y-1">
-            {q.options.map((opt, optIdx) => {
+            {(Array.isArray(q?.options) ? q.options : []).map((opt, optIdx) => {
               const isSelected = selected.has(opt.label);
               return (
                 <button
