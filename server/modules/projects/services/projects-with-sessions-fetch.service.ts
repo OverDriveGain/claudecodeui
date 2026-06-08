@@ -9,6 +9,12 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
+// Last-known "live agent session ids, by working-dir" — used as a fallback when
+// the discovery daemon is momentarily unreachable, so a transient blip doesn't
+// un-hide the live agent's duplicate session. Keyed by normalized cwd.
+let lastLiveSessionsByCwd = new Map<string, Set<string>>();
+const normalizeCwd = (p: string): string => (p || '').replace(/\/+$/, '');
+
 type SessionSummary = {
   id: string;
   summary: string;
@@ -248,18 +254,31 @@ export async function getProjectsWithSessions(
   // and the agent's CURRENT live session then shows in BOTH the Projects panel and
   // the Agents entry. Driving it from the Projects side bypasses the channel route
   // and "eats" the live output. So we keep the project (and its history) visible but
-  // HIDE only the agent's live session from the project's session list — the Agents
-  // entry is the canonical, channel-routed way to drive it. Collect the live session
-  // ids up front: the registered launch sid AND the jsonl the daemon is following.
-  const liveAgentSessionIds = new Set<string>();
+  // HIDE only the agent's live session from THAT project's session list — the Agents
+  // entry is the canonical, channel-routed way to drive it. We map live session ids
+  // per working-dir so the filter (and the count) are scoped to the right project.
+  //
+  // Edge cases handled: (1) only protect ONLINE/CONTROLLABLE agents — a DISCONNECTED
+  // agent has no live session and hiding it would block reading its history; (2) on a
+  // daemon blip, fall back to the last-known map so the duplicate doesn't flicker back;
+  // (4) cover both the launch sid and the followed jsonl so an unresolved transcript
+  // still hides what it can. (3) rotation races and (5) cross-page count drift remain
+  // best-effort/self-healing (the live session is the most-recent, so it's page 1).
+  let liveSessionsByCwd = new Map<string, Set<string>>();
   try {
     for (const a of await listRegisteredAgents()) {
-      if (a.session_id) liveAgentSessionIds.add(a.session_id);
+      if (a.state !== 'ONLINE' && a.state !== 'CONTROLLABLE') continue; // (1)
+      const cwd = normalizeCwd(a.cwd || '');
+      if (!cwd) continue;
+      let ids = liveSessionsByCwd.get(cwd);
+      if (!ids) { ids = new Set<string>(); liveSessionsByCwd.set(cwd, ids); }
+      if (a.session_id) ids.add(a.session_id);
       const m = (a.transcript || '').match(/([^/]+)\.jsonl$/);
-      if (m) liveAgentSessionIds.add(m[1]);
+      if (m) ids.add(m[1]); // (4)
     }
+    lastLiveSessionsByCwd = liveSessionsByCwd; // remember last-known good
   } catch {
-    // daemon unreachable — don't filter this round
+    liveSessionsByCwd = lastLiveSessionsByCwd; // (2) daemon blip — keep hiding last-known
   }
 
   for (const row of projectRows) {
@@ -285,11 +304,13 @@ export async function getProjectsWithSessions(
       offset: options.sessionsOffset,
     });
 
-    // Drop the live agent's current session from this project's list (it's the
+    // Drop the live agent's current session from THIS project's list (it's the
     // duplicate that "eats" output when driven here; use the Agents entry instead).
+    // Scoped to this project's cwd so we never touch an unrelated project's session.
+    const projectLiveIds = liveSessionsByCwd.get(normalizeCwd(projectPath));
     const allClaudeSessions = sessionsPage.sessionsByProvider.claude;
-    const claudeSessions = liveAgentSessionIds.size
-      ? allClaudeSessions.filter((s) => !liveAgentSessionIds.has(s.id))
+    const claudeSessions = projectLiveIds && projectLiveIds.size
+      ? allClaudeSessions.filter((s) => !projectLiveIds.has(s.id))
       : allClaudeSessions;
     const hiddenCount = allClaudeSessions.length - claudeSessions.length;
 
