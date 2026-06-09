@@ -3,6 +3,24 @@
 All notable changes to CloudCLI UI will be documented in this file.
 
 
+## [1.4.0](https://github.com/OverDriveGain/claudecodeui/compare/v1.3.1...v1.4.0) (2026-06-09)
+
+### New Features
+
+* **agents:** live "working" indicator for live agents — a typing-style activity row derived from the agent's own transcript turn state (open/closed) and gated by liveness, pushed over the transcript-follow SSE stream so you can see when a remote agent is busy ([7914641](https://github.com/OverDriveGain/claudecodeui/commit/7914641ebbbfa8f3979bda9f8a38f5b3d1a89e72))
+
+### Bug Fixes
+
+* **chat:** drop the fake cycling status words (Thinking/Processing/Analyzing/Computing/Reasoning) that rotated regardless of activity; show the stream's real status text or an honest steady "Working", keeping the STOP button, timer, and pulse ([27ea33c](https://github.com/OverDriveGain/claudecodeui/commit/27ea33cb3153ccc8037a8fd96b72efb1487a6fdd))
+* **agents:** forward the daemon's SSE `status` frames through the transcript proxy and heartbeat the busy signal, so the working indicator actually reaches the browser ([179f609](https://github.com/OverDriveGain/claudecodeui/commit/179f6099084180aa81e06ddab74c7b369398e29e))
+* **agents:** make the working indicator unmissable (linger + sticky pill) ([d88216e](https://github.com/OverDriveGain/claudecodeui/commit/d88216e81da0bc95cd51f64d0eeaa7fc52a6cc4e))
+* **chat:** tolerate an AskUserQuestion tool call whose `questions` arrived as a JSON string instead of an array — fixes the chat-crashing white screen ([68c86f3](https://github.com/OverDriveGain/claudecodeui/commit/68c86f3764d3d383a52557ff02ff25c4adc08b06))
+* **agents:** exclude claudeui-opened (foreign) sessions from agent transcript resolution — fixes cross-talk between an agent's own session and a session opened over it, and vanishing new sessions ([4224d3a](https://github.com/OverDriveGain/claudecodeui/commit/4224d3a4ddd5e1cf1b02f371b456d94ee9a838e5))
+* **channel:** make channel registration opt-in and scrub discovery env from SDK sessions ([7c558e3](https://github.com/OverDriveGain/claudecodeui/commit/7c558e32f9ec7bb0a4f54f6b8ee48749a0d0c8e6))
+* **projects:** a foreign session can no longer steal a live agent's record by sharing its cwd ([c0ccc0f](https://github.com/OverDriveGain/claudecodeui/commit/c0ccc0fa8c0fbb6410387906c23b30f276162fbd))
+* **projects:** keep a live agent's folder visible while blocking colliding SDK sends in its working directory ([3a212f4](https://github.com/OverDriveGain/claudecodeui/commit/3a212f439c6ad8c3840c59181dae3831c18a137f), [2b928df](https://github.com/OverDriveGain/claudecodeui/commit/2b928dfce3f50350453d0cbd14bb48e671e93381))
+
+
 ## [1.2.0](https://github.com/OverDriveGain/claudecodeui/compare/v1.1.0...v1.2.0) (2026-06-05)
 
 ### New Features
