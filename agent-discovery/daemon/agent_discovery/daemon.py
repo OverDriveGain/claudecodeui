@@ -24,7 +24,12 @@ from . import registry as reg
 from . import proc
 from . import channel
 from .control import assess_controllable, load_control_env
-from .sessions import newest_jsonl_path, session_id_from_path, mark_foreign_session
+from .sessions import (
+    newest_jsonl_path,
+    session_id_from_path,
+    mark_foreign_session,
+    turn_open_from_line,
+)
 from .files import resolve_safe_path, file_listing, read_file_content
 
 VERSION = "0.1.0"
@@ -459,6 +464,7 @@ class Handler(BaseHTTPRequestHandler):
         cwd = record.get("cwd", "")
         api = _record_to_api(record)
         tpath = api.get("transcript", "")
+        sid = api.get("session_id") or record.get("session_id") or ""
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -467,24 +473,86 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
+        # --- live "agent is working" inference -------------------------------
+        # busy = the conversation turn is OPEN (assistant still expected to
+        # produce output) AND the agent is actually alive. Derived purely from
+        # the transcript tail + agent liveness, so it survives daemon/agent
+        # restarts, /clear, and works no matter how the agent is driven. Emitted
+        # on this same stream as `event: status` only on transitions.
+        turn_open = False
+        last_busy = None  # None until first emit
+        _alive_at = [0.0]
+        _alive_cached = [True]
+
+        def agent_alive():
+            now = time.time()
+            if now - _alive_at[0] > 2.0:  # throttle the /proc walk
+                try:
+                    if sid and channel.has_connection(sid):
+                        _alive_cached[0] = channel.agent_alive(sid)
+                    else:
+                        pid = record.get("pid") or 0
+                        _alive_cached[0] = bool(pid) and proc.is_claude_pid(pid)
+                except Exception:
+                    _alive_cached[0] = True  # never suppress busy on a probe error
+                _alive_at[0] = now
+            return _alive_cached[0]
+
+        def emit_status():
+            nonlocal last_busy
+            busy = turn_open and agent_alive()
+            if busy != last_busy:
+                self.wfile.write(
+                    b"event: status\ndata: "
+                    + json.dumps({"busy": busy}).encode("utf-8")
+                    + b"\n\n"
+                )
+                self.wfile.flush()
+                last_busy = busy
+
+        def seed_turn_open(path: str):
+            # Infer the current turn state from the last meaningful record so the
+            # client gets the right state immediately (the follow starts at EOF).
+            nonlocal turn_open
+            try:
+                with open(path, "rb") as f:
+                    size = os.fstat(f.fileno()).st_size
+                    f.seek(max(0, size - 65536))
+                    tail = f.read()
+            except OSError:
+                return
+            for ln in reversed(tail.split(b"\n")):
+                ln = ln.strip()
+                if not ln:
+                    continue
+                state = turn_open_from_line(ln)
+                if state is not None:
+                    turn_open = state
+                    return
+
         try:
             offset = os.stat(tpath).st_size if tpath and os.path.exists(tpath) else 0
         except OSError:
             offset = 0
+        if tpath:
+            seed_turn_open(tpath)
         buf = b""
         last_ping = time.time()
         try:
+            emit_status()  # tell the client the initial state right away
             while True:
                 # Follow a session respawn: if a newer transcript appears, switch to it.
                 if cwd:
                     new_tpath, _ = newest_jsonl_path(cwd)
                     if new_tpath and new_tpath != tpath:
                         tpath = new_tpath
+                        sid = session_id_from_path(tpath)
                         offset = 0
                         buf = b""
+                        seed_turn_open(tpath)
                         self.wfile.write(
                             b"event: session\ndata: "
-                            + json.dumps({"session_id": session_id_from_path(tpath)}).encode("utf-8")
+                            + json.dumps({"session_id": sid}).encode("utf-8")
                             + b"\n\n"
                         )
                         self.wfile.flush()
@@ -507,10 +575,15 @@ class Handler(BaseHTTPRequestHandler):
                         line = line.strip()
                         if line:
                             self.wfile.write(b"data: " + line + b"\n\n")
+                            state = turn_open_from_line(line)
+                            if state is not None:
+                                turn_open = state
                     self.wfile.flush()
                     last_ping = time.time()
+                    emit_status()
                 else:
                     time.sleep(0.3)
+                    emit_status()  # liveness/turn can change with no new bytes
                     if time.time() - last_ping > 15:
                         self.wfile.write(b": ping\n\n")
                         self.wfile.flush()

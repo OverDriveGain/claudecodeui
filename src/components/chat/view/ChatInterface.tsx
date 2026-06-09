@@ -94,6 +94,7 @@ function ChatInterface({
     addMessage,
     isLoading,
     setIsLoading,
+    agentBusy,
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
@@ -356,6 +357,7 @@ function ChatInterface({
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
           onTouchMove={handleScroll}
+          agentBusy={isAgentProject && agentBusy}
           isLoadingSessionMessages={isLoadingSessionMessages}
           chatMessages={chatMessages}
           selectedSession={selectedSession}

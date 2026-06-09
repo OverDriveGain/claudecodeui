@@ -5,9 +5,38 @@ Maps a claude process's cwd to its ~/.claude/projects/<slug>/ directory
 and finds the newest JSONL transcript file there.
 """
 
+import json
 import os
 import threading
 import time
+
+
+# Stop reasons that mean the assistant has FINISHED its turn (conversation idle).
+_CLOSED_STOP_REASONS = ("end_turn", "stop_sequence", "max_tokens")
+
+
+def turn_open_from_line(line: bytes):
+    """Infer turn state from one transcript jsonl line, for the live "agent is
+    working" indicator. Returns:
+      True  — turn is OPEN (assistant still expected to produce output): a user
+              message / tool_result just landed, or an assistant message that
+              hasn't closed (stop_reason tool_use, or not yet finalized).
+      False — turn CLOSED: assistant finished (end_turn / stop_sequence).
+      None  — this record type doesn't change turn state (system, summary,
+              ai-title, queue-operation, …) — caller keeps the prior value.
+    Keying on the LAST meaningful record means a long quiet tool/generation
+    still reads as open (the tool_use / tool_result record stays last)."""
+    try:
+        o = json.loads(line)
+    except Exception:
+        return None
+    t = o.get("type")
+    if t == "assistant":
+        m = o.get("message") or {}
+        return m.get("stop_reason") not in _CLOSED_STOP_REASONS
+    if t == "user":
+        return True
+    return None
 
 
 HOME = os.path.expanduser("~")

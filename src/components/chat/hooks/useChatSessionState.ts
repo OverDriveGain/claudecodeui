@@ -104,6 +104,9 @@ export function useChatSessionState({
   sessionStore,
 }: UseChatSessionStateArgs) {
   const [isLoading, setIsLoading] = useState(false);
+  // Live-agent "working" state, driven by the daemon's transcript-follow `status`
+  // events (busy = turn open + agent alive). Normal sessions use isLoading instead.
+  const [agentBusy, setAgentBusy] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
@@ -518,8 +521,20 @@ export function useChatSessionState({
         // malformed frame — ignore
       }
     };
+    // Daemon-derived "agent is working" signal (turn open + agent alive). Drives
+    // the live-agent typing indicator since these sessions have no SDK 'complete'.
+    es.addEventListener('status', (ev: MessageEvent) => {
+      try {
+        setAgentBusy(Boolean(JSON.parse(ev.data).busy));
+      } catch {
+        // ignore malformed status frame
+      }
+    });
     // On error EventSource retries automatically; nothing to do.
-    return () => es.close();
+    return () => {
+      es.close();
+      setAgentBusy(false);
+    };
   }, [selectedProject, selectedSession?.id, sessionStore]);
 
   // External message update (e.g. WebSocket reconnect, background refresh)
@@ -812,6 +827,7 @@ export function useChatSessionState({
     rewindMessages,
     isLoading,
     setIsLoading,
+    agentBusy,
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,

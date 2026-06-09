@@ -61,6 +61,8 @@ interface ChatMessagesPaneProps {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
+  // Live-agent "working" signal (from the daemon transcript-follow status event).
+  agentBusy?: boolean;
 }
 
 export default function ChatMessagesPane({
@@ -110,6 +112,7 @@ export default function ChatMessagesPane({
   showRawParameters,
   showThinking,
   selectedProject,
+  agentBusy,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
@@ -268,6 +271,17 @@ export default function ChatMessagesPane({
               />
             );
           })}
+
+          {agentBusy && (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-gray-500 dark:text-gray-400">
+              <span className="flex gap-1">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400" />
+              </span>
+              <span>{t('session.agentWorking', 'Agent is working…')}</span>
+            </div>
+          )}
         </>
       )}
     </div>
