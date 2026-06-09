@@ -14,16 +14,6 @@ type ClaudeStatusProps = {
   provider?: string;
 };
 
-const ACTION_KEYS = [
-  'claudeStatus.actions.thinking',
-  'claudeStatus.actions.processing',
-  'claudeStatus.actions.analyzing',
-  'claudeStatus.actions.working',
-  'claudeStatus.actions.computing',
-  'claudeStatus.actions.reasoning',
-];
-const DEFAULT_ACTION_WORDS = ['Thinking', 'Processing', 'Analyzing', 'Working', 'Computing', 'Reasoning'];
-
 const PROVIDER_LABEL_KEYS: Record<string, string> = {
   claude: 'messageTypes.claude',
   codex: 'messageTypes.codex',
@@ -69,8 +59,7 @@ export default function ClaudeStatus({
 
   if (!isLoading && !status) return null;
 
-  const actionWords = ACTION_KEYS.map((key, i) => t(key, { defaultValue: DEFAULT_ACTION_WORDS[i] }));
-  const statusText = (status?.text || actionWords[Math.floor(elapsedTime / 3) % actionWords.length]).replace(/[.]+$/, '');
+  const statusText = (status?.text || t('claudeStatus.actions.working', { defaultValue: 'Working' })).replace(/[.]+$/, '');
 
   const providerLabel = t(PROVIDER_LABEL_KEYS[provider] || 'claudeStatus.providers.assistant', { defaultValue: 'Assistant' });
 
