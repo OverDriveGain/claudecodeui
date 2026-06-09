@@ -523,9 +523,18 @@ export function useChatSessionState({
     };
     // Daemon-derived "agent is working" signal (turn open + agent alive). Drives
     // the live-agent typing indicator since these sessions have no SDK 'complete'.
+    // Linger ~1.6s on the OFF transition so a short turn (which can flip busy
+    // true→false in under a second) still registers visually instead of flashing.
+    let clearTimer: ReturnType<typeof setTimeout> | null = null;
     es.addEventListener('status', (ev: MessageEvent) => {
       try {
-        setAgentBusy(Boolean(JSON.parse(ev.data).busy));
+        const busy = Boolean(JSON.parse(ev.data).busy);
+        if (busy) {
+          if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
+          setAgentBusy(true);
+        } else if (!clearTimer) {
+          clearTimer = setTimeout(() => { setAgentBusy(false); clearTimer = null; }, 1600);
+        }
       } catch {
         // ignore malformed status frame
       }
@@ -533,6 +542,7 @@ export function useChatSessionState({
     // On error EventSource retries automatically; nothing to do.
     return () => {
       es.close();
+      if (clearTimer) clearTimeout(clearTimer);
       setAgentBusy(false);
     };
   }, [selectedProject, selectedSession?.id, sessionStore]);

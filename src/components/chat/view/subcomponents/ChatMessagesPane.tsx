@@ -273,11 +273,11 @@ export default function ChatMessagesPane({
           })}
 
           {agentBusy && (
-            <div className="flex items-center gap-2 px-4 py-2 text-xs text-gray-500 dark:text-gray-400">
+            <div className="sticky bottom-2 z-10 mx-auto flex w-fit items-center gap-2 rounded-full border border-blue-200/70 bg-blue-50/95 px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm backdrop-blur dark:border-blue-800/50 dark:bg-blue-950/90 dark:text-blue-300">
               <span className="flex gap-1">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:-0.3s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:-0.15s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500" />
               </span>
               <span>{t('session.agentWorking', 'Agent is working…')}</span>
             </div>
