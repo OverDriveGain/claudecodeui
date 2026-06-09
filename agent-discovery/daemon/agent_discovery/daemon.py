@@ -478,9 +478,14 @@ class Handler(BaseHTTPRequestHandler):
         # produce output) AND the agent is actually alive. Derived purely from
         # the transcript tail + agent liveness, so it survives daemon/agent
         # restarts, /clear, and works no matter how the agent is driven. Emitted
-        # on this same stream as `event: status` only on transitions.
+        # on this same stream as `event: status`. Emitted on every transition AND
+        # re-asserted on a heartbeat, so a client that (re)connects — e.g. after
+        # switching agents and coming back — always re-syncs the current state
+        # within a few seconds even if it missed the transition.
         turn_open = False
         last_busy = None  # None until first emit
+        _last_status_ts = [0.0]
+        _STATUS_HEARTBEAT = 5.0
         _alive_at = [0.0]
         _alive_cached = [True]
 
@@ -501,7 +506,10 @@ class Handler(BaseHTTPRequestHandler):
         def emit_status():
             nonlocal last_busy
             busy = turn_open and agent_alive()
-            if busy != last_busy:
+            now = time.time()
+            # Write on a state change, or re-assert the current state on a heartbeat
+            # so a freshly (re)connected client always converges quickly.
+            if busy != last_busy or (now - _last_status_ts[0]) > _STATUS_HEARTBEAT:
                 self.wfile.write(
                     b"event: status\ndata: "
                     + json.dumps({"busy": busy}).encode("utf-8")
@@ -509,6 +517,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.wfile.flush()
                 last_busy = busy
+                _last_status_ts[0] = now
 
         def seed_turn_open(path: str):
             # Infer the current turn state from the last meaningful record so the

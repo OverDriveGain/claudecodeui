@@ -647,15 +647,27 @@ app.get('/api/projects/:projectId/transcript/follow', authenticateToken, async (
         const nodeStream = NodeReadable.fromWeb(upstream.body);
         const decoder = new TextDecoder();
         let buf = '';
+        let curEvent = ''; // SSE event type for the in-progress frame ('' = default/record)
         for await (const chunk of nodeStream) {
             buf += decoder.decode(chunk, { stream: true });
             let nl;
             while ((nl = buf.indexOf('\n')) >= 0) {
-                const line = buf.slice(0, nl);
+                const line = buf.slice(0, nl).replace(/\r$/, '');
                 buf = buf.slice(nl + 1);
-                if (!line.startsWith('data: ')) continue; // skip pings / event: lines
+                if (line === '') { curEvent = ''; continue; }     // frame boundary
+                if (line.startsWith(':')) continue;               // keepalive ping
+                if (line.startsWith('event: ')) { curEvent = line.slice(7).trim(); continue; }
+                if (!line.startsWith('data: ')) continue;
                 const payload = line.slice(6).trim();
                 if (!payload) continue;
+                // Pass the daemon's `status` frame through verbatim — it drives the
+                // live "agent is working" indicator (the client listens for `status`).
+                if (curEvent === 'status') {
+                    res.write(`event: status\ndata: ${payload}\n\n`);
+                    continue;
+                }
+                if (curEvent === 'session') continue; // session-switch info; client ignores
+                // Default frame = a transcript record → normalize and forward.
                 try {
                     const record = JSON.parse(payload);
                     const norm = sessionsService.normalizeMessage('claude', record, sessionId);
@@ -663,7 +675,7 @@ app.get('/api/projects/:projectId/transcript/follow', authenticateToken, async (
                         for (const m of norm) res.write(`data: ${JSON.stringify(m)}\n\n`);
                     }
                 } catch {
-                    // non-record line (e.g. session event) — ignore
+                    // non-record payload — ignore
                 }
             }
         }
