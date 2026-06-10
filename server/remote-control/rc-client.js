@@ -98,25 +98,27 @@ export function isRemoteControlConfigured() {
 }
 
 /**
- * Ask Anthropic for the interactive agent sessions — every `claude --remote-control`
- * session in your fleet (`cse_*` code sessions, excluding environment-bound ones).
- * Includes both currently-attached agents (connection_status='connected', driveable
- * now) and idle ones (disconnected — visible + history-viewable, drive once they
- * reconnect). `connected` carries the honest online/offline state the claude.ai
- * "Recents" view doesn't surface.
+ * Ask Anthropic for ALL of the operator's agent sessions — every session the bridge
+ * knows about (1:1 with the claude.ai "Recents" list). Includes connected agents
+ * (driveable now), idle/disconnected ones (history-viewable, drive on reconnect),
+ * and environment/cloud sessions. `connected` carries the honest online/offline
+ * state the Recents view doesn't surface; `isEnvironment` flags cloud/env sessions.
+ *
+ * Nothing is hard-filtered here — which agents a deployment actually surfaces is
+ * decided solely by the capture policy (RC_AGENT_ALLOW/DENY) in rc.service, whose
+ * default (unset, or `*`) is show-all.
  */
 export async function listAgents() {
   const r = await fetch(`${BASE}/v1/code/sessions`, { headers: headers() });
   if (!r.ok) throw new Error(`listAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j = await r.json();
-  return (j.data || [])
-    .filter((s) => !s.environment_id)
-    .map((s) => ({
-      id: s.id,
-      title: (s.title || '').split('\n')[0].trim(),
-      connected: s.connection_status === 'connected',
-      createdAt: s.created_at,
-    }));
+  return (j.data || []).map((s) => ({
+    id: s.id,
+    title: (s.title || '').split('\n')[0].trim(),
+    connected: s.connection_status === 'connected',
+    isEnvironment: Boolean(s.environment_id),
+    createdAt: s.created_at,
+  }));
 }
 
 /**
