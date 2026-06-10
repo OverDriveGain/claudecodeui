@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next';
-import { IMAGE_FILE_EXTENSIONS } from '../constants/constants';
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '../constants/constants';
 import type { FileTreeNode } from '../types/types';
 
 export function filterFileTree(items: FileTreeNode[], query: string): FileTreeNode[] {
@@ -79,5 +79,10 @@ export function formatRelativeTime(date: string | undefined, t: TFunction): stri
 export function isImageFile(filename: string): boolean {
   const extension = filename.split('.').pop()?.toLowerCase();
   return Boolean(extension && IMAGE_FILE_EXTENSIONS.has(extension));
+}
+
+export function isVideoFile(filename: string): boolean {
+  const extension = filename.split('.').pop()?.toLowerCase();
+  return Boolean(extension && VIDEO_FILE_EXTENSIONS.has(extension));
 }
 
