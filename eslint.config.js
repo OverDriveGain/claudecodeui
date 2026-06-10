@@ -174,6 +174,16 @@ export default tseslint.config(
           mode: "file",
         },
         {
+          type: "backend-remote-control", // the remote-control proxy: drives live `claude --remote-control` agents over Anthropic's relay
+          pattern: [
+            "server/remote-control/*.{js,ts}",
+            "server/services/rc.service.{js,ts}",
+          ], // provider-agnostic engine + service that backend modules may depend on; the
+          // rc-channel adapter (server/rc-channel.js) stays an unclassified root file, like
+          // claude-sdk.js, so it can wire the provider normalizer into the engine.
+          mode: "file",
+        },
+        {
           type: "backend-module", // logical element name used by boundaries rules below
           pattern: "server/modules/*", // each direct folder in server/modules is treated as one module boundary
           mode: "folder", // classify dependencies at folder-module level (not per individual file)

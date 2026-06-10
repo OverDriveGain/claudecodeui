@@ -6,6 +6,7 @@ import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
+import { remoteProjectId, listRemoteAgents } from '@/services/rc.service.js';
 
 type SessionSummary = {
   id: string;
@@ -39,6 +40,10 @@ export type ProjectListItem = {
     hasMore: boolean;
     total: number;
   };
+  // Remote-control agent metadata (only set for virtual remote:<id> projects):
+  // marks the leaf as a live agent and carries the session id to drive.
+  isRemoteAgent?: boolean;
+  remoteSessionId?: string;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -262,6 +267,33 @@ export async function getProjectsWithSessions(
         total: sessionsPage.total,
       },
     });
+  }
+
+  // Remote-control agents: surface the operator's CONNECTED live agents as virtual
+  // projects (projectId `remote:<sessionId>`). Each leaf drives the agent by
+  // attaching to its existing session. Additive + non-fatal — empty when the proxy
+  // is unconfigured/down or the capture policy hides everything.
+  try {
+    const agents = await listRemoteAgents();
+    for (const agent of agents) {
+      projects.push({
+        projectId: remoteProjectId(agent.id),
+        path: `remote://${agent.id}`,
+        displayName: agent.title,
+        fullPath: `remote://${agent.id}`,
+        isStarred: false,
+        sessions: [],
+        cursorSessions: [],
+        codexSessions: [],
+        geminiSessions: [],
+        opencodeSessions: [],
+        sessionMeta: { hasMore: false, total: 0 },
+        isRemoteAgent: true,
+        remoteSessionId: agent.id,
+      });
+    }
+  } catch {
+    // proxy unreachable — omit remote projects this round
   }
 
   broadcastProgress({

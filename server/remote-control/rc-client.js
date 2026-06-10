@@ -31,9 +31,10 @@
 import { readFileSync } from 'fs';
 import os from 'os';
 import crypto from 'crypto';
+
 import WebSocket from 'ws';
-import { sessionsService } from '../modules/providers/services/sessions.service.js';
-import { createNormalizedMessage } from '../shared/utils.js';
+
+import { createNormalizedMessage } from '@/shared/utils.js';
 
 const BASE = process.env.RC_BASE_URL || 'https://api.anthropic.com';
 const WS_BASE = BASE.replace(/^http/, 'ws');
@@ -165,10 +166,12 @@ export async function sendMessage(sessionId, content) {
 /**
  * Subscribe to a remote session and relay its stream into the client writer `ws`
  * (the same writer the local SDK path writes to, so the GUI renders with no new
- * code). Idempotent per sessionId. Resolves once the upstream WS is open; the
- * streaming continues in the background.
+ * code). `normalize(rawFrame, sessionId) -> normalizedMessage[]` is injected by the
+ * caller so this engine stays provider-agnostic and free of cross-module coupling.
+ * Idempotent per sessionId. Resolves once the upstream WS is open; the streaming
+ * continues in the background.
  */
-export async function attachSession(sessionId, ws) {
+export async function attachSession(sessionId, ws, normalize) {
   if (activeRemoteSessions.has(sessionId)) return activeRemoteSessions.get(sessionId);
   const { token, orgUuid } = getRemoteAuth();
   const url = `${WS_BASE}/v1/sessions/ws/${sessionId}/subscribe?organization_uuid=${orgUuid}`;
@@ -207,12 +210,15 @@ export async function attachSession(sessionId, ws) {
     }
     if (m.type === 'control_response') return; // ack frame — nothing to render
 
-    // Everything else is a Claude Agent SDK message — normalize like the local path.
-    try {
-      const normalized = sessionsService.normalizeMessage('claude', m, sessionId);
-      for (const out of normalized) ws.send(out);
-    } catch (err) {
-      ws.send(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
+    // Everything else is a Claude Agent SDK message — normalize via the injected
+    // provider normalizer (kept out of this engine so it stays provider-agnostic).
+    if (normalize) {
+      try {
+        const normalized = normalize(m, sessionId) || [];
+        for (const out of normalized) ws.send(out);
+      } catch (err) {
+        ws.send(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
+      }
     }
     // End-of-TURN: a `result` SDK message means the agent finished this turn. The
     // WS stays open across turns, so translate it into a per-turn `complete` so the
@@ -242,14 +248,15 @@ export async function attachSession(sessionId, ws) {
  * Drive one chat turn against a CONNECTED agent session (cse_/session_): ensure
  * subscribed, bind the GUI's view to the session id, then send the message. We
  * attach to the agent's EXISTING session — never create one — so the message lands
- * in the agent's real session + terminal. Returns { sessionId }.
+ * in the agent's real session + terminal. `normalize` is forwarded to attachSession.
+ * Returns { sessionId }.
  */
-export async function driveRemoteSession({ ws, sessionId, command }) {
+export async function driveRemoteSession({ ws, sessionId, command, normalize }) {
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
   // Announce the session id so the GUI binds its view to it (it opened the agent
   // leaf with no session id yet).
   ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: sessionId, sessionId, provider: 'claude' }));
-  await attachSession(sessionId, ws);
+  await attachSession(sessionId, ws, normalize);
   if (command !== undefined && command !== null && command !== '') {
     const ok = await sendMessage(sessionId, command);
     if (!ok) ws.send(createNormalizedMessage({ kind: 'error', content: 'rc: failed to send message', sessionId, provider: 'claude' }));

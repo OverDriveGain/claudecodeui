@@ -12,6 +12,11 @@ import {
   isActiveRemoteSession,
 } from './remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from './services/rc.service.js';
+import { sessionsService } from './modules/providers/services/sessions.service.js';
+
+// The engine is provider-agnostic; this adapter supplies the claude normalizer so a
+// streamed bridge frame renders through the exact same path the local SDK uses.
+const normalizeClaude = (rawFrame, sessionId) => sessionsService.normalizeMessage('claude', rawFrame, sessionId);
 
 /** A chat command targets a remote agent iff it carries options.remoteControl. */
 export function isRemoteCommand(options) {
@@ -34,7 +39,7 @@ export async function queryRemoteChannel(command, options, writer) {
   // Enforce the server-side capture policy: refuse to drive an agent this deployment
   // isn't allowed to surface (can't be bypassed with a crafted frame).
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return;
-  return driveRemoteSession({ ws: writer, sessionId, command });
+  return driveRemoteSession({ ws: writer, sessionId, command, normalize: normalizeClaude });
 }
 
 // Stop + permission answer route straight to the engine (it already strips the
