@@ -26,6 +26,13 @@ const DEFAULT_PROVIDER: LLMProvider = 'claude';
 
 type ChatWebSocketDependencies = {
   queryClaudeSDK: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  // Remote-control proxy: a claude-command tagged with options.remoteControl is
+  // driven over the proxy; abort/permission route by the rc: prefix / active session.
+  isRemoteCommand: (options: unknown) => boolean;
+  queryRemoteChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  isRemoteSession: (sessionId: string) => boolean;
+  abortRemoteSession: (sessionId: string) => boolean;
+  resolveRemotePermission: (requestId: string, decision: unknown) => boolean;
   spawnCursor: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   queryCodex: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
   spawnGemini: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
@@ -119,6 +126,13 @@ export function handleChatConnection(
       }
 
       if (messageType === 'claude-command') {
+        // Remote-control agent: a claude-command tagged with options.remoteControl
+        // is driven over the proxy (attach + send to the live agent), not the local
+        // SDK. The capture policy is enforced inside queryRemoteChannel.
+        if (dependencies.isRemoteCommand(data.options)) {
+          await dependencies.queryRemoteChannel(data.command ?? '', data.options, writer);
+          return;
+        }
         await dependencies.queryClaudeSDK(data.command ?? '', data.options, writer);
         return;
       }
@@ -169,6 +183,8 @@ export function handleChatConnection(
           success = dependencies.abortGeminiSession(sessionId);
         } else if (provider === 'opencode') {
           success = dependencies.abortOpenCodeSession(sessionId);
+        } else if (dependencies.isRemoteSession(sessionId)) {
+          success = dependencies.abortRemoteSession(sessionId);
         } else {
           success = await dependencies.abortClaudeSDKSession(sessionId);
         }
@@ -188,12 +204,19 @@ export function handleChatConnection(
 
       if (messageType === 'claude-permission-response') {
         if (typeof data.requestId === 'string' && data.requestId.length > 0) {
-          dependencies.resolveToolApproval(data.requestId, {
+          const decision = {
             allow: Boolean(data.allow),
             updatedInput: data.updatedInput,
             message: typeof data.message === 'string' ? data.message : undefined,
-            rememberEntry: data.rememberEntry,
-          });
+          };
+          // Remote-control prompts carry an `rc:` requestId; route them to the proxy.
+          // Returns false when it isn't a remote prompt, so the local path still runs.
+          if (!dependencies.resolveRemotePermission(data.requestId, decision)) {
+            dependencies.resolveToolApproval(data.requestId, {
+              ...decision,
+              rememberEntry: data.rememberEntry,
+            });
+          }
         }
         return;
       }

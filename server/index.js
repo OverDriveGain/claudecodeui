@@ -28,6 +28,14 @@ import {
     getPendingApprovalsForSession,
     reconnectSessionWriter,
 } from './claude-sdk.js';
+// Remote-control proxy: drive live `claude --remote-control` agents over the chat WS.
+import {
+    isRemoteCommand,
+    queryRemoteChannel,
+    isRemoteSession,
+    abortRemoteSession,
+    resolveRemotePermission,
+} from './rc-channel.js';
 import {
     spawnCursor,
     abortCursorSession,
@@ -106,6 +114,11 @@ const wss = createWebSocketServer(server, {
     },
     chat: {
         queryClaudeSDK,
+        isRemoteCommand,
+        queryRemoteChannel,
+        isRemoteSession,
+        abortRemoteSession,
+        resolveRemotePermission,
         spawnCursor,
         queryCodex,
         spawnGemini,
