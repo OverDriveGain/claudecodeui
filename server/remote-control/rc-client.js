@@ -108,11 +108,28 @@ export function isRemoteControlConfigured() {
  * decided solely by the capture policy (RC_AGENT_ALLOW/DENY) in rc.service, whose
  * default (unset, or `*`) is show-all.
  */
-export async function listAgents() {
-  const r = await fetch(`${BASE}/v1/code/sessions`, { headers: headers() });
-  if (!r.ok) throw new Error(`listAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const j = await r.json();
-  return (j.data || []).map((s) => ({
+export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
+  // /v1/code/sessions is paginated (default 20, ordered most-recent-first) with a
+  // `cursor`/`next_cursor` scheme. Reading only page 1 hid every agent that wasn't
+  // recently active (e.g. an idle but connected agent), which is why one had to be
+  // "talked to" to surface. Page through so the WHOLE fleet is returned.
+  const rows = [];
+  let cursor = null;
+  for (let i = 0; i < maxPages; i++) {
+    const url = `${BASE}/v1/code/sessions?limit=${pageSize}`
+      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+    const r = await fetch(url, { headers: headers() });
+    if (!r.ok) {
+      if (i === 0) throw new Error(`listAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      break; // partial fetch — return what we have rather than failing the list
+    }
+    const j = await r.json();
+    const batch = j.data || [];
+    rows.push(...batch);
+    cursor = j.next_cursor;
+    if (!cursor || batch.length === 0) break;
+  }
+  return rows.map((s) => ({
     id: s.id,
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',

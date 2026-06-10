@@ -9,7 +9,9 @@
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
 import { isRemoteControlConfigured, listAgents } from '@/remote-control/rc-client.js';
 
-const LIST_TTL_MS = 8000;
+// Paging the whole fleet is heavier than a single request, and the roster changes
+// slowly, so cache a little longer to keep API load down.
+const LIST_TTL_MS = 20000;
 const REMOTE_PREFIX = 'remote:';
 
 export type RemoteAgent = {
@@ -87,16 +89,28 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
   if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return agentCache.value;
   try {
     const raw = await listAgents();
-    const value: RemoteAgent[] = (Array.isArray(raw) ? raw : [])
+    const mapped: RemoteAgent[] = (Array.isArray(raw) ? raw : [])
       .map((s: Record<string, unknown>) => ({
         id: String(s.id ?? ''),
         title: String(s.title ?? 'agent').trim() || 'agent',
         connected: Boolean(s.connected),
         createdAt: s.createdAt ? String(s.createdAt) : undefined,
       }))
-      .filter((s) => s.id && captureAllows(s.title))
-      // Online agents first, then alphabetical, so the driveable ones are on top.
-      .sort((a, b) => Number(b.connected) - Number(a.connected) || a.title.localeCompare(b.title));
+      .filter((s) => s.id && captureAllows(s.title));
+
+    // One agent can have many sessions (each restart/reconnect makes a new one), so
+    // collapse to one leaf per name — prefer a connected session, otherwise the most
+    // recent (listAgents returns most-recent-first, so the first occurrence wins).
+    const byTitle = new Map<string, RemoteAgent>();
+    for (const a of mapped) {
+      const prev = byTitle.get(a.title);
+      if (!prev || (a.connected && !prev.connected)) byTitle.set(a.title, a);
+    }
+
+    // Online agents first, then alphabetical, so the driveable ones are on top.
+    const value = [...byTitle.values()].sort(
+      (a, b) => Number(b.connected) - Number(a.connected) || a.title.localeCompare(b.title),
+    );
     agentCache = { at: now, value };
     return value;
   } catch {
