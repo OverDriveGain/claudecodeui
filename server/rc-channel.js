@@ -39,7 +39,9 @@ export async function queryRemoteChannel(command, options, writer) {
   // Enforce the server-side capture policy: refuse to drive an agent this deployment
   // isn't allowed to surface (can't be bypassed with a crafted frame).
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return;
-  return driveRemoteSession({ ws: writer, sessionId, command, normalize: normalizeClaude });
+  // Forward composer attachments (options.images, upload-images shape) so files
+  // attached to a live agent are folded into the message as content blocks.
+  return driveRemoteSession({ ws: writer, sessionId, command, images: opts.images, normalize: normalizeClaude });
 }
 
 // Stop + permission answer route straight to the engine (it already strips the

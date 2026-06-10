@@ -268,21 +268,80 @@ export async function attachSession(sessionId, ws, normalize) {
   return entry;
 }
 
+// A file is "text-like" (embed its decoded content as a text block) by mime or extension.
+const TEXT_MIMES = new Set([
+  'application/json', 'application/xml', 'application/javascript', 'application/typescript',
+  'application/x-yaml', 'application/x-sh', 'application/x-httpd-php', 'application/sql',
+]);
+const TEXT_EXTS = new Set([
+  'txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'xml', 'yaml', 'yml', 'toml', 'ini', 'cfg',
+  'conf', 'env', 'log', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'rs', 'java',
+  'c', 'cpp', 'cc', 'h', 'hpp', 'cs', 'php', 'sh', 'bash', 'zsh', 'sql', 'html', 'htm', 'css',
+  'scss', 'less', 'vue', 'svelte', 'svg', 'dockerfile', 'gitignore', 'lua', 'r', 'kt', 'swift',
+]);
+function isTextLike(mime, name) {
+  if (mime && mime.startsWith('text/')) return true;
+  if (TEXT_MIMES.has(mime)) return true;
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  return TEXT_EXTS.has(ext);
+}
+
+/**
+ * Build the user-message content for the /events API. With no attachments this is the
+ * plain prompt string; with attachments it becomes an array of content blocks. Each
+ * attachment (upload-images shape: { name, mimeType, data: 'data:<mime>;base64,<b64>' })
+ * is encoded by type so files attached in the composer reach the live agent:
+ *   image/*          -> image block (base64)
+ *   application/pdf  -> document block (base64)
+ *   text/code        -> text block with the decoded file content
+ *   anything else    -> a short note (binary/arbitrary upload not supported yet — that
+ *                       needs claude.ai's session-gated /api/<org>/upload + file_attachments,
+ *                       which the OAuth bridge can't reach. Deferred.)
+ */
+function toUserContent(text, attachments) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  const prompt = typeof text === 'string' ? text : '';
+  const blocks = [];
+  for (const att of list) {
+    const m = /^data:([^;]+);base64,(.+)$/.exec(att?.data || '');
+    if (!m) continue;
+    const mime = m[1];
+    const b64 = m[2];
+    const name = att?.name || 'file';
+    if (mime.startsWith('image/')) {
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: mime, data: b64 } });
+    } else if (mime === 'application/pdf') {
+      blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 }, title: name });
+    } else if (isTextLike(mime, name)) {
+      let decoded = '';
+      try { decoded = Buffer.from(b64, 'base64').toString('utf8'); } catch { decoded = ''; }
+      blocks.push({ type: 'text', text: `Attached file: ${name}\n\n\`\`\`\n${decoded}\n\`\`\`` });
+    } else {
+      blocks.push({ type: 'text', text: `[Attached file "${name}" (${mime || 'unknown type'}) — binary/arbitrary files aren't supported yet.]` });
+    }
+  }
+  if (blocks.length === 0) return prompt;
+  return [...(prompt ? [{ type: 'text', text: prompt }] : []), ...blocks];
+}
+
 /**
  * Drive one chat turn against a CONNECTED agent session (cse_/session_): ensure
  * subscribed, bind the GUI's view to the session id, then send the message. We
  * attach to the agent's EXISTING session — never create one — so the message lands
- * in the agent's real session + terminal. `normalize` is forwarded to attachSession.
- * Returns { sessionId }.
+ * in the agent's real session + terminal. `images` (optional, upload-images shape)
+ * are folded into the message as content blocks. `normalize` is forwarded to
+ * attachSession. Returns { sessionId }.
  */
-export async function driveRemoteSession({ ws, sessionId, command, normalize }) {
+export async function driveRemoteSession({ ws, sessionId, command, images, normalize }) {
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
   // Announce the session id so the GUI binds its view to it (it opened the agent
   // leaf with no session id yet).
   ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: sessionId, sessionId, provider: 'claude' }));
   await attachSession(sessionId, ws, normalize);
-  if (command !== undefined && command !== null && command !== '') {
-    const ok = await sendMessage(sessionId, command);
+  const content = toUserContent(command, images);
+  const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
+  if (hasContent) {
+    const ok = await sendMessage(sessionId, content);
     if (!ok) ws.send(createNormalizedMessage({ kind: 'error', content: 'rc: failed to send message', sessionId, provider: 'claude' }));
   }
   return { sessionId };

@@ -468,10 +468,8 @@ export function useChatComposerState({
           return false;
         }
 
-        if (!file.type || !file.type.startsWith('image/')) {
-          return false;
-        }
-
+        // Any file type is accepted (images, PDFs, text/code, etc.) — the server
+        // encodes each per type when sending to a live agent.
         if (!file.size || file.size > 5 * 1024 * 1024) {
           const fileName = file.name || 'Unknown file';
           setImageErrors((previous) => {
@@ -520,9 +518,7 @@ export function useChatComposerState({
   );
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'],
-    },
+    // No `accept` filter — all file types are allowed (images, PDFs, text/code, …).
     maxSize: 5 * 1024 * 1024,
     maxFiles: 5,
     onDrop: handleImageFiles,

@@ -142,3 +142,6 @@ tasks/
 
 # Git worktrees
 .worktrees/
+
+# Agent home base (claude-code-cli-ui maintainer) — not product code
+.agent/

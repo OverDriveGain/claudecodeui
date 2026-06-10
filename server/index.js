@@ -1132,12 +1132,9 @@ app.post('/api/projects/:projectId/upload-images', authenticateToken, async (req
         });
 
         const fileFilter = (req, file, cb) => {
-            const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
-            if (allowedMimes.includes(file.mimetype)) {
-                cb(null, true);
-            } else {
-                cb(new Error('Invalid file type. Only JPEG, PNG, GIF, WebP, and SVG are allowed.'));
-            }
+            // Accept all file types — images, PDFs, text/code, etc. The send path
+            // (rc-client toUserContent) encodes each per type for the live agent.
+            cb(null, true);
         };
 
         const upload = multer({
