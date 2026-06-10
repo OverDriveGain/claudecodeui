@@ -110,50 +110,71 @@ export default function SidebarProjectList({
 
   const showProjects = !isLoading && projects.length > 0 && filteredProjects.length > 0;
 
+  // React key + per-project state lookups all use the DB `projectId` so they remain
+  // stable across renames and session changes.
+  const renderItem = (project: Project) => (
+    <SidebarProjectItem
+      key={project.projectId}
+      project={project}
+      selectedProject={selectedProject}
+      selectedSession={selectedSession}
+      isExpanded={expandedProjects.has(project.projectId)}
+      isDeleting={deletingProjects.has(project.projectId)}
+      isStarred={isProjectStarred(project.projectId)}
+      editingProject={editingProject}
+      editingName={editingName}
+      sessions={getProjectSessions(project)}
+      initialSessionsLoaded={initialSessionsLoaded.has(project.projectId)}
+      isLoadingMoreSessions={loadingMoreProjects.has(project.projectId)}
+      currentTime={currentTime}
+      editingSession={editingSession}
+      editingSessionName={editingSessionName}
+      tasksEnabled={tasksEnabled}
+      mcpServerStatus={mcpServerStatus}
+      onEditingNameChange={onEditingNameChange}
+      onToggleProject={onToggleProject}
+      onProjectSelect={onProjectSelect}
+      onToggleStarProject={onToggleStarProject}
+      onStartEditingProject={onStartEditingProject}
+      onCancelEditingProject={onCancelEditingProject}
+      onSaveProjectName={onSaveProjectName}
+      onDeleteProject={onDeleteProject}
+      onSessionSelect={onSessionSelect}
+      onDeleteSession={onDeleteSession}
+      onLoadMoreSessions={onLoadMoreSessions}
+      onNewSession={onNewSession}
+      onEditingSessionNameChange={onEditingSessionNameChange}
+      onStartEditingSession={onStartEditingSession}
+      onCancelEditingSession={onCancelEditingSession}
+      onSaveEditingSession={onSaveEditingSession}
+      t={t}
+    />
+  );
+
+  // Remote-control agents are split into their own list below the conversations.
+  const isAgent = (project: Project) =>
+    Boolean(project.isRemoteAgent) || project.projectId.startsWith('remote:');
+  const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
+  const agentProjects = filteredProjects.filter(isAgent);
+
   return (
     <div className="pb-safe-area-inset-bottom md:space-y-1">
-      {!showProjects
-        ? state
-        : filteredProjects.map((project) => (
-            // React key + per-project state lookups all use the DB `projectId`
-            // so they remain stable across renames and session changes.
-            <SidebarProjectItem
-              key={project.projectId}
-              project={project}
-              selectedProject={selectedProject}
-              selectedSession={selectedSession}
-              isExpanded={expandedProjects.has(project.projectId)}
-              isDeleting={deletingProjects.has(project.projectId)}
-              isStarred={isProjectStarred(project.projectId)}
-              editingProject={editingProject}
-              editingName={editingName}
-              sessions={getProjectSessions(project)}
-              initialSessionsLoaded={initialSessionsLoaded.has(project.projectId)}
-              isLoadingMoreSessions={loadingMoreProjects.has(project.projectId)}
-              currentTime={currentTime}
-              editingSession={editingSession}
-              editingSessionName={editingSessionName}
-              tasksEnabled={tasksEnabled}
-              mcpServerStatus={mcpServerStatus}
-              onEditingNameChange={onEditingNameChange}
-              onToggleProject={onToggleProject}
-              onProjectSelect={onProjectSelect}
-              onToggleStarProject={onToggleStarProject}
-              onStartEditingProject={onStartEditingProject}
-              onCancelEditingProject={onCancelEditingProject}
-              onSaveProjectName={onSaveProjectName}
-              onDeleteProject={onDeleteProject}
-              onSessionSelect={onSessionSelect}
-              onDeleteSession={onDeleteSession}
-              onLoadMoreSessions={onLoadMoreSessions}
-              onNewSession={onNewSession}
-              onEditingSessionNameChange={onEditingSessionNameChange}
-              onStartEditingSession={onStartEditingSession}
-              onCancelEditingSession={onCancelEditingSession}
-              onSaveEditingSession={onSaveEditingSession}
-              t={t}
-            />
-          ))}
+      {!showProjects ? (
+        state
+      ) : (
+        <>
+          {conversationProjects.map(renderItem)}
+
+          {agentProjects.length > 0 && (
+            <>
+              <div className="mt-2 border-t border-border/50 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {t('sidebar.agentsHeading', { defaultValue: 'Agents' })}
+              </div>
+              {agentProjects.map(renderItem)}
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
