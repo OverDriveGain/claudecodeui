@@ -134,6 +134,8 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
     isEnvironment: Boolean(s.environment_id),
+    // Recency — the same signal the claude.ai "Recents" view orders by.
+    lastEventAt: s.last_event_at || s.created_at || '',
     createdAt: s.created_at,
   }));
 }

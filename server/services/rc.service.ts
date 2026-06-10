@@ -18,6 +18,7 @@ export type RemoteAgent = {
   id: string; // cse_… / session_… — the live session id to drive
   title: string; // the agent's name (its session title)
   connected: boolean; // honest online/offline (claude.ai's Recents view hides this)
+  lastEventAt?: string; // recency — what the claude.ai "Recents" view orders by
   createdAt?: string;
 };
 
@@ -94,6 +95,7 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         id: String(s.id ?? ''),
         title: String(s.title ?? 'agent').trim() || 'agent',
         connected: Boolean(s.connected),
+        lastEventAt: s.lastEventAt ? String(s.lastEventAt) : undefined,
         createdAt: s.createdAt ? String(s.createdAt) : undefined,
       }))
       .filter((s) => s.id && captureAllows(s.title));
@@ -107,9 +109,10 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
       if (!prev || (a.connected && !prev.connected)) byTitle.set(a.title, a);
     }
 
-    // Online agents first, then alphabetical, so the driveable ones are on top.
-    const value = [...byTitle.values()].sort(
-      (a, b) => Number(b.connected) - Number(a.connected) || a.title.localeCompare(b.title),
+    // Sort by recency (most-recently-active first) — the same ordering the claude.ai
+    // "Recents" view uses, so the top of the list matches what the webview shows.
+    const value = [...byTitle.values()].sort((a, b) =>
+      String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
     );
     agentCache = { at: now, value };
     return value;
