@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Edit3, SquareTerminal, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -114,6 +114,47 @@ export default function SidebarProjectItem({
 
     toggleProject();
   };
+
+  // A remote-control agent is a single, non-expandable leaf: a terminal icon + name,
+  // a live dot, and nothing else (no sessions list, rename, delete, or star).
+  // Clicking it binds the agent's existing session (cse_…) so its prior history loads
+  // and the live stream renders.
+  const isRemoteAgent = Boolean(project.isRemoteAgent) || project.projectId.startsWith('remote:');
+  if (isRemoteAgent) {
+    const agentSessionId = project.remoteSessionId || project.projectId.replace(/^remote:/, '');
+    const openAgent = () => {
+      onProjectSelect(project);
+      onSessionSelect(
+        {
+          id: agentSessionId,
+          __provider: 'claude',
+          __projectId: project.projectId,
+          summary: project.displayName,
+        } as SessionWithProvider,
+        project.projectId,
+      );
+    };
+    return (
+      <div className="md:space-y-1">
+        <Button
+          variant="ghost"
+          onClick={openAgent}
+          title={project.displayName}
+          className={cn(
+            'w-full justify-start gap-2 p-3 md:p-2 h-auto font-normal hover:bg-accent/50',
+            isSelected && 'bg-accent text-accent-foreground',
+          )}
+        >
+          <SquareTerminal className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1 text-left">
+            <div className="truncate text-sm font-medium text-foreground">{project.displayName}</div>
+            <div className="text-xs text-muted-foreground">agent</div>
+          </div>
+          <span className="h-2 w-2 flex-shrink-0 rounded-full bg-green-500" title="connected" />
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className={cn('md:space-y-1', isDeleting && 'opacity-50 pointer-events-none')}>
