@@ -10,6 +10,9 @@ import type {
   NormalizedMessage,
 } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
+// Remote-control proxy — read-only history fetch for connected agent sessions.
+import { getSessionEvents as getRemoteSessionEvents } from '@/remote-control/rc-client.js';
+import { isAgentCaptureAllowed } from '@/services/rc.service.js';
 
 type ArchivedSessionListItem = {
   sessionId: string;
@@ -94,10 +97,26 @@ export const sessionsService = {
    * Provider and provider-specific lookup hints are resolved from the indexed
    * session metadata in the database.
    */
-  fetchHistory(
+  async fetchHistory(
     sessionId: string,
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
   ): Promise<FetchHistoryResult> {
+    // Remote-control connected agent session (cse_… / session_…): not a local DB
+    // session — pull the full event history from the proxy and normalize it like any
+    // transcript, so opening an agent shows its prior conversation, not just new msgs.
+    if (sessionId.startsWith('cse_') || sessionId.startsWith('session_')) {
+      // Capture policy: don't serve history for an agent this deployment can't surface.
+      if (!(await isAgentCaptureAllowed(sessionId))) {
+        return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
+      }
+      const events = await getRemoteSessionEvents(sessionId);
+      const messages: NormalizedMessage[] = [];
+      for (const raw of events) {
+        messages.push(...this.normalizeMessage('claude', raw, sessionId));
+      }
+      return { messages, total: messages.length, hasMore: false, offset: 0, limit: null };
+    }
+
     const session = sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
