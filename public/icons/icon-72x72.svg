@@ -1,12 +1,11 @@
-<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background fills entire canvas - iOS will handle corner rounding -->
-  <rect width="512" height="512" fill="hsl(240 5.9% 10%)"/>
-  
-  <!-- MessageSquare icon - scaled and centered -->
-  <path d="M128 144C128 126.327 142.327 112 160 112H352C369.673 112 384 126.327 384 144V272C384 289.673 369.673 304 352 304H224L128 400V144Z" 
-        stroke="white" 
-        stroke-width="32" 
-        stroke-linecap="round" 
-        stroke-linejoin="round" 
-        fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <!-- MyMu app mark: blue tile + white conversation bubble with "MyMu!" inside -->
+  <rect width="512" height="512" rx="104" fill="hsl(221.2 83.2% 53.3%)"/>
+  <!-- conversation bubble (white) with a tail at the bottom-left -->
+  <path d="M112 132C112 113.775 126.775 99 145 99H367C385.225 99 400 113.775 400 132V268C400 286.225 385.225 301 367 301H214L150 360V301H145C126.775 301 112 286.225 112 268V132Z"
+        fill="white"/>
+  <!-- "MyMu!" in brand blue, centered in the bubble -->
+  <text x="256" y="228" text-anchor="middle"
+        font-family="'Helvetica Neue', Arial, sans-serif" font-size="86" font-weight="800"
+        fill="hsl(221.2 83.2% 53.3%)" letter-spacing="-2">MyMu!</text>
 </svg>
