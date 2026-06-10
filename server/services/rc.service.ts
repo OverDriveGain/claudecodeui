@@ -7,7 +7,7 @@
 // capture policy, and the `remote:<sessionId>` virtual-project id helpers.
 
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
-import { isRemoteControlConfigured, listConnectedAgents } from '@/remote-control/rc-client.js';
+import { isRemoteControlConfigured, listAgents } from '@/remote-control/rc-client.js';
 
 const LIST_TTL_MS = 8000;
 const REMOTE_PREFIX = 'remote:';
@@ -15,6 +15,7 @@ const REMOTE_PREFIX = 'remote:';
 export type RemoteAgent = {
   id: string; // cse_… / session_… — the live session id to drive
   title: string; // the agent's name (its session title)
+  connected: boolean; // honest online/offline (claude.ai's Recents view hides this)
   createdAt?: string;
 };
 
@@ -75,23 +76,27 @@ function captureAllows(title: string): boolean {
 let agentCache: { at: number; value: RemoteAgent[] } | null = null;
 
 /**
- * List the operator's CONNECTED agents — every live `claude --remote-control`
- * session — SUBJECT TO the capture policy. Cached briefly; returns [] (never throws)
- * on error, serving the last good list if the API is momentarily down.
+ * List the operator's agents — every `claude --remote-control` session, online and
+ * offline — SUBJECT TO the capture policy, sorted online-first. Cached briefly;
+ * returns [] (never throws) on error, serving the last good list if the API is
+ * momentarily down.
  */
 export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAgent[]> {
   if (!remoteControlEnabled()) return [];
   const now = Date.now();
   if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return agentCache.value;
   try {
-    const raw = await listConnectedAgents();
+    const raw = await listAgents();
     const value: RemoteAgent[] = (Array.isArray(raw) ? raw : [])
       .map((s: Record<string, unknown>) => ({
         id: String(s.id ?? ''),
         title: String(s.title ?? 'agent').trim() || 'agent',
+        connected: Boolean(s.connected),
         createdAt: s.createdAt ? String(s.createdAt) : undefined,
       }))
-      .filter((s) => s.id && captureAllows(s.title));
+      .filter((s) => s.id && captureAllows(s.title))
+      // Online agents first, then alphabetical, so the driveable ones are on top.
+      .sort((a, b) => Number(b.connected) - Number(a.connected) || a.title.localeCompare(b.title));
     agentCache = { at: now, value };
     return value;
   } catch {

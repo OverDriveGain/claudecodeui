@@ -122,6 +122,7 @@ export default function SidebarProjectItem({
   const isRemoteAgent = Boolean(project.isRemoteAgent) || project.projectId.startsWith('remote:');
   if (isRemoteAgent) {
     const agentSessionId = project.remoteSessionId || project.projectId.replace(/^remote:/, '');
+    const isOnline = project.remoteConnected !== false;
     const openAgent = () => {
       onProjectSelect(project);
       onSessionSelect(
@@ -139,18 +140,25 @@ export default function SidebarProjectItem({
         <Button
           variant="ghost"
           onClick={openAgent}
-          title={project.displayName}
+          title={isOnline ? project.displayName : `${project.displayName} (offline)`}
           className={cn(
             'w-full justify-start gap-2 p-3 md:p-2 h-auto font-normal hover:bg-accent/50',
             isSelected && 'bg-accent text-accent-foreground',
+            !isOnline && 'opacity-60',
           )}
         >
           <SquareTerminal className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1 text-left">
             <div className="truncate text-sm font-medium text-foreground">{project.displayName}</div>
-            <div className="text-xs text-muted-foreground">agent</div>
+            <div className="text-xs text-muted-foreground">{isOnline ? 'agent' : 'agent · offline'}</div>
           </div>
-          <span className="h-2 w-2 flex-shrink-0 rounded-full bg-green-500" title="connected" />
+          <span
+            className={cn(
+              'h-2 w-2 flex-shrink-0 rounded-full',
+              isOnline ? 'bg-green-500' : 'bg-muted-foreground/40',
+            )}
+            title={isOnline ? 'connected' : 'disconnected'}
+          />
         </Button>
       </div>
     );

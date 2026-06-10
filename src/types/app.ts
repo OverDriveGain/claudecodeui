@@ -66,10 +66,12 @@ export interface Project {
   opencodeSessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
-  // Set only for virtual remote:<id> projects — a live `claude --remote-control`
-  // agent. remoteSessionId is the connected session the composer drives.
+  // Set only for virtual remote:<id> projects — a `claude --remote-control` agent.
+  // remoteSessionId is the session the composer drives; remoteConnected is the
+  // honest online/offline state.
   isRemoteAgent?: boolean;
   remoteSessionId?: string;
+  remoteConnected?: boolean;
   [key: string]: unknown;
 }
 

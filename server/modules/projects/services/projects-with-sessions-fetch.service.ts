@@ -41,9 +41,11 @@ export type ProjectListItem = {
     total: number;
   };
   // Remote-control agent metadata (only set for virtual remote:<id> projects):
-  // marks the leaf as a live agent and carries the session id to drive.
+  // marks the leaf as a live agent, carries the session id to drive, and the honest
+  // online/offline state.
   isRemoteAgent?: boolean;
   remoteSessionId?: string;
+  remoteConnected?: boolean;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -290,6 +292,7 @@ export async function getProjectsWithSessions(
         sessionMeta: { hasMore: false, total: 0 },
         isRemoteAgent: true,
         remoteSessionId: agent.id,
+        remoteConnected: agent.connected,
       });
     }
   } catch {

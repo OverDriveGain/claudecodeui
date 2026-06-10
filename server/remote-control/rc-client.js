@@ -11,7 +11,7 @@
  *
  * READ side (auth + asking the server for things):
  *   - getRemoteAuth / isRemoteControlConfigured  — operator OAuth + org uuid
- *   - listConnectedAgents()                      — the live `--remote-control` fleet
+ *   - listAgents()                               — the `--remote-control` fleet (online+offline)
  *   - getSessionEvents()                         — a session's full history
  *
  * DRIVE side (talking to a running agent):
@@ -98,20 +98,23 @@ export function isRemoteControlConfigured() {
 }
 
 /**
- * Ask Anthropic for the CONNECTED interactive agent sessions — every live
- * `claude --remote-control` session (your fleet) currently attached to the relay.
- * These appear as `cse_*` code sessions with connection_status='connected' and no
- * environment_id; each is directly driveable (attach + send to the existing one).
+ * Ask Anthropic for the interactive agent sessions — every `claude --remote-control`
+ * session in your fleet (`cse_*` code sessions, excluding environment-bound ones).
+ * Includes both currently-attached agents (connection_status='connected', driveable
+ * now) and idle ones (disconnected — visible + history-viewable, drive once they
+ * reconnect). `connected` carries the honest online/offline state the claude.ai
+ * "Recents" view doesn't surface.
  */
-export async function listConnectedAgents() {
+export async function listAgents() {
   const r = await fetch(`${BASE}/v1/code/sessions`, { headers: headers() });
-  if (!r.ok) throw new Error(`listConnectedAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw new Error(`listAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j = await r.json();
   return (j.data || [])
-    .filter((s) => s.connection_status === 'connected' && !s.environment_id)
+    .filter((s) => !s.environment_id)
     .map((s) => ({
       id: s.id,
       title: (s.title || '').split('\n')[0].trim(),
+      connected: s.connection_status === 'connected',
       createdAt: s.created_at,
     }));
 }
