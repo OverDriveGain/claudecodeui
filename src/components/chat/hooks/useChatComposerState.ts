@@ -747,6 +747,12 @@ export function useChatComposerState({
             model: claudeModel,
             sessionSummary,
             images: uploadedImages,
+            // Remote-control agent: tag the live agent's session id so the server
+            // drives it over the proxy (attach + send to its existing session)
+            // instead of spawning a local Claude.
+            ...(selectedProject?.isRemoteAgent && typeof selectedProject.remoteSessionId === 'string'
+              ? { remoteControl: selectedProject.remoteSessionId }
+              : {}),
           },
         });
       }
