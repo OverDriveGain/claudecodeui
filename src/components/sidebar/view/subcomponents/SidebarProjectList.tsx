@@ -8,6 +8,9 @@ import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
 
 export type SidebarProjectListProps = {
+  // Which list this instance renders: conversations/projects (default) or the
+  // remote-control agents. Agents live in their own top-level tab.
+  listKind?: 'projects' | 'agents';
   projects: Project[];
   filteredProjects: Project[];
   selectedProject: Project | null;
@@ -52,6 +55,7 @@ export type SidebarProjectListProps = {
 };
 
 export default function SidebarProjectList({
+  listKind = 'projects',
   projects,
   filteredProjects,
   selectedProject,
@@ -151,30 +155,30 @@ export default function SidebarProjectList({
     />
   );
 
-  // Remote-control agents are split into their own list below the conversations.
+  // Remote-control agents have their own top-level tab, so they are kept out of the
+  // conversations/projects list and rendered on their own when listKind === 'agents'.
   const isAgent = (project: Project) =>
     Boolean(project.isRemoteAgent) || project.projectId.startsWith('remote:');
-  const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
-  const agentProjects = filteredProjects.filter(isAgent);
 
+  if (listKind === 'agents') {
+    const agentProjects = filteredProjects.filter(isAgent);
+    return (
+      <div className="pb-safe-area-inset-bottom md:space-y-1">
+        {agentProjects.length > 0 ? (
+          agentProjects.map(renderItem)
+        ) : (
+          <div className="px-4 py-12 text-center text-sm text-muted-foreground md:py-8">
+            {t('sidebar.noAgents', { defaultValue: 'No agents found.' })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
   return (
     <div className="pb-safe-area-inset-bottom md:space-y-1">
-      {!showProjects ? (
-        state
-      ) : (
-        <>
-          {conversationProjects.map(renderItem)}
-
-          {agentProjects.length > 0 && (
-            <>
-              <div className="mt-2 border-t border-border/50 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                {t('sidebar.agentsHeading', { defaultValue: 'Agents' })}
-              </div>
-              {agentProjects.map(renderItem)}
-            </>
-          )}
-        </>
-      )}
+      {!showProjects ? state : conversationProjects.map(renderItem)}
     </div>
   );
 }

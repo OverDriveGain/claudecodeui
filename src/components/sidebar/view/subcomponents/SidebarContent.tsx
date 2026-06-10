@@ -508,8 +508,10 @@ export default function SidebarContent({
               ))}
             </div>
           )
+        ) : searchMode === 'agents' ? (
+          <SidebarProjectList {...projectListProps} listKind="agents" />
         ) : (
-          <SidebarProjectList {...projectListProps} />
+          <SidebarProjectList {...projectListProps} listKind="projects" />
         )}
       </ScrollArea>
 

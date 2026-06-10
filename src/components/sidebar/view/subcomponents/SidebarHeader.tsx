@@ -1,4 +1,4 @@
-import { Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, SquareTerminal, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button, Input, Tooltip } from '../../../../shared/view/ui';
 import { IS_PLATFORM } from '../../../../constants/config';
@@ -153,6 +153,19 @@ export default function SidebarHeader({
                 <MessageSquare className="h-3 w-3" />
                 {t('search.modeConversations')}
               </button>
+              <button
+                onClick={() => onSearchModeChange('agents')}
+                aria-pressed={searchMode === 'agents'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  searchMode === 'agents'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <SquareTerminal className="h-3 w-3" />
+                {t('search.modeAgents', { defaultValue: 'Agents' })}
+              </button>
               <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
                 <button
                   onClick={() => onSearchModeChange('archived')}
@@ -269,6 +282,19 @@ export default function SidebarHeader({
               >
                 <MessageSquare className="h-3 w-3" />
                 {t('search.modeConversations')}
+              </button>
+              <button
+                onClick={() => onSearchModeChange('agents')}
+                aria-pressed={searchMode === 'agents'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  searchMode === 'agents'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <SquareTerminal className="h-3 w-3" />
+                {t('search.modeAgents', { defaultValue: 'Agents' })}
               </button>
               <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
                 <button
