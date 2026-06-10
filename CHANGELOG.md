@@ -1,6 +1,17 @@
 # Changelog
 
-All notable changes to CloudCLI UI will be documented in this file.
+All notable changes to MyMu will be documented in this file.
+
+
+## [1.35.0](https://github.com/OverDriveGain/claudecodeui/compare/v1.34.0...v1.35.0) (2026-06-11)
+
+### New Features
+
+* **agents:** attach image / PDF / text files to live remote-control agents (image → base64 image block, PDF → document block, text/code → inline). Binary/arbitrary upload deferred (needs the session-gated blob upload).
+
+### Branding
+
+* rebrand CloudCLI UI → MyMu (logo + display strings).
 
 
 ## [](https://github.com/siteboon/claudecodeui/compare/v1.33.3...vnull) (2026-06-09)
