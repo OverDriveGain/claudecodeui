@@ -206,6 +206,7 @@
     "defaultCommand": "command"
   },
   "claudeStatus": {
+    "externalRunning": "Working in terminal",
     "actions": {
       "thinking": "Thinking",
       "processing": "Processing",

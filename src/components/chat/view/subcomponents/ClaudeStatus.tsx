@@ -11,6 +11,12 @@ type ClaudeStatusProps = {
   } | null;
   onAbort?: () => void;
   isLoading: boolean;
+  /**
+   * The open session is running, but it's a terminal-driven session this UI does
+   * not own (inferred from the transcript on disk). Show a working indicator, but
+   * without an elapsed timer or STOP button — we can't time or interrupt it.
+   */
+  externalRunning?: boolean;
   provider?: string;
 };
 
@@ -42,17 +48,24 @@ export default function ClaudeStatus({
   status,
   onAbort,
   isLoading,
+  externalRunning = false,
   provider = 'claude',
 }: ClaudeStatusProps) {
   const { t } = useTranslation('chat');
   const [elapsedTime, setElapsedTime] = useState(0);
   const [dots, setDots] = useState('');
 
+  // "active" = something is working: either our own stream (isLoading) or a
+  // terminal session we're observing (externalRunning).
+  const active = isLoading || externalRunning;
+
   useEffect(() => {
-    if (!isLoading) {
+    if (!active) {
       setElapsedTime(0);
       return;
     }
+    // We only know a real start time for sessions we own; the terminal case has
+    // no reliable start, so its elapsed counter stays hidden.
     const startTime = Date.now();
     const timer = setInterval(() => {
       setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
@@ -65,12 +78,17 @@ export default function ClaudeStatus({
       clearInterval(timer);
       clearInterval(dotTimer);
     };
-  }, [isLoading]);
+  }, [active]);
 
-  if (!isLoading && !status) return null;
+  if (!active && !status) return null;
 
   const actionWords = ACTION_KEYS.map((key, i) => t(key, { defaultValue: DEFAULT_ACTION_WORDS[i] }));
-  const statusText = (status?.text || actionWords[Math.floor(elapsedTime / 3) % actionWords.length]).replace(/[.]+$/, '');
+  const externalText = t('claudeStatus.externalRunning', { defaultValue: 'Working in terminal' });
+  const statusText = (
+    !isLoading && externalRunning
+      ? externalText
+      : status?.text || actionWords[Math.floor(elapsedTime / 3) % actionWords.length]
+  ).replace(/[.]+$/, '');
 
   const providerLabel = t(PROVIDER_LABEL_KEYS[provider] || 'claudeStatus.providers.assistant', { defaultValue: 'Assistant' });
 
@@ -82,8 +100,11 @@ export default function ClaudeStatus({
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/10">
             <SessionProviderLogo provider={provider} className="h-3.5 w-3.5" />
-            {isLoading && (
-              <span className="absolute inset-0 animate-pulse rounded-full ring-2 ring-emerald-500/20" />
+            {active && (
+              <span className={cn(
+                "absolute inset-0 animate-pulse rounded-full ring-2",
+                isLoading ? "ring-emerald-500/20" : "ring-blue-500/30",
+              )} />
             )}
           </div>
 
@@ -92,9 +113,12 @@ export default function ClaudeStatus({
               {providerLabel}
             </span>
             <div className="flex items-center gap-1.5">
-              <span className={cn("h-1.5 w-1.5 rounded-full", isLoading ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
+              <span className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                isLoading ? "bg-emerald-500 animate-pulse" : externalRunning ? "bg-blue-500 animate-pulse" : "bg-amber-500",
+              )} />
               <p className="truncate text-xs font-medium text-foreground">
-                {statusText}<span className="inline-block w-4 text-primary">{isLoading ? dots : ''}</span>
+                {statusText}<span className="inline-block w-4 text-primary">{active ? dots : ''}</span>
               </p>
             </div>
           </div>

@@ -12,6 +12,7 @@ import type {
 import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
 
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
+import type { QueuedMessage } from '../../hooks/useChatComposerState';
 import {
   PromptInput,
   PromptInputHeader,
@@ -53,6 +54,9 @@ interface ChatComposerProps {
   handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   claudeStatus: { text: string; tokens: number; can_interrupt: boolean } | null;
   isLoading: boolean;
+  externalRunning?: boolean;
+  messageQueue?: QueuedMessage[];
+  onRemoveQueuedMessage?: (id: string) => void;
   onAbortSession: () => void;
   provider: Provider | string;
   permissionMode: PermissionMode | string;
@@ -107,6 +111,9 @@ export default function ChatComposer({
   handleGrantToolPermission,
   claudeStatus,
   isLoading,
+  externalRunning,
+  messageQueue,
+  onRemoveQueuedMessage,
   onAbortSession,
   provider,
   permissionMode,
@@ -176,6 +183,7 @@ export default function ChatComposer({
         <ClaudeStatus
           status={claudeStatus}
           isLoading={isLoading}
+          externalRunning={externalRunning}
           onAbort={onAbortSession}
           provider={provider}
         />
@@ -240,6 +248,29 @@ export default function ChatComposer({
           isOpen={isCommandMenuOpen}
           frequentCommands={frequentCommands}
         />
+
+        {messageQueue && messageQueue.length > 0 && (
+          <div className="mb-2 flex flex-col gap-1" data-slot="message-queue">
+            {messageQueue.map((queued) => (
+              <div
+                key={queued.id}
+                className="group flex items-center gap-2 rounded-lg border border-border/40 bg-muted/40 px-3 py-1.5 text-sm"
+              >
+                <MessageSquareIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">{queued.text}</span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveQueuedMessage?.(queued.id)}
+                  aria-label={t('composer.cancelQueued', 'Cancel queued message')}
+                  title={t('composer.cancelQueued', 'Cancel queued message')}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                >
+                  <XIcon className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
@@ -393,7 +424,11 @@ export default function ChatComposer({
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
             <PromptInputSubmit
-              onClick={isLoading ? onAbortSession : undefined}
+              // While the agent is busy: if you've typed something, the button
+              // is a SEND button that queues it; only when the box is empty does
+              // it act as the stop/abort button. Idle behaves as a normal send.
+              status={isLoading && !input.trim() ? 'streaming' : 'ready'}
+              onClick={isLoading && !input.trim() ? onAbortSession : undefined}
               disabled={!isLoading && !input.trim()}
               className="h-10 w-10 sm:h-10 sm:w-10"
             />

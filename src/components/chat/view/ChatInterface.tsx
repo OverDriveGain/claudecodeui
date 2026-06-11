@@ -11,6 +11,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { useIsSessionRunning } from '../../../stores/useSessionActivityStore';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -179,6 +180,8 @@ function ChatInterface({
     commandModalPayload,
     closeCommandModal,
     showCostModal,
+    messageQueue,
+    removeQueuedMessage,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -210,6 +213,12 @@ function ChatInterface({
     setIsUserScrolledUp,
     setPendingPermissionRequests,
   });
+
+  // A terminal-driven session we don't own can still be mid-turn (inferred from its
+  // transcript on disk → session_activity). Surface that as a working indicator, but
+  // only when our own stream isn't already showing progress.
+  const openSessionRunning = useIsSessionRunning(currentSessionId || selectedSession?.id || '');
+  const externalRunning = openSessionRunning && !isLoading;
 
   // On WebSocket reconnect, re-fetch the current session's messages from the server
   // so missed streaming events are shown. Also reset isLoading.
@@ -364,6 +373,9 @@ function ChatInterface({
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}
           isLoading={isLoading}
+          externalRunning={externalRunning}
+          messageQueue={messageQueue}
+          onRemoveQueuedMessage={removeQueuedMessage}
           onAbortSession={handleAbortSession}
           provider={provider}
           permissionMode={permissionMode}

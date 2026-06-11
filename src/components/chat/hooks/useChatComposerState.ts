@@ -138,6 +138,12 @@ export type CommandModalPayload = {
   data: HelpCommandData | ModelCommandData | CostCommandData | StatusCommandData;
 };
 
+export type QueuedMessage = {
+  id: string;
+  text: string;
+  images: File[];
+};
+
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
 };
@@ -204,6 +210,12 @@ export function useChatComposerState({
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [commandModalPayload, setCommandModalPayload] = useState<CommandModalPayload | null>(null);
+
+  // Messages typed while the agent is busy are queued (not dropped) and fire one
+  // per turn when it goes idle. A queued message can be cancelled before it sends.
+  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  const queueFlushingRef = useRef(false);
+  const queueIdRef = useRef(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
@@ -532,7 +544,29 @@ export function useChatComposerState({
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || isLoading || !selectedProject) {
+      if (!currentInput.trim() || !selectedProject) {
+        return;
+      }
+
+      // Agent busy → queue the message instead of dropping it. It sends
+      // automatically when the current turn finishes (one per turn); it can be
+      // cancelled from the queue before then. The flush effect replays it
+      // through this same handler once `isLoading` clears.
+      if (isLoading) {
+        queueIdRef.current += 1;
+        const queued: QueuedMessage = {
+          id: `q${queueIdRef.current}`,
+          text: currentInput,
+          images: attachedImages,
+        };
+        setMessageQueue((prev) => [...prev, queued]);
+        setInput('');
+        inputValueRef.current = '';
+        setAttachedImages([]);
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
         return;
       }
 
@@ -799,6 +833,31 @@ export function useChatComposerState({
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
+
+  // Drain the message queue one item per turn. When the agent goes idle and a
+  // message is waiting, restore it into the composer and replay it through the
+  // normal submit path. `queueFlushingRef` guards the window between dequeue and
+  // `isLoading` flipping back to true so we never send two at once.
+  useEffect(() => {
+    if (isLoading) {
+      queueFlushingRef.current = false;
+      return;
+    }
+    if (queueFlushingRef.current || messageQueue.length === 0) {
+      return;
+    }
+    queueFlushingRef.current = true;
+    const next = messageQueue[0];
+    setMessageQueue((prev) => prev.slice(1));
+    setAttachedImages(next.images);
+    setInput(next.text);
+    inputValueRef.current = next.text;
+    setTimeout(() => handleSubmitRef.current?.(createFakeSubmitEvent()), 0);
+  }, [isLoading, messageQueue]);
+
+  const removeQueuedMessage = useCallback((id: string) => {
+    setMessageQueue((prev) => prev.filter((m) => m.id !== id));
+  }, []);
 
   useEffect(() => {
     inputValueRef.current = input;
@@ -1067,5 +1126,7 @@ export function useChatComposerState({
     commandModalPayload,
     closeCommandModal,
     showCostModal,
+    messageQueue,
+    removeQueuedMessage,
   };
 }
