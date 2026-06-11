@@ -169,9 +169,32 @@ function dedupeAdjacentAssistantEchoes(merged: NormalizedMessage[]): NormalizedM
   return out;
 }
 
+/**
+ * Drop optimistic user rows (`local_*` ids) whose text also exists as a real
+ * (non-local) user row anywhere in the list. The real copy can arrive via the
+ * server fetch OR the live stream (relay echoes the user's own message with a
+ * non-local id), and the queue path can briefly add more than one optimistic
+ * copy — so dedup against the whole merged set, not just the server slice.
+ * This is what stops a sent message from showing twice (or thrice when queued).
+ */
+function dedupeOptimisticUserEchoes(merged: NormalizedMessage[]): NormalizedMessage[] {
+  const realUserTexts = new Set<string>();
+  for (const m of merged) {
+    if (m.id.startsWith('local_')) continue;
+    const fp = userTextFingerprint(m);
+    if (fp) realUserTexts.add(fp);
+  }
+  if (realUserTexts.size === 0) return merged;
+  return merged.filter((m) => {
+    if (!m.id.startsWith('local_')) return true;
+    const fp = userTextFingerprint(m);
+    return !(fp && realUserTexts.has(fp));
+  });
+}
+
 function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) return server;
-  if (server.length === 0) return dedupeAdjacentAssistantEchoes(realtime);
+  if (server.length === 0) return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes(realtime));
   const serverIds = new Set(server.map(m => m.id));
   const serverUserTexts = new Set(
     server.map(userTextFingerprint).filter((t): t is string => t !== null),
@@ -187,7 +210,7 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
     return true;
   });
   if (extra.length === 0) return server;
-  return dedupeAdjacentAssistantEchoes([...server, ...extra]);
+  return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes([...server, ...extra]));
 }
 
 function compareMessagesByTimestamp(left: NormalizedMessage, right: NormalizedMessage): number {
@@ -479,6 +502,10 @@ export function useSessionStore() {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
     try {
+      // Catch-up refresh fetches the full transcript (no limit) so a live update
+      // never drops a just-arrived message due to a bounded window racing the
+      // file write. (The bounded variant caused replies to not appear until a
+      // manual refresh; reverted until it can be done without that race.)
       const params = new URLSearchParams();
 
       const qs = params.toString();
