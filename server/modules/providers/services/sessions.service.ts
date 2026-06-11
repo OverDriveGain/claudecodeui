@@ -11,7 +11,7 @@ import type {
 } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 // Remote-control proxy — read-only history fetch for connected agent sessions.
-import { getSessionEvents as getRemoteSessionEvents } from '@/remote-control/rc-client.js';
+import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
 
 type ArchivedSessionListItem = {
@@ -102,19 +102,42 @@ export const sessionsService = {
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
   ): Promise<FetchHistoryResult> {
     // Remote-control connected agent session (cse_… / session_…): not a local DB
-    // session — pull the full event history from the proxy and normalize it like any
-    // transcript, so opening an agent shows its prior conversation, not just new msgs.
+    // session. The relay only pages oldest-first (no reverse), so the backend caches
+    // the whole transcript once and then serves it like a local file — honoring
+    // limit/offset so opening an agent loads just the recent tail (fast) instead of
+    // re-pulling the entire relay history on every open. "Load all" (limit === null)
+    // returns everything from the warm cache.
     if (sessionId.startsWith('cse_') || sessionId.startsWith('session_')) {
       // Capture policy: don't serve history for an agent this deployment can't surface.
       if (!(await isAgentCaptureAllowed(sessionId))) {
         return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
       }
-      const events = await getRemoteSessionEvents(sessionId);
-      const messages: NormalizedMessage[] = [];
+
+      const limit = options.limit ?? null;
+      const offset = Math.max(0, options.offset ?? 0);
+
+      const events = await getRemoteSessionEventsCached(sessionId);
+      const normalized: NormalizedMessage[] = [];
       for (const raw of events) {
-        messages.push(...this.normalizeMessage('claude', raw, sessionId));
+        normalized.push(...this.normalizeMessage('claude', raw, sessionId));
       }
-      return { messages, total: messages.length, hasMore: false, offset: 0, limit: null };
+
+      // Display total counts conversation messages (drop tool_result rows), while
+      // windowing uses the full normalized length so offsets stay aligned — same
+      // semantics as the local provider's fetchHistory.
+      const totalNormalized = normalized.length;
+      let total = 0;
+      for (const msg of normalized) {
+        if (msg.kind !== 'tool_result') total += 1;
+      }
+
+      if (limit === null) {
+        return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+      }
+
+      const start = Math.max(0, totalNormalized - offset - limit);
+      const end = Math.max(0, totalNormalized - offset);
+      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit };
     }
 
     const session = sessionsDb.getSessionById(sessionId);

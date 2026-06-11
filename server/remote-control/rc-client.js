@@ -141,28 +141,85 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
 }
 
 /**
- * Fetch a session's full event history (raw SDK transcript records). Same record
- * shape as a local JSONL transcript ({type, message, uuid, …}) so the caller can
- * normalize them with the standard normalizeMessage path. Returns [] on error.
+ * Page a session's event history (raw SDK transcript records, oldest-first). Same
+ * record shape as a local JSONL transcript ({type, message, uuid, …}) so the caller
+ * can normalize them with the standard normalizeMessage path.
  *
- * The events API returns a page at a time (oldest-first) with has_more + last_id;
- * we page forward via after_id so the GUI gets the WHOLE conversation, not page 1.
+ * The events API only pages forward (oldest→newest) via `after_id` — there is NO
+ * reverse / descending option (verified against the relay). We page at limit=1000
+ * (the relay accepts it; claude.ai uses 500) so even a multi-thousand-event agent
+ * is fetched in a handful of round-trips instead of dozens. `maxPages` is a runaway
+ * guard, not a real ceiling.
+ *
+ * `after` resumes from a cursor (the previous `last_id`) for incremental top-up.
+ * Returns `{ events, lastId }` where `lastId` is the cursor to resume from next.
  */
-export async function getSessionEvents(sessionId, { maxPages = 60 } = {}) {
+export async function getSessionEvents(sessionId, { after = null, limit = 1000, maxPages = 1000 } = {}) {
   const all = [];
-  let after = null;
+  let cursor = after;
+  let lastId = after;
   for (let i = 0; i < maxPages; i++) {
-    const url = `${BASE}/v1/sessions/${sessionId}/events?limit=100`
-      + (after ? `&after_id=${encodeURIComponent(after)}` : '');
+    const url = `${BASE}/v1/sessions/${sessionId}/events?limit=${limit}`
+      + (cursor ? `&after_id=${encodeURIComponent(cursor)}` : '');
     const r = await fetch(url, { headers: headers({ beta: BETA_CCR, org: true }) });
     if (!r.ok) break;
     const j = await r.json();
     const batch = Array.isArray(j.data) ? j.data : [];
     all.push(...batch);
+    if (j.last_id) lastId = j.last_id;
     if (!j.has_more || !batch.length || !j.last_id) break;
-    after = j.last_id;
+    cursor = j.last_id;
   }
-  return all;
+  return { events: all, lastId };
+}
+
+// sessionId -> { events: rawEvent[], lastId: cursor, fetchedAt: ms }. Turns the
+// relay's forward-only, whole-history paging into a warm local transcript we can
+// window (tail-first) and top-up cheaply — so opening an agent behaves like
+// opening a local file, not a 5-second relay backfill on every open.
+const sessionEventsCache = new Map();
+const SESSION_EVENTS_CACHE_MAX = 40;
+
+function evictSessionEventsCache() {
+  while (sessionEventsCache.size > SESSION_EVENTS_CACHE_MAX) {
+    let oldestKey = null;
+    let oldest = Infinity;
+    for (const [k, v] of sessionEventsCache) {
+      if (v.fetchedAt < oldest) { oldest = v.fetchedAt; oldestKey = k; }
+    }
+    if (oldestKey === null) break;
+    sessionEventsCache.delete(oldestKey);
+  }
+}
+
+/**
+ * Cached event history for a session. First call pays the full page-through;
+ * later calls serve from cache and (when `topUp`) fetch only events created after
+ * the last cursor — append-only transcripts make this safe. Returns the full
+ * oldest-first raw event array; the caller windows/normalizes it.
+ */
+export async function getSessionEventsCached(sessionId, { topUp = true } = {}) {
+  let entry = sessionEventsCache.get(sessionId);
+  if (!entry) {
+    const { events, lastId } = await getSessionEvents(sessionId, {});
+    entry = { events, lastId, fetchedAt: Date.now() };
+    sessionEventsCache.set(sessionId, entry);
+    evictSessionEventsCache();
+  } else if (topUp) {
+    const { events: fresh, lastId } = await getSessionEvents(sessionId, { after: entry.lastId });
+    if (fresh.length) {
+      entry.events = entry.events.concat(fresh);
+      if (lastId) entry.lastId = lastId;
+    }
+    entry.fetchedAt = Date.now();
+  }
+  return entry.events;
+}
+
+/** Drop a session's cached events (e.g. on detach or forced reload). */
+export function invalidateSessionEventsCache(sessionId) {
+  if (sessionId) sessionEventsCache.delete(sessionId);
+  else sessionEventsCache.clear();
 }
 
 // ───────────────────────────── DRIVE SIDE ──────────────────────────────────
@@ -202,7 +259,11 @@ export async function attachSession(sessionId, ws, normalize) {
   const upstream = new WebSocket(url, {
     headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
   });
-  const entry = { upstream, ws };
+  // `turnActive` gates the result->complete translation: the bridge replays the
+  // previous turn's `result` when we subscribe, which would otherwise fire a
+  // premature `complete` and clear the GUI's "working" state. We only treat a
+  // `result` as end-of-turn once driveRemoteSession has actually sent this turn.
+  const entry = { upstream, ws, turnActive: false };
   activeRemoteSessions.set(sessionId, entry);
 
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
@@ -247,7 +308,12 @@ export async function attachSession(sessionId, ws, normalize) {
     // End-of-TURN: a `result` SDK message means the agent finished this turn. The
     // WS stays open across turns, so translate it into a per-turn `complete` so the
     // GUI finalizes streaming and clears the "working" state (the session lives on).
+    // Ignore a `result` we didn't initiate (the bridge replays the last turn's
+    // result on subscribe) so it can't prematurely clear the "working" indicator.
     if (m.type === 'result') {
+      const e = activeRemoteSessions.get(sessionId);
+      if (e && !e.turnActive) return;
+      if (e) e.turnActive = false;
       ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
     }
   });
@@ -341,6 +407,10 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
   const content = toUserContent(command, images);
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
   if (hasContent) {
+    // Arm the end-of-turn detector now (after attach/replay, before send) so the
+    // NEXT `result` is treated as this turn's completion — not a stale replayed one.
+    const e = activeRemoteSessions.get(sessionId);
+    if (e) e.turnActive = true;
     const ok = await sendMessage(sessionId, content);
     if (!ok) ws.send(createNormalizedMessage({ kind: 'error', content: 'rc: failed to send message', sessionId, provider: 'claude' }));
   }

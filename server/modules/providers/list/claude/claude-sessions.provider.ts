@@ -101,6 +101,146 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   return tools;
 }
 
+/**
+ * Reads the tail of a JSONL transcript without parsing the whole file.
+ *
+ * Walks the file backward in chunks, parsing lines newest-first, and stops once
+ * it has collected at least `minEntries` rows belonging to `sessionId` (or it
+ * reaches the start of the file). This keeps "open a conversation" cheap even
+ * for multi-megabyte transcripts — the full read only happens for an explicit
+ * "Load all" request.
+ *
+ * Returns the matching entries in forward (oldest-first) order plus
+ * `reachedStart`, which is true when the walk consumed byte 0 (so the tail is
+ * actually the entire transcript and counts derived from it are exact).
+ */
+async function readSessionTailEntries(
+  jsonLPath: string,
+  sessionId: string,
+  minEntries: number,
+): Promise<{ entries: AnyRecord[]; reachedStart: boolean }> {
+  const CHUNK = 256 * 1024;
+  const handle = await fsp.open(jsonLPath, 'r');
+  try {
+    const { size } = await handle.stat();
+    let pos = size;
+    // Head-less fragment of the earliest line in the previously-read (later)
+    // chunk; it is the continuation of a line that spans the chunk boundary.
+    let carry = '';
+    const collected: AnyRecord[] = [];
+    let reachedStart = false;
+
+    while (pos > 0 && collected.length < minEntries) {
+      const readStart = Math.max(0, pos - CHUNK);
+      const length = pos - readStart;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, readStart);
+      pos = readStart;
+
+      const text = buffer.toString('utf8') + carry;
+      const lines = text.split('\n');
+      if (readStart === 0) {
+        reachedStart = true;
+        carry = '';
+      } else {
+        // The first line is still missing its head (lives in an earlier chunk).
+        carry = lines.shift() ?? '';
+      }
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          const entry = JSON.parse(line) as AnyRecord;
+          if (entry.sessionId === sessionId) {
+            collected.push(entry);
+          }
+        } catch {
+          // Skip malformed JSONL lines that can happen during concurrent writes.
+        }
+      }
+    }
+
+    if (pos === 0) {
+      reachedStart = true;
+    }
+
+    collected.reverse();
+    return { entries: collected, reachedStart };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Attaches `subagentTools` to messages whose tool results reference a subagent
+ * transcript, then returns them sorted oldest-first. Shared by the full-read and
+ * tail-read paths so both surface identical subagent data.
+ */
+async function enrichWithSubagentTools(
+  messages: AnyRecord[],
+  projectDir: string,
+  agentFiles: string[],
+): Promise<AnyRecord[]> {
+  const agentToolsCache = new Map<string, AnyRecord[]>();
+  const agentIds = new Set<string>();
+  for (const message of messages) {
+    const agentId = message.toolUseResult?.agentId;
+    if (agentId) {
+      agentIds.add(String(agentId));
+    }
+  }
+
+  for (const agentId of agentIds) {
+    const agentFileName = `agent-${agentId}.jsonl`;
+    if (!agentFiles.includes(agentFileName)) {
+      continue;
+    }
+    const tools = await parseAgentTools(path.join(projectDir, agentFileName));
+    agentToolsCache.set(agentId, tools);
+  }
+
+  for (const message of messages) {
+    const agentId = message.toolUseResult?.agentId;
+    if (!agentId) {
+      continue;
+    }
+    const agentTools = agentToolsCache.get(String(agentId));
+    if (agentTools && agentTools.length > 0) {
+      message.subagentTools = agentTools;
+    }
+  }
+
+  return messages.sort(
+    (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime(),
+  );
+}
+
+/**
+ * Reads only the tail of a session transcript (last `minEntries` rows or the
+ * whole file, whichever is smaller) and enriches it with subagent tools.
+ * `reachedStart` is true when the tail spans the entire transcript.
+ */
+async function getSessionTail(
+  sessionId: string,
+  minEntries: number,
+): Promise<{ messages: AnyRecord[]; reachedStart: boolean }> {
+  const jsonLPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
+  if (!jsonLPath) {
+    return { messages: [], reachedStart: true };
+  }
+
+  const projectDir = path.dirname(jsonLPath);
+  const files = await fsp.readdir(projectDir);
+  const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
+
+  const { entries, reachedStart } = await readSessionTailEntries(jsonLPath, sessionId, minEntries);
+  const messages = await enrichWithSubagentTools(entries, projectDir, agentFiles);
+  return { messages, reachedStart };
+}
+
 async function getSessionMessages(
   sessionId: string,
   limit: number | null,
@@ -595,25 +735,11 @@ export class ClaudeSessionsProvider implements IProviderSessions {
    * Loads Claude JSONL history for a project/session and returns normalized
    * messages, preserving the existing pagination behavior from projects.js.
    */
-  async fetchHistory(
-    sessionId: string,
-    options: FetchHistoryOptions = {},
-  ): Promise<FetchHistoryResult> {
-    const { limit = null, offset = 0 } = options;
-
-    let result: ClaudeHistoryResult;
-    try {
-      // Load full history first so `total` reflects frontend-normalized messages,
-      // not raw JSONL records.
-      result = await getSessionMessages(sessionId, null, 0);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
-      return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
-    }
-
-    const rawMessages = Array.isArray(result) ? result : (result.messages || []);
-
+  /**
+   * Builds the normalized message list from raw JSONL rows: pairs tool results
+   * back onto their tool_use messages and carries subagent tool data across.
+   */
+  private normalizeRawMessages(rawMessages: AnyRecord[], sessionId: string): NormalizedMessage[] {
     const toolResultMap = new Map<string, ClaudeToolResult>();
     for (const raw of rawMessages) {
       if (raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
@@ -653,31 +779,70 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       }
     }
 
-    const totalNormalized = normalized.length;
+    return normalized;
+  }
+
+  private countConversationMessages(normalized: NormalizedMessage[]): number {
     let total = 0;
     for (const msg of normalized) {
       if (msg.kind !== 'tool_result') {
         total += 1;
       }
     }
+    return total;
+  }
+
+  async fetchHistory(
+    sessionId: string,
+    options: FetchHistoryOptions = {},
+  ): Promise<FetchHistoryResult> {
+    const { limit = null, offset = 0 } = options;
     const normalizedOffset = Math.max(0, offset);
     const normalizedLimit = limit === null ? null : Math.max(0, limit);
-    const messages = normalizedLimit === null
-      ? normalized
-      : normalized.slice(
-          Math.max(0, totalNormalized - normalizedOffset - normalizedLimit),
-          Math.max(0, totalNormalized - normalizedOffset),
-        );
-    const hasMore = normalizedLimit === null
-      ? false
-      : Math.max(0, totalNormalized - normalizedOffset - normalizedLimit) > 0;
 
-    return {
-      messages,
-      total,
-      hasMore,
-      offset: normalizedOffset,
-      limit: normalizedLimit,
-    };
+    // Windowed request (open a conversation / scroll up): read only the tail of
+    // the transcript instead of the whole file. The full read is reserved for an
+    // explicit "Load all" (limit === null) so large sessions open instantly.
+    if (normalizedLimit !== null) {
+      try {
+        // Over-read raw rows: normalization expands some rows (assistant
+        // multi-block) and drops others (tool_result), so raw count != message
+        // count. The 4x + 64 budget reliably yields >= the requested window.
+        const budget = (normalizedOffset + normalizedLimit) * 4 + 64;
+        const { messages: rawTail, reachedStart } = await getSessionTail(sessionId, budget);
+        const normalized = this.normalizeRawMessages(rawTail, sessionId);
+
+        const totalNormalized = normalized.length;
+        const start = Math.max(0, totalNormalized - normalizedOffset - normalizedLimit);
+        const end = Math.max(0, totalNormalized - normalizedOffset);
+        const messages = normalized.slice(start, end);
+        // The real total needs a full read; only report it when the tail already
+        // spans the whole transcript. The UI hides the count when total is 0.
+        const total = reachedStart ? this.countConversationMessages(normalized) : 0;
+        const hasMore = !reachedStart || start > 0;
+
+        return { messages, total, hasMore, offset: normalizedOffset, limit: normalizedLimit };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[ClaudeProvider] Failed to load session tail ${sessionId}:`, message);
+        return { messages: [], total: 0, hasMore: false, offset: normalizedOffset, limit: normalizedLimit };
+      }
+    }
+
+    // Full read — "Load all".
+    let result: ClaudeHistoryResult;
+    try {
+      result = await getSessionMessages(sessionId, null, 0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
+      return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
+    }
+
+    const rawMessages = Array.isArray(result) ? result : (result.messages || []);
+    const normalized = this.normalizeRawMessages(rawMessages, sessionId);
+    const total = this.countConversationMessages(normalized);
+
+    return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
   }
 }
