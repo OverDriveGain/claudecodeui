@@ -548,11 +548,14 @@ export function useChatComposerState({
         return;
       }
 
-      // Agent busy → queue the message instead of dropping it. It sends
-      // automatically when the current turn finishes (one per turn); it can be
-      // cancelled from the queue before then. The flush effect replays it
-      // through this same handler once `isLoading` clears.
-      if (isLoading) {
+      // Agent busy:
+      //  - LIVE/REMOTE agent → fall through and send immediately. The message is
+      //    POSTed straight to the agent, whose NATIVE queue orders mid-turn
+      //    messages (exactly how claude.ai/code behaves). No client-side hold,
+      //    so no cancel — same as claude.ai.
+      //  - LOCAL session → hold it client-side and replay one-per-turn when idle
+      //    (the local SDK has no relay-side queue); cancellable from the queue.
+      if (isLoading && !selectedProject?.isRemoteAgent) {
         queueIdRef.current += 1;
         const queued: QueuedMessage = {
           id: `q${queueIdRef.current}`,

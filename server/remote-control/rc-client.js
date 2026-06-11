@@ -79,7 +79,7 @@ export function getRemoteAuth() {
 }
 
 /** Build request headers for the Anthropic API. */
-function headers({ beta, org } = {}) {
+function headers({ beta, org, client } = {}) {
   const { token, orgUuid } = getRemoteAuth();
   const h = {
     Authorization: `Bearer ${token}`,
@@ -88,7 +88,21 @@ function headers({ beta, org } = {}) {
   };
   if (beta) h['anthropic-beta'] = beta;
   if (org) h['x-organization-uuid'] = orgUuid;
+  // Present as the claude.ai/code web client — required for the code-sessions
+  // queue path to behave the same way (native queue instead of interrupt).
+  if (client) {
+    h['anthropic-client-platform'] = 'web_claude_ai';
+    h['anthropic-client-feature'] = 'ccr';
+  }
   return h;
+}
+
+/** cse_/session_ ids share a suffix; build the form each API surface expects. */
+function toCseId(sessionId) {
+  return sessionId.startsWith('session_') ? `cse_${sessionId.slice('session_'.length)}` : sessionId;
+}
+function toSessionId(sessionId) {
+  return sessionId.startsWith('cse_') ? `session_${sessionId.slice('cse_'.length)}` : sessionId;
 }
 
 /** True when a usable OAuth token + org uuid are present (else the proxy is off). */
@@ -229,16 +243,23 @@ export function invalidateSessionEventsCache(sessionId) {
  * reply streams back over the attach WS (opened by attachSession), not this call.
  */
 export async function sendMessage(sessionId, content) {
+  // Mirror claude.ai/code exactly: POST to the CODE-sessions namespace with a
+  // `payload`-wrapped event. This routes the message through the agent's native
+  // queue (it orders messages sent mid-turn) instead of interrupting the current
+  // turn — which is what the plain /v1/sessions/<id>/events path did. URL uses the
+  // cse_ id; the body's session_id uses the session_ form.
   const event = {
-    uuid: crypto.randomUUID(),
-    session_id: sessionId,
-    type: 'user',
-    parent_tool_use_id: null,
-    message: { role: 'user', content },
+    payload: {
+      type: 'user',
+      uuid: crypto.randomUUID(),
+      session_id: toSessionId(sessionId),
+      parent_tool_use_id: null,
+      message: { role: 'user', content },
+    },
   };
-  const r = await fetch(`${BASE}/v1/sessions/${sessionId}/events`, {
+  const r = await fetch(`${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`, {
     method: 'POST',
-    headers: headers({ beta: BETA_CCR, org: true }),
+    headers: headers({ beta: BETA_CCR, org: true, client: true }),
     body: JSON.stringify({ events: [event] }),
   });
   return r.ok;
