@@ -308,6 +308,53 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
 
+    /**
+     * Claude writes a number of `system` rows to the transcript. Most are
+     * internal bookkeeping the CLI never renders (turn_duration, stop_hook_summary,
+     * away_summary, scheduled_task_fire, bridge_status, local_command, ...), but a
+     * few ARE shown to the user in the terminal and must be mirrored here so the
+     * web transcript matches what the operator saw:
+     *   - api_error        → a real error line (overload/retry, request failures)
+     *   - compact_boundary → the "Conversation compacted" divider
+     *   - informational    → notices like "Unknown command: /admin"
+     */
+    if (raw.type === 'system' && raw.isMeta !== true) {
+      const subtype = typeof raw.subtype === 'string' ? raw.subtype : '';
+      if (subtype === 'api_error') {
+        const errMsg =
+          (raw.error && typeof raw.error === 'object' && typeof (raw.error as AnyRecord).message === 'string'
+            ? (raw.error as AnyRecord).message
+            : typeof raw.content === 'string'
+              ? raw.content
+              : '') as string;
+        if (errMsg.trim()) {
+          messages.push(createNormalizedMessage({
+            id: baseId,
+            sessionId,
+            timestamp: ts,
+            provider: PROVIDER,
+            kind: 'error',
+            content: errMsg,
+          }));
+        }
+      } else if (subtype === 'compact_boundary' || subtype === 'informational') {
+        const text = typeof raw.content === 'string' ? raw.content : '';
+        if (text.trim()) {
+          messages.push(createNormalizedMessage({
+            id: baseId,
+            sessionId,
+            timestamp: ts,
+            provider: PROVIDER,
+            kind: 'system',
+            content: text,
+            level: typeof raw.level === 'string' ? raw.level : 'info',
+            isSystemNotice: true,
+          }));
+        }
+      }
+      return messages;
+    }
+
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
       if (Array.isArray(raw.message.content)) {
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {

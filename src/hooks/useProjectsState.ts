@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '../utils/api';
+import { sessionActivityStore } from '../stores/useSessionActivityStore';
 import type {
   AppSocketMessage,
   AppTab,
@@ -420,6 +421,14 @@ export function useProjectsState({
         }, 500);
       }
 
+      return;
+    }
+
+    if (latestMessage.type === 'session_activity') {
+      const ids = Array.isArray(latestMessage.runningSessionIds)
+        ? (latestMessage.runningSessionIds as unknown[]).filter((id): id is string => typeof id === 'string')
+        : [];
+      sessionActivityStore.setRunning(ids);
       return;
     }
 

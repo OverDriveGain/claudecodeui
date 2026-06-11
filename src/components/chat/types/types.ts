@@ -47,6 +47,8 @@ export interface ChatMessage {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  isSystemNotice?: boolean;
+  systemLevel?: string;
   isSubagentContainer?: boolean;
   subagentState?: {
     childTools: SubagentChildTool[];

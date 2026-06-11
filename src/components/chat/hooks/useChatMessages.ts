@@ -157,6 +157,19 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         });
         break;
 
+      case 'system':
+        if (msg.content?.trim()) {
+          converted.push({
+            type: 'assistant',
+            content: msg.content,
+            timestamp: msg.timestamp,
+            isSystemNotice: true,
+            systemLevel: msg.level || 'info',
+            ...sharedMetadata,
+          });
+        }
+        break;
+
       case 'interactive_prompt':
         converted.push({
           type: 'assistant',

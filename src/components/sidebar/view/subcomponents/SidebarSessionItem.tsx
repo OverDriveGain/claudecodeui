@@ -8,6 +8,7 @@ import type { Project, ProjectSession, LLMProvider } from '../../../../types/app
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import { useIsSessionRunning } from '../../../../stores/useSessionActivityStore';
 
 type SidebarSessionItemProps = {
   project: Project;
@@ -76,6 +77,7 @@ export default function SidebarSessionItem({
   t,
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
+  const isRunning = useIsSessionRunning(session.id);
   const isSelected = selectedSession?.id === session.id;
   const isEditing = editingSession === session.id;
   const compactSessionAge = formatCompactSessionAge(sessionView.sessionTime, currentTime);
@@ -117,13 +119,19 @@ export default function SidebarSessionItem({
 
   return (
     <div className="group relative">
-      {sessionView.isActive && (
+      {(isRunning || sessionView.isActive) && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
-          <Tooltip content={t('tooltips.activeSessionIndicator')} position="right">
+          <Tooltip
+            content={isRunning ? t('tooltips.runningSessionIndicator', 'Working…') : t('tooltips.activeSessionIndicator')}
+            position="right"
+          >
             <div
               role="status"
-              aria-label={t('tooltips.activeSessionIndicator')}
-              className="h-2 w-2 animate-pulse rounded-full bg-green-500"
+              aria-label={isRunning ? t('tooltips.runningSessionIndicator', 'Working…') : t('tooltips.activeSessionIndicator')}
+              className={cn(
+                'h-2 w-2 animate-pulse rounded-full',
+                isRunning ? 'bg-blue-500 ring-2 ring-blue-500/40' : 'bg-green-500',
+              )}
             />
           </Tooltip>
         </div>

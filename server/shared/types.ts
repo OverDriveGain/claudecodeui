@@ -167,6 +167,7 @@ export type MessageKind =
   | 'stream_delta'
   | 'stream_end'
   | 'error'
+  | 'system'
   | 'complete'
   | 'status'
   | 'permission_request'

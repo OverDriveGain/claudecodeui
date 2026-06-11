@@ -22,6 +22,7 @@ export type MessageKind =
   | 'stream_delta'
   | 'stream_end'
   | 'error'
+  | 'system'
   | 'complete'
   | 'status'
   | 'permission_request'
@@ -54,6 +55,9 @@ export interface NormalizedMessage {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  /** system-notice severity (compact_boundary/informational): 'info' | 'warning' | 'error' */
+  level?: string;
+  isSystemNotice?: boolean;
   images?: string[];
   toolName?: string;
   toolInput?: unknown;

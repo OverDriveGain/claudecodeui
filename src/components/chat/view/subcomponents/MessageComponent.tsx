@@ -151,6 +151,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
             <span className="text-xs text-gray-500 dark:text-gray-400">{message.content}</span>
           </div>
         </div>
+      ) : message.isSystemNotice ? (
+        /* Centered system notice (compact_boundary, informational) — mirrors the
+           dim divider Claude Code shows in the terminal */
+        <div className="my-1 flex w-full items-center gap-3 px-2">
+          <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+          <span
+            className={`text-xs ${message.systemLevel === 'warning' || message.systemLevel === 'error' ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-500'}`}
+          >
+            {message.content}
+          </span>
+          <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+        </div>
       ) : (
         /* Claude/Error/Tool messages on the left */
         <div className="w-full">
