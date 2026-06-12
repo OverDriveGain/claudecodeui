@@ -360,6 +360,41 @@ function isInternalContent(content: string): boolean {
 }
 
 /**
+ * User messages arrive prefixed with one or more
+ * `<system-reminder>…</system-reminder>` wrappers (e.g. "Message sent at …")
+ * followed by the real text. Dropping the whole message because it *starts* with
+ * a reminder silently discarded real user messages — strip the wrappers and keep
+ * what's left. Returns the cleaned, trimmed text (empty if it was only reminders).
+ */
+function stripSystemReminders(content: string): string {
+  return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+}
+
+/**
+ * Pull base64 image blocks out of a message-content array into render-ready
+ * `{ name, data }` attachments (data is a `data:` URL). The normalizer otherwise
+ * keeps only text, so a sent image (an `image` content block) would be dropped.
+ */
+function extractMessageImages(content: AnyRecord[]): { name: string; data: string }[] {
+  const out: { name: string; data: string }[] = [];
+  for (const part of content) {
+    // Images and PDFs are the only attachment kinds carried as real bytes (base64
+    // content blocks). The renderer detects the kind from the data: URL mime, so
+    // a thumbnail vs a file chip falls out automatically. Other files (audio, zip,
+    // ...) are not content blocks — the harness leaves them as text notes.
+    if (part?.type === 'image' && part.source?.type === 'base64' && part.source?.data) {
+      const media = typeof part.source.media_type === 'string' ? part.source.media_type : 'image/png';
+      out.push({ name: 'image', data: `data:${media};base64,${part.source.data}` });
+    } else if (part?.type === 'document' && part.source?.type === 'base64' && part.source?.data) {
+      const media = typeof part.source.media_type === 'string' ? part.source.media_type : 'application/pdf';
+      const name = typeof part.title === 'string' && part.title.trim() ? part.title : 'document.pdf';
+      out.push({ name, data: `data:${media};base64,${part.source.data}` });
+    }
+  }
+  return out;
+}
+
+/**
  * Claude wraps local slash-command metadata in lightweight XML-like tags inside
  * a plain string payload. We intentionally parse only the small tag surface we
  * care about instead of introducing a generic XML parser for untrusted history.
@@ -496,6 +531,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
+      const userImages = Array.isArray(raw.message.content)
+        ? extractMessageImages(raw.message.content)
+        : [];
       if (Array.isArray(raw.message.content)) {
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
@@ -513,8 +551,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
-            const text = part.text || '';
-            if (text && !isInternalContent(text)) {
+            const cleaned = stripSystemReminders(part.text || '');
+            if (cleaned && !isInternalContent(cleaned)) {
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
                 sessionId,
@@ -522,7 +560,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
                 provider: PROVIDER,
                 kind: 'text',
                 role: 'user',
-                content: text,
+                content: cleaned,
               }));
             }
           }
@@ -534,7 +572,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n');
-          if (textParts && !isInternalContent(textParts)) {
+          const cleanedParts = stripSystemReminders(textParts);
+          if (cleanedParts && !isInternalContent(cleanedParts)) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
               sessionId,
@@ -542,7 +581,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'text',
               role: 'user',
-              content: textParts,
+              content: cleanedParts,
             }));
           }
         }
@@ -622,7 +661,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        if (text && !isInternalContent(text)) {
+        const cleaned = stripSystemReminders(text);
+        if (cleaned && !isInternalContent(cleaned)) {
           messages.push(createNormalizedMessage({
             id: baseId,
             sessionId,
@@ -630,7 +670,27 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             provider: PROVIDER,
             kind: 'text',
             role: 'user',
-            content: text,
+            content: cleaned,
+          }));
+        }
+      }
+
+      // Attach any sent images to the user's text message (or emit a standalone
+      // user row if the message was image-only) so the chat can show a thumbnail.
+      if (userImages.length > 0) {
+        const target = [...messages].reverse().find((m) => m.role === 'user' && m.kind === 'text');
+        if (target) {
+          target.images = userImages;
+        } else {
+          messages.push(createNormalizedMessage({
+            id: `${baseId}_img`,
+            sessionId,
+            timestamp: ts,
+            provider: PROVIDER,
+            kind: 'text',
+            role: 'user',
+            content: '',
+            images: userImages,
           }));
         }
       }

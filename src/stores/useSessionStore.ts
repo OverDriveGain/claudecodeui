@@ -519,26 +519,15 @@ export function useSessionStore() {
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // Keep only realtime messages the server fetch hasn't caught up with yet.
-      // The relay's events API can lag the live stream by a moment, so clearing
-      // ALL realtime here made a just-streamed reply appear and then vanish until
-      // the next refresh. Drop the ones the server now has (by id or text); the
-      // rest stay visible and merge/dedupe once the server catches up.
-      const refreshedIds = new Set(slot.serverMessages.map((m) => m.id));
-      const refreshedTexts = new Set(
-        slot.serverMessages
-          .filter((m) => m.kind === 'text')
-          .map((m) => (m.content || '').trim())
-          .filter(Boolean),
-      );
-      slot.realtimeMessages = slot.realtimeMessages.filter((m) => {
-        if (refreshedIds.has(m.id)) return false;
-        if (m.kind === 'text') {
-          const t = (m.content || '').trim();
-          if (t && refreshedTexts.has(t)) return false;
-        }
-        return true;
-      });
+      // Reconcile realtime against the fetched history by ID. A streamed message
+      // and its fetched copy share the relay event uuid (provider derives the id
+      // from raw.uuid), so this match is exact: drop realtime rows the server now
+      // has, keep the rest. That keeps a just-streamed reply visible (the relay
+      // events API lags the live stream) WITHOUT clearing everything (which made
+      // replies vanish) and WITHOUT timestamp guesses (which dropped replies).
+      // Optimistic local_* sends stay too — computeMerged dedupes those by text.
+      const serverIds = new Set(slot.serverMessages.map((m) => m.id));
+      slot.realtimeMessages = slot.realtimeMessages.filter((m) => !serverIds.has(m.id));
       recomputeMergedIfNeeded(slot);
       notify(resolvedSessionId);
     } catch (error) {

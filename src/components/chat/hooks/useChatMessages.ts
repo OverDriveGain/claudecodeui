@@ -51,7 +51,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     switch (msg.kind) {
       case 'text': {
         const content = msg.content || '';
-        if (!content.trim()) continue;
+        const msgImages = (msg as { images?: { name: string; data: string }[] }).images;
+        const hasImages = Array.isArray(msgImages) && msgImages.length > 0;
+        if (!content.trim() && !hasImages) continue;
 
         if (msg.role === 'user') {
           // Parse task notifications
@@ -71,6 +73,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               type: 'user',
               content: unescapeWithMathProtection(decodeHtmlEntities(content)),
               timestamp: msg.timestamp,
+              ...(hasImages ? { images: msgImages } : {}),
               ...sharedMetadata,
             });
           }
