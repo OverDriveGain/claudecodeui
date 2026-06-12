@@ -519,8 +519,26 @@ export function useSessionStore() {
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // drop realtime messages that the server has caught up with to prevent unbounded growth.
-      slot.realtimeMessages = [];
+      // Keep only realtime messages the server fetch hasn't caught up with yet.
+      // The relay's events API can lag the live stream by a moment, so clearing
+      // ALL realtime here made a just-streamed reply appear and then vanish until
+      // the next refresh. Drop the ones the server now has (by id or text); the
+      // rest stay visible and merge/dedupe once the server catches up.
+      const refreshedIds = new Set(slot.serverMessages.map((m) => m.id));
+      const refreshedTexts = new Set(
+        slot.serverMessages
+          .filter((m) => m.kind === 'text')
+          .map((m) => (m.content || '').trim())
+          .filter(Boolean),
+      );
+      slot.realtimeMessages = slot.realtimeMessages.filter((m) => {
+        if (refreshedIds.has(m.id)) return false;
+        if (m.kind === 'text') {
+          const t = (m.content || '').trim();
+          if (t && refreshedTexts.has(t)) return false;
+        }
+        return true;
+      });
       recomputeMergedIfNeeded(slot);
       notify(resolvedSessionId);
     } catch (error) {
