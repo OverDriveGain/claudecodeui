@@ -18,8 +18,8 @@ export default function ClaudeStatus({ isLoading, externalRunning = false }: Cla
   if (!active) return null;
 
   return (
-    <div className="mb-3 flex w-full items-center justify-center" role="status" aria-label="Working">
-      <div className="mymu-loader select-none text-2xl">
+    <div className="mb-2 flex w-full items-center justify-center" role="status" aria-label="Working">
+      <div className="mymu-loader select-none text-sm">
         <span>M</span>
         <span>y</span>
         <span>M</span>

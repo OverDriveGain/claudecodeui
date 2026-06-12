@@ -29,9 +29,12 @@
 .mymu-loader {
   display: inline-flex;
   align-items: baseline;
-  font-family: 'Koulen', system-ui, sans-serif;
-  font-weight: 400;
-  letter-spacing: 0.04em;
+  /* Mixed-case wordmark "MyMu" — NOT Koulen (which is uppercase-only and would
+     render it as "MYMU"). Use the app's sans so the lowercase y/u show. */
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.01em;
   line-height: 1;
   color: hsl(var(--primary));
 }
