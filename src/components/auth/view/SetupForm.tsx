@@ -85,7 +85,7 @@ export default function SetupForm() {
       title="Welcome to MyMu"
       description="Set up your account to get started"
       footerText="This is a single-user system. Only one account can be created."
-      logo={<img src="/logo.svg" alt="MyMu" className="h-16 w-16" />}
+      logo={<img src="/logo-256.png" alt="MyMu" className="h-16 w-16 rounded-xl" />}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField
