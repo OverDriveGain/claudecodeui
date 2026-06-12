@@ -18,9 +18,15 @@ export type RemoteAgent = {
   id: string; // cse_… / session_… — the live session id to drive
   title: string; // the agent's name (its session title)
   connected: boolean; // honest online/offline (claude.ai's Recents view hides this)
+  repo?: string | null; // stable identity across restarts (git repo)
   lastEventAt?: string; // recency — what the claude.ai "Recents" view orders by
   createdAt?: string;
 };
+
+/** Drop the leading slash a slash-command launch leaves on a session title. */
+function cleanAgentTitle(title: string): string {
+  return title.replace(/^\/+\s*/, '').trim();
+}
 
 /** Stable virtual-project id for a connected agent. */
 export function remoteProjectId(sessionId: string): string {
@@ -95,25 +101,36 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         id: String(s.id ?? ''),
         title: String(s.title ?? 'agent').trim() || 'agent',
         connected: Boolean(s.connected),
+        repo: s.repo ? String(s.repo) : null,
         lastEventAt: s.lastEventAt ? String(s.lastEventAt) : undefined,
         createdAt: s.createdAt ? String(s.createdAt) : undefined,
       }))
-      .filter((s) => s.id && captureAllows(s.title));
+      // Capture policy matches the agent NAME, so test the cleaned title — a
+      // slash-launched session ("/environment") must still match the "environment"
+      // allow pattern, otherwise the live session is filtered out and only dead
+      // older sessions remain.
+      .filter((s) => s.id && captureAllows(cleanAgentTitle(s.title)));
 
-    // One agent can have many sessions (each restart/reconnect makes a new one), so
-    // collapse to one leaf per name — prefer a connected session, otherwise the most
-    // recent (listAgents returns most-recent-first, so the first occurrence wins).
-    const byTitle = new Map<string, RemoteAgent>();
+    // One agent has many sessions (each restart makes a new one, often under a
+    // drifted title). Collapse to one leaf keyed on the STABLE git repo (fall back
+    // to title when absent). listAgents is most-recent-first, so the first session
+    // per key is the live one to drive — dead older sessions are dropped.
+    // No usable directory/cwd is exposed for bridge sessions, and only ~18% carry
+    // a git repo — so key on the repo when present, else the cleaned title (which
+    // absorbs the common "/name" vs "name" slash-launch drift).
+    const byKey = new Map<string, RemoteAgent>();
     for (const a of mapped) {
-      const prev = byTitle.get(a.title);
-      if (!prev || (a.connected && !prev.connected)) byTitle.set(a.title, a);
+      const key = a.repo || cleanAgentTitle(a.title) || a.title;
+      if (!byKey.has(key)) byKey.set(key, a);
     }
 
-    // Sort by recency (most-recently-active first) — the same ordering the claude.ai
-    // "Recents" view uses, so the top of the list matches what the webview shows.
-    const value = [...byTitle.values()].sort((a, b) =>
-      String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
-    );
+    // Sort by recency (most-recently-active first), matching claude.ai "Recents".
+    // Display the cleaned title so a slash-launched name shows normally.
+    const value = [...byKey.values()]
+      .map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title }))
+      .sort((a, b) =>
+        String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
+      );
     agentCache = { at: now, value };
     return value;
   } catch {

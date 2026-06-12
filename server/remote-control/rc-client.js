@@ -148,6 +148,12 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
     isEnvironment: Boolean(s.environment_id),
+    // Stable agent identity across restarts: the git repo the session works on.
+    // The title is derived per-session from its launch/first-prompt and drifts
+    // (e.g. "environment" vs "/environment"), so grouping must key on this.
+    repo: (Array.isArray(s.config?.outcomes)
+      ? s.config.outcomes.find((o) => o?.git_info?.repo)?.git_info?.repo
+      : null) || null,
     // Recency — the same signal the claude.ai "Recents" view orders by.
     lastEventAt: s.last_event_at || s.created_at || '',
     createdAt: s.created_at,
@@ -257,11 +263,23 @@ export async function sendMessage(sessionId, content) {
       message: { role: 'user', content },
     },
   };
-  const r = await fetch(`${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`, {
-    method: 'POST',
-    headers: headers({ beta: BETA_CCR, org: true, client: true }),
-    body: JSON.stringify({ events: [event] }),
-  });
+  const url = `${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`;
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: headers({ beta: BETA_CCR, org: true, client: true }),
+      body: JSON.stringify({ events: [event] }),
+    });
+  } catch (err) {
+    console.error('[rc] sendMessage fetch threw', { sessionId, url, error: err?.message });
+    return false;
+  }
+  if (!r.ok) {
+    let body = '';
+    try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
+    console.error('[rc] sendMessage failed', { sessionId, url, status: r.status, body });
+  }
   return r.ok;
 }
 
