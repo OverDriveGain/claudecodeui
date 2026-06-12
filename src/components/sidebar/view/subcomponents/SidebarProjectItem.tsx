@@ -123,6 +123,9 @@ export default function SidebarProjectItem({
   if (isRemoteAgent) {
     const agentSessionId = project.remoteSessionId || project.projectId.replace(/^remote:/, '');
     const isOnline = project.remoteConnected !== false;
+    // worker_status==='running' on the relay — the agent is mid-turn. Same signal
+    // claude.ai/code shows as a spinner on the session in its left list.
+    const isRunning = Boolean(project.remoteRunning);
     const openAgent = () => {
       onProjectSelect(project);
       onSessionSelect(
@@ -150,15 +153,24 @@ export default function SidebarProjectItem({
           <SquareTerminal className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1 text-left">
             <div className="truncate text-sm font-medium text-foreground">{project.displayName}</div>
-            <div className="text-xs text-muted-foreground">{isOnline ? 'agent' : 'agent · offline'}</div>
+            <div className="text-xs text-muted-foreground">
+              {isRunning ? 'working…' : isOnline ? 'agent' : 'agent · offline'}
+            </div>
           </div>
-          <span
-            className={cn(
-              'h-2 w-2 flex-shrink-0 rounded-full',
-              isOnline ? 'bg-green-500' : 'bg-muted-foreground/40',
-            )}
-            title={isOnline ? 'connected' : 'disconnected'}
-          />
+          {isRunning ? (
+            <span
+              className="h-3 w-3 flex-shrink-0 animate-spin rounded-full border-2 border-primary/30 border-t-primary"
+              title="working"
+            />
+          ) : (
+            <span
+              className={cn(
+                'h-2 w-2 flex-shrink-0 rounded-full',
+                isOnline ? 'bg-green-500' : 'bg-muted-foreground/40',
+              )}
+              title={isOnline ? 'connected' : 'disconnected'}
+            />
+          )}
         </Button>
       </div>
     );

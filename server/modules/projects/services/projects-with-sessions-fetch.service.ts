@@ -46,6 +46,7 @@ export type ProjectListItem = {
   isRemoteAgent?: boolean;
   remoteSessionId?: string;
   remoteConnected?: boolean;
+  remoteRunning?: boolean;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -293,6 +294,7 @@ export async function getProjectsWithSessions(
         isRemoteAgent: true,
         remoteSessionId: agent.id,
         remoteConnected: agent.connected,
+        remoteRunning: agent.running,
       });
     }
   } catch {

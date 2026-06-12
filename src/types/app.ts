@@ -72,6 +72,9 @@ export interface Project {
   isRemoteAgent?: boolean;
   remoteSessionId?: string;
   remoteConnected?: boolean;
+  // worker_status==='running' on the relay — the agent is mid-turn. Drives the
+  // sidebar running dot, exactly like claude.ai/code.
+  remoteRunning?: boolean;
   [key: string]: unknown;
 }
 

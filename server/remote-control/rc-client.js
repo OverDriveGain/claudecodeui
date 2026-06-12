@@ -147,6 +147,11 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     id: s.id,
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
+    // Per-session live work state, exactly as claude.ai/code reads it:
+    // worker_status is "running" while the agent is mid-turn, else "idle"
+    // (or "WORKER_STATUS_UNSPECIFIED" when disconnected/unknown). Drives the
+    // running dot in the sidebar.
+    running: s.worker_status === 'running',
     isEnvironment: Boolean(s.environment_id),
     // Stable agent identity across restarts: the git repo the session works on.
     // The title is derived per-session from its launch/first-prompt and drifts

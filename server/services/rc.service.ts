@@ -9,15 +9,18 @@
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
 import { isRemoteControlConfigured, listAgents } from '@/remote-control/rc-client.js';
 
-// Paging the whole fleet is heavier than a single request, and the roster changes
-// slowly, so cache a little longer to keep API load down.
-const LIST_TTL_MS = 20000;
+// Paging the whole fleet is heavier than a single request. The roster itself
+// changes slowly, but worker_status (the running dot) needs to feel live, and the
+// /agent-status poll is served from this same cache — so keep it short enough that
+// a working agent lights up within a few seconds, like claude.ai/code.
+const LIST_TTL_MS = 5000;
 const REMOTE_PREFIX = 'remote:';
 
 export type RemoteAgent = {
   id: string; // cse_… / session_… — the live session id to drive
   title: string; // the agent's name (its session title)
   connected: boolean; // honest online/offline (claude.ai's Recents view hides this)
+  running: boolean; // worker_status==='running' — agent is mid-turn (sidebar dot)
   repo?: string | null; // stable identity across restarts (git repo)
   lastEventAt?: string; // recency — what the claude.ai "Recents" view orders by
   createdAt?: string;
@@ -101,6 +104,7 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         id: String(s.id ?? ''),
         title: String(s.title ?? 'agent').trim() || 'agent',
         connected: Boolean(s.connected),
+        running: Boolean(s.running),
         repo: s.repo ? String(s.repo) : null,
         lastEventAt: s.lastEventAt ? String(s.lastEventAt) : undefined,
         createdAt: s.createdAt ? String(s.createdAt) : undefined,

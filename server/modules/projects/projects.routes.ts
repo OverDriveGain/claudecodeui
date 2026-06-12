@@ -7,6 +7,7 @@ import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
+import { listRemoteAgents } from '@/services/rc.service.js';
 
 const router = express.Router();
 
@@ -87,6 +88,25 @@ router.get(
   asyncHandler(async (_req, res) => {
     const projects = await getArchivedProjectsWithSessions();
     res.json(createApiSuccessResponse({ projects }));
+  }),
+);
+
+// Lightweight live status for remote-control agents — { id, running, connected }
+// per connected agent. Cheap (served from the rc.service cache), so the client
+// can poll it every few seconds to drive the sidebar running dot the way
+// claude.ai/code polls /v1/code/sessions for worker_status. Never throws.
+router.get(
+  '/agent-status',
+  asyncHandler(async (_req, res) => {
+    let agents: Array<{ id: string; running: boolean; connected: boolean }> = [];
+    try {
+      const list = await listRemoteAgents();
+      agents = list.map((a) => ({ id: a.id, running: a.running, connected: a.connected }));
+    } catch {
+      agents = [];
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ agents });
   }),
 );
 

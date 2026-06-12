@@ -377,6 +377,50 @@ export function useProjectsState({
     void fetchProjects();
   }, [fetchProjects]);
 
+  // Live running state for remote-control agents. claude.ai/code polls its session
+  // list for each agent's worker_status; we mirror that with a cheap status poll and
+  // patch remoteRunning/remoteConnected in place — driving the sidebar running dot
+  // without re-fetching the whole project tree. Only patches when something changed.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await api.agentStatus();
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          agents?: Array<{ id: string; running: boolean; connected: boolean }>;
+        };
+        const byId = new Map((data.agents ?? []).map((a) => [a.id, a]));
+        if (cancelled) return;
+        setProjects((prev) => {
+          let changed = false;
+          const next = prev.map((project) => {
+            if (!project.isRemoteAgent || !project.remoteSessionId) return project;
+            const status = byId.get(project.remoteSessionId);
+            if (!status) return project;
+            if (
+              project.remoteRunning === status.running &&
+              project.remoteConnected === status.connected
+            ) {
+              return project;
+            }
+            changed = true;
+            return { ...project, remoteRunning: status.running, remoteConnected: status.connected };
+          });
+          return changed ? next : prev;
+        });
+      } catch {
+        // transient — try again next tick
+      }
+    };
+    void poll();
+    const interval = setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   useEffect(() => {
     if (!selectedProject?.projectId) {
       return;
