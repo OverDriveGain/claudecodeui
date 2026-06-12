@@ -26,6 +26,7 @@
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
+    --sidebar: 210 40% 98%;
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
@@ -87,9 +88,10 @@
   .dark {
     /* CLion (JetBrains New UI) Dark palette — neutral charcoal, low saturation,
        with CLion's clean blue accent (#3574F0). No more blue-tinted surfaces. */
-    --background: 228 6% 13%;        /* #1E1F22 editor bg */
+    --background: 60 2% 12%;         /* #1f1f1e conversation bg */
     --foreground: 220 11% 89%;       /* #DFE1E5 default text */
-    --card: 220 6% 18%;             /* #2B2D30 tool-window/panel bg */
+    --card: 60 2% 17%;              /* #2c2c2a composer / cards */
+    --sidebar: 0 0% 15%;            /* #262626 left panel */
     --card-foreground: 220 11% 89%;
     --popover: 220 6% 18%;
     --popover-foreground: 220 11% 89%;

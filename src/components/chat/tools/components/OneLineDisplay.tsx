@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { ToolStatusBadge } from './ToolStatusBadge';
 import type { ToolStatus } from './ToolStatusBadge';
@@ -92,16 +94,30 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
       <div className="group my-1">
         <div className="flex items-start gap-2">
           <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5">
-            <svg className="h-3 w-3 text-green-500 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-3 w-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
           <div className="flex min-w-0 flex-1 items-start gap-2">
-            <div className="min-w-0 flex-1 rounded bg-gray-900 px-2.5 py-1 dark:bg-black">
-              <code className={`font-mono text-xs text-green-400 ${wrapText ? 'whitespace-pre-wrap break-all' : 'block truncate'}`}>
-                <span className="select-none text-green-600 dark:text-green-500">$ </span>{value}
-              </code>
-            </div>
+            {toolName === 'Bash' ? (
+              <div className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border/50 bg-card">
+                <SyntaxHighlighter
+                  language="bash"
+                  style={oneDark}
+                  wrapLongLines={wrapText}
+                  customStyle={{ margin: 0, padding: '0.45rem 0.7rem', fontSize: '0.75rem', background: 'transparent', lineHeight: '1.5' }}
+                  codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace' } }}
+                >
+                  {value}
+                </SyntaxHighlighter>
+              </div>
+            ) : (
+              <div className="min-w-0 flex-1 rounded border border-border/50 bg-muted/50 px-2.5 py-1">
+                <code className={`font-mono text-xs text-foreground/90 ${wrapText ? 'whitespace-pre-wrap break-all' : 'block truncate'}`}>
+                  <span className="select-none text-muted-foreground/60">$ </span>{value}
+                </code>
+              </div>
+            )}
             {status && <ToolStatusBadge status={status} className="mt-0.5" />}
             {action === 'copy' && renderCopyButton()}
           </div>

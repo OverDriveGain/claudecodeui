@@ -179,7 +179,7 @@ export default function ChatMessagesPane({
           setInput={setInput}
         />
       ) : (
-        <>
+        <div className="mx-auto w-full max-w-4xl space-y-3 px-1 sm:space-y-4 sm:px-2">
           {/* Loading indicator for older messages (hide when load-all is active) */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
             <div className="py-3 text-center text-gray-500 dark:text-gray-400">
@@ -268,7 +268,7 @@ export default function ChatMessagesPane({
               />
             );
           })}
-        </>
+        </div>
       )}
     </div>
   );
