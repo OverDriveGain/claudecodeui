@@ -162,6 +162,10 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     id: s.id,
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
+    // status==='active' means the relay session is live; 'archived' sessions report
+    // connection_status='connected' too but reject sends with 409 "not active". So a
+    // session is only DRIVABLE when connected AND active — see the dedup in rc.service.
+    active: s.status === 'active',
     // Per-session live work state, as claude.ai/code reads it: worker_status is
     // "running" while the agent is mid-turn, else "idle" (or
     // "WORKER_STATUS_UNSPECIFIED" when disconnected/unknown). Drives the sidebar
@@ -422,14 +426,18 @@ export async function sendMessage(sessionId, content) {
     });
   } catch (err) {
     console.error('[rc] sendMessage fetch threw', { sessionId, url, error: err?.message });
-    return false;
+    return { ok: false, status: 0, notActive: false };
   }
   if (!r.ok) {
     let body = '';
     try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
     console.error('[rc] sendMessage failed', { sessionId, url, status: r.status, body });
+    // 409 "not active": the session is archived/disconnected and can't receive a
+    // message — surface that clearly instead of a generic failure.
+    const notActive = r.status === 409 && /not active/i.test(body);
+    return { ok: false, status: r.status, notActive };
   }
-  return r.ok;
+  return { ok: true, status: r.status, notActive: false };
 }
 
 /**
@@ -625,8 +633,13 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
     // NEXT `result` is treated as this turn's completion — not a stale replayed one.
     const e = activeRemoteSessions.get(sessionId);
     if (e) e.turnActive = true;
-    const ok = await sendMessage(sessionId, content);
-    if (!ok) ws.send(createNormalizedMessage({ kind: 'error', content: 'rc: failed to send message', sessionId, provider: 'claude' }));
+    const sent = await sendMessage(sessionId, content);
+    if (!sent.ok) {
+      const reason = sent.notActive
+        ? 'This agent is offline — its session is archived or disconnected and can’t receive messages. Start/reconnect the agent, then try again.'
+        : 'Couldn’t deliver the message to the agent (the relay rejected it). Please try again.';
+      ws.send(createNormalizedMessage({ kind: 'error', content: reason, sessionId, provider: 'claude' }));
+    }
   }
   return { sessionId };
 }

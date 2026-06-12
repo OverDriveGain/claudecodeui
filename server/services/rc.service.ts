@@ -19,7 +19,9 @@ const REMOTE_PREFIX = 'remote:';
 export type RemoteAgent = {
   id: string; // cse_… / session_… — the live session id to drive
   title: string; // the agent's name (its session title)
-  connected: boolean; // honest online/offline (claude.ai's Recents view hides this)
+  connected: boolean; // DRIVABLE: connected AND active (an archived session reports
+  // connection_status=connected but 409s "not active" on send — so this is the
+  // honest "can I talk to it" flag the GUI shows as the online dot)
   running: boolean; // worker_status==='running' — agent is mid-turn (sidebar dot)
   repo?: string | null; // stable identity across restarts (git repo)
   lastEventAt?: string; // recency — what the claude.ai "Recents" view orders by
@@ -99,11 +101,13 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
   if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return agentCache.value;
   try {
     const raw = await listAgents();
-    const mapped: RemoteAgent[] = (Array.isArray(raw) ? raw : [])
+    type Mapped = RemoteAgent & { active: boolean };
+    const mapped: Mapped[] = (Array.isArray(raw) ? raw : [])
       .map((s: Record<string, unknown>) => ({
         id: String(s.id ?? ''),
         title: String(s.title ?? 'agent').trim() || 'agent',
         connected: Boolean(s.connected),
+        active: Boolean(s.active),
         running: Boolean(s.running),
         repo: s.repo ? String(s.repo) : null,
         lastEventAt: s.lastEventAt ? String(s.lastEventAt) : undefined,
@@ -116,25 +120,27 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
       .filter((s) => s.id && captureAllows(cleanAgentTitle(s.title)));
 
     // One agent has many sessions (each restart makes a new one). Collapse to one
-    // leaf per agent. Key on the CLEANED TITLE first: the capture filter above
-    // already guarantees every surviving session's cleaned title equals a roster
-    // agent name (and cleanAgentTitle absorbs the "/name" vs "name" slash drift), so
-    // the title is the stable identity here. Keying on repo first was WRONG — the
-    // same agent's sessions inconsistently carry a git repo (some do, some don't),
-    // which split one agent (e.g. bti-website) into a repo-keyed leaf AND a
-    // title-keyed leaf, surfacing stale duplicates. Fall back to repo, then id, only
-    // when a title is somehow absent. listAgents is most-recent-first, so the first
-    // session per key is the live one to drive — dead older sessions are dropped.
-    const byKey = new Map<string, RemoteAgent>();
+    // leaf per agent, keyed on the CLEANED TITLE (the capture filter guarantees every
+    // surviving session's cleaned title equals a roster agent name; cleanAgentTitle
+    // absorbs the "/name" vs "name" slash drift). Among an agent's sessions, prefer
+    // the most DRIVABLE one: connected+active beats connected-but-archived beats
+    // disconnected. listAgents is most-recent-first, so within a tier the newest wins.
+    // Without this, the newest session is picked even when archived — and a send to it
+    // 409s "not active" (the exact bug where a green agent can't be messaged).
+    const drivabilityTier = (a: Mapped): number =>
+      a.connected && a.active ? 2 : a.connected ? 1 : 0;
+    const byKey = new Map<string, Mapped>();
     for (const a of mapped) {
       const key = cleanAgentTitle(a.title) || a.repo || a.id;
-      if (!byKey.has(key)) byKey.set(key, a);
+      const cur = byKey.get(key);
+      if (!cur || drivabilityTier(a) > drivabilityTier(cur)) byKey.set(key, a);
     }
 
     // Sort by recency (most-recently-active first), matching claude.ai "Recents".
-    // Display the cleaned title so a slash-launched name shows normally.
+    // Display the cleaned title; expose `connected` as the honest DRIVABLE state
+    // (connected AND active) so the GUI's online dot reflects "can I message it".
     const value = [...byKey.values()]
-      .map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title }))
+      .map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title, connected: a.connected && a.active }))
       .sort((a, b) =>
         String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
       );
