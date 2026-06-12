@@ -122,6 +122,19 @@ export function isRemoteControlConfigured() {
  * decided solely by the capture policy (RC_AGENT_ALLOW/DENY) in rc.service, whose
  * default (unset, or `*`) is show-all.
  */
+// A working agent emits events (thinking tokens, tool use, output) constantly, so a
+// "running" worker_status that hasn't produced an event in this long is a stale flag
+// left by an interrupted turn, not real work. Safety net for the sidebar dot.
+const RUNNING_MAX_IDLE_MS = 90 * 1000;
+
+function isWorkerRunning(s) {
+  if (s.worker_status !== 'running') return false;
+  if (s.connection_status !== 'connected') return false;
+  if (s.status === 'archived') return false;
+  const last = Date.parse(s.last_event_at || s.created_at || '');
+  return Number.isFinite(last) && Date.now() - last < RUNNING_MAX_IDLE_MS;
+}
+
 export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
   // /v1/code/sessions is paginated (default 20, ordered most-recent-first) with a
   // `cursor`/`next_cursor` scheme. Reading only page 1 hid every agent that wasn't
@@ -147,11 +160,16 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     id: s.id,
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
-    // Per-session live work state, exactly as claude.ai/code reads it:
-    // worker_status is "running" while the agent is mid-turn, else "idle"
-    // (or "WORKER_STATUS_UNSPECIFIED" when disconnected/unknown). Drives the
-    // running dot in the sidebar.
-    running: s.worker_status === 'running',
+    // Per-session live work state, as claude.ai/code reads it: worker_status is
+    // "running" while the agent is mid-turn, else "idle" (or
+    // "WORKER_STATUS_UNSPECIFIED" when disconnected/unknown). Drives the sidebar
+    // running dot. BUT the relay leaves a STALE "running" flag on sessions that were
+    // interrupted/disconnected mid-turn and never produced a `result` (e.g.
+    // bti-environment sat at worker_status=running with no event for 130s+). A real
+    // working agent emits events constantly, so trust the flag only for a live
+    // session (connected, not archived) whose last event is recent — an idle-timeout
+    // safety net, same idea as the local-session watcher.
+    running: isWorkerRunning(s),
     isEnvironment: Boolean(s.environment_id),
     // Stable agent identity across restarts: the git repo the session works on.
     // The title is derived per-session from its launch/first-prompt and drifts
