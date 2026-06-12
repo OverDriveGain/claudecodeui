@@ -128,6 +128,19 @@ export default function SidebarHeader({
             {/* Search mode toggle */}
             <div className="flex rounded-lg bg-muted/50 p-0.5">
               <button
+                onClick={() => onSearchModeChange('agents')}
+                aria-pressed={searchMode === 'agents'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold transition-all",
+                  searchMode === 'agents'
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-primary hover:bg-primary/10"
+                )}
+              >
+                <SquareTerminal className="h-3 w-3" />
+                {t('search.modeAgents', { defaultValue: 'Agents' })}
+              </button>
+              <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
                 className={cn(
@@ -152,19 +165,6 @@ export default function SidebarHeader({
               >
                 <MessageSquare className="h-3 w-3" />
                 {t('search.modeConversations')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('agents')}
-                aria-pressed={searchMode === 'agents'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
-                  searchMode === 'agents'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <SquareTerminal className="h-3 w-3" />
-                {t('search.modeAgents', { defaultValue: 'Agents' })}
               </button>
               <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
                 <button
@@ -258,6 +258,19 @@ export default function SidebarHeader({
           <div className="mt-2.5 space-y-2">
             <div className="flex rounded-lg bg-muted/50 p-0.5">
               <button
+                onClick={() => onSearchModeChange('agents')}
+                aria-pressed={searchMode === 'agents'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold transition-all",
+                  searchMode === 'agents'
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-primary hover:bg-primary/10"
+                )}
+              >
+                <SquareTerminal className="h-3 w-3" />
+                {t('search.modeAgents', { defaultValue: 'Agents' })}
+              </button>
+              <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
                 className={cn(
@@ -282,19 +295,6 @@ export default function SidebarHeader({
               >
                 <MessageSquare className="h-3 w-3" />
                 {t('search.modeConversations')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('agents')}
-                aria-pressed={searchMode === 'agents'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
-                  searchMode === 'agents'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <SquareTerminal className="h-3 w-3" />
-                {t('search.modeAgents', { defaultValue: 'Agents' })}
               </button>
               <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
                 <button
