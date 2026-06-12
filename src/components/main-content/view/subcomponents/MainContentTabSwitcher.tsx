@@ -10,6 +10,9 @@ type MainContentTabSwitcherProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   shouldShowTasksTab: boolean;
+  // Remote-control agents are driven over the relay and have no local shell, so the
+  // Shell tab is hidden for them; Files browses the agent's working directory.
+  isRemoteAgent?: boolean;
 };
 
 type BuiltInTab = {
@@ -47,11 +50,14 @@ export default function MainContentTabSwitcher({
   activeTab,
   setActiveTab,
   shouldShowTasksTab,
+  isRemoteAgent = false,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
 
-  const builtInTabs: BuiltInTab[] = shouldShowTasksTab ? [...BASE_TABS, TASKS_TAB] : BASE_TABS;
+  // A live agent has no local shell — drop the Shell tab for it.
+  const baseTabs = isRemoteAgent ? BASE_TABS.filter((tab) => tab.id !== 'shell') : BASE_TABS;
+  const builtInTabs: BuiltInTab[] = shouldShowTasksTab ? [...baseTabs, TASKS_TAB] : baseTabs;
 
   const pluginTabs: PluginTab[] = plugins
     .filter((p) => p.enabled)

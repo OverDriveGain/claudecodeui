@@ -7,7 +7,7 @@
 // capture policy, and the `remote:<sessionId>` virtual-project id helpers.
 
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
-import { isRemoteControlConfigured, listAgents } from '@/remote-control/rc-client.js';
+import { isRemoteControlConfigured, listAgents, getSessionCwd } from '@/remote-control/rc-client.js';
 
 // Paging the whole fleet is heavier than a single request. The roster itself
 // changes slowly, but worker_status (the running dot) needs to feel live, and the
@@ -152,4 +152,18 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
 export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean> {
   const agents = await listRemoteAgents();
   return agents.some((a) => a.id === sessionId);
+}
+
+/**
+ * The agent's working directory (session_context.cwd from the relay), or null.
+ * Capture-gated so a browser can't read an arbitrary agent's path by guessing an id.
+ * Used to point the file browser at the live agent's real directory.
+ */
+export async function getRemoteAgentCwd(sessionId: string): Promise<string | null> {
+  if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return null;
+  try {
+    return (await getSessionCwd(sessionId)) || null;
+  } catch {
+    return null;
+  }
 }

@@ -92,6 +92,14 @@ function MainContent({
     }
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
 
+  // A live agent has no Shell tab; if one is opened while Shell is active, fall back
+  // to Chat so the user isn't left on a now-hidden, blank tab.
+  useEffect(() => {
+    if (selectedProject?.isRemoteAgent && activeTab === 'shell') {
+      setActiveTab('chat');
+    }
+  }, [selectedProject?.isRemoteAgent, activeTab, setActiveTab]);
+
   usePaletteOpsRegister({
     openFile: (filePath: string) => {
       setActiveTab('files');

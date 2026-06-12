@@ -265,6 +265,32 @@ export function invalidateSessionEventsCache(sessionId) {
   else sessionEventsCache.clear();
 }
 
+// sessionId -> cwd. The agent's working directory is reported by the relay in the
+// session detail (session_context.cwd) and is stable for the life of the session,
+// so resolve it once and cache. This is how the GUI points its file browser at the
+// agent's real directory — claude.ai/code itself doesn't expose the files, but it
+// does tell us where the agent is working.
+const sessionCwdCache = new Map();
+
+export async function getSessionCwd(sessionId) {
+  if (!sessionId) return null;
+  if (sessionCwdCache.has(sessionId)) return sessionCwdCache.get(sessionId);
+  try {
+    const url = `${BASE}/v1/sessions/${toSessionId(sessionId)}`;
+    const r = await fetch(url, { headers: headers({ beta: BETA_CCR, org: true }) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const cwd =
+      (j && j.session_context && typeof j.session_context.cwd === 'string' && j.session_context.cwd) ||
+      (j && j.response_shape && j.response_shape.session_context && j.response_shape.session_context.cwd) ||
+      null;
+    if (cwd) sessionCwdCache.set(sessionId, cwd);
+    return cwd || null;
+  } catch {
+    return null;
+  }
+}
+
 // ───────────────────────────── DRIVE SIDE ──────────────────────────────────
 
 /**

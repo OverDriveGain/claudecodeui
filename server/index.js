@@ -84,6 +84,7 @@ import providerRoutes from './modules/providers/provider.routes.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
+import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd } from './services/rc.service.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { c } from './utils/colors.js';
@@ -92,6 +93,19 @@ const __dirname = getModuleDir(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
 // Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
 const APP_ROOT = findAppRoot(__dirname);
+
+// Resolve a projectId to an absolute directory on disk. Normal projects resolve via
+// the DB; a live remote-control agent (`remote:<sessionId>`) has no DB row, so we
+// resolve it to the agent's working directory (session_context.cwd) reported by the
+// relay — letting the EXISTING file-tree / content / video-range / git routes browse
+// the agent's real folder with no new transport. Returns null if unresolved (e.g. the
+// agent runs on another host, so its cwd isn't on this filesystem).
+async function resolveProjectRootById(projectId) {
+    if (isRemoteProjectId(projectId)) {
+        return await getRemoteAgentCwd(sessionIdFromProjectId(projectId));
+    }
+    return await projectsDb.getProjectPathById(projectId);
+}
 const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
 const MAX_FILE_UPLOAD_SIZE_MB = 200;
 const MAX_FILE_UPLOAD_SIZE_BYTES = MAX_FILE_UPLOAD_SIZE_MB * 1024 * 1024;
@@ -465,7 +479,7 @@ app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
 
         // Resolve the absolute project root via the DB-backed helper; the
         // caller passes the DB-assigned `projectId`, not a folder name.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -506,7 +520,7 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         }
 
         // Projects are now addressed by DB `projectId`, resolved to their path here.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -611,7 +625,7 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
         }
 
         // Projects are now addressed by DB `projectId`, resolved to their path here.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -652,7 +666,7 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
 
         // Resolve the project's absolute path through the DB (projectId is the
         // primary key of the `projects` table after the identifier migration).
-        const actualPath = await projectsDb.getProjectPathById(req.params.projectId);
+        const actualPath = await resolveProjectRootById(req.params.projectId);
         if (!actualPath) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -740,7 +754,7 @@ app.post('/api/projects/:projectId/files/create', authenticateToken, async (req,
         }
 
         // Resolve the project directory through the DB using the new projectId.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -813,7 +827,7 @@ app.put('/api/projects/:projectId/files/rename', authenticateToken, async (req, 
         }
 
         // Resolve the project directory through the DB using the new projectId.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -885,7 +899,7 @@ app.delete('/api/projects/:projectId/files', authenticateToken, async (req, res)
         }
 
         // Resolve the project directory through the DB using the new projectId.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -1008,7 +1022,7 @@ const uploadFilesHandler = async (req, res) => {
                 : req.files.length;
 
             // Resolve the project directory through the DB using the new projectId.
-            const projectRoot = await projectsDb.getProjectPathById(projectId);
+            const projectRoot = await resolveProjectRootById(projectId);
             if (!projectRoot) {
                 return res.status(404).json({ error: 'Project not found' });
             }
