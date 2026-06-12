@@ -7,6 +7,7 @@
 
 import {
   driveRemoteSession,
+  attachSession,
   abortRemoteSession,
   resolveRemotePermission,
   isActiveRemoteSession,
@@ -42,6 +43,25 @@ export async function queryRemoteChannel(command, options, writer) {
   // Forward composer attachments (options.images, upload-images shape) so files
   // attached to a live agent are folded into the message as content blocks.
   return driveRemoteSession({ ws: writer, sessionId, command, images: opts.images, normalize: normalizeClaude });
+}
+
+/**
+ * Subscribe (read-only) to a connected agent's session so the GUI mirrors it LIVE
+ * — exactly like claude.ai/code, which holds an open subscription per open session
+ * and receives every event (user messages typed in the terminal, thinking-token
+ * progress, assistant output, result) as it happens. Called when the web UI OPENS
+ * an agent, before/without sending anything. Attaches the upstream relay socket and
+ * binds it to this writer; the engine is idempotent per session and rebinds the
+ * writer on reconnect. No-op (silently) if the capture policy hides the agent.
+ */
+export async function subscribeRemoteChannel(sessionId, writer) {
+  if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return;
+  try {
+    await attachSession(sessionId, writer, normalizeClaude);
+  } catch {
+    // relay unreachable / transient — the GUI still has history; live mirror resumes
+    // on the next open or send.
+  }
 }
 
 // Stop + permission answer route straight to the engine (it already strips the

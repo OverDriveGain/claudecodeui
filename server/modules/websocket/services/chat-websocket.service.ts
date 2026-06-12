@@ -30,6 +30,8 @@ type ChatWebSocketDependencies = {
   // driven over the proxy; abort/permission route by the rc: prefix / active session.
   isRemoteCommand: (options: unknown) => boolean;
   queryRemoteChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  // Read-only live subscription to a connected agent (opened when the GUI views it).
+  subscribeRemoteChannel: (sessionId: string, writer: WebSocketWriter) => Promise<unknown>;
   isRemoteSession: (sessionId: string) => boolean;
   abortRemoteSession: (sessionId: string) => boolean;
   resolveRemotePermission: (requestId: string, decision: unknown) => boolean;
@@ -123,6 +125,17 @@ export function handleChatConnection(
       const messageType = data.type;
       if (!messageType) {
         throw new Error('Message type is required');
+      }
+
+      // Read-only live subscription: the GUI opened a remote-control agent and wants
+      // its stream mirrored live (terminal messages, thinking progress, output) the
+      // way claude.ai/code does — without sending anything.
+      if (messageType === 'rc-subscribe') {
+        const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+        if (sessionId) {
+          await dependencies.subscribeRemoteChannel(sessionId, writer);
+        }
+        return;
       }
 
       if (messageType === 'claude-command') {

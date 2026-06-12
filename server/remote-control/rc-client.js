@@ -330,6 +330,16 @@ export async function attachSession(sessionId, ws, normalize) {
     // captured when this upstream first opened.
     const out = activeRemoteSessions.get(sessionId)?.ws || ws;
 
+    // Live "thinking" progress. claude.ai/code shows a working indicator driven by
+    // these frames (a running token estimate) while the model thinks. Translate it
+    // into the GUI's per-session processing signal so the loader reflects the turn
+    // live — gated to the viewed session on the client, and cleared by `result`
+    // below. These frames are live-only; history never sees them.
+    if (m.type === 'system' && m.subtype === 'thinking_tokens') {
+      out.send({ type: 'session-status', sessionId, isProcessing: true });
+      return;
+    }
+
     // Permission prompt — the agent wants to use a tool; relay to the GUI's
     // existing permission UI. `rc:` prefixes the id so the answer routes back here.
     if (m.type === 'control_request' && m.request?.subtype === 'can_use_tool') {

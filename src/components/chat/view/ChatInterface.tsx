@@ -220,6 +220,28 @@ function ChatInterface({
   const openSessionRunning = useIsSessionRunning(currentSessionId || selectedSession?.id || '');
   const externalRunning = openSessionRunning && !isLoading;
 
+  // Subscribe-on-open: when viewing a remote-control agent, open a read-only LIVE
+  // subscription so its stream mirrors into the GUI exactly like claude.ai/code —
+  // messages typed in the agent's terminal, thinking progress, and output appear
+  // live without having to send first. Re-running on `ws` change re-subscribes after
+  // a reconnect, which also rebinds the server's live stream to the current socket.
+  // The server attach is idempotent per session, so repeat sends are cheap.
+  useEffect(() => {
+    if (!selectedProject?.isRemoteAgent) return;
+    const agentSessionId =
+      selectedProject.remoteSessionId || currentSessionId || selectedSession?.id;
+    if (!agentSessionId) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    sendMessage({ type: 'rc-subscribe', sessionId: agentSessionId });
+  }, [
+    ws,
+    selectedProject?.isRemoteAgent,
+    selectedProject?.remoteSessionId,
+    currentSessionId,
+    selectedSession?.id,
+    sendMessage,
+  ]);
+
   // On WebSocket reconnect, re-fetch the current session's messages from the server
   // so missed streaming events are shown. Also reset isLoading.
   const handleWebSocketReconnect = useCallback(async () => {

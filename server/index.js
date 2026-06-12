@@ -32,6 +32,7 @@ import {
 import {
     isRemoteCommand,
     queryRemoteChannel,
+    subscribeRemoteChannel,
     isRemoteSession,
     abortRemoteSession,
     resolveRemotePermission,
@@ -116,6 +117,7 @@ const wss = createWebSocketServer(server, {
         queryClaudeSDK,
         isRemoteCommand,
         queryRemoteChannel,
+        subscribeRemoteChannel,
         isRemoteSession,
         abortRemoteSession,
         resolveRemotePermission,
