@@ -56,7 +56,10 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   status,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const isTerminal = style === 'terminal';
+  const commandLines = (value || '').split('\n');
+  const isMultilineCommand = commandLines.length > 1;
 
   const handleAction = async () => {
     if (action === 'copy' && value) {
@@ -100,16 +103,34 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
           </div>
           <div className="flex min-w-0 flex-1 items-start gap-2">
             {toolName === 'Bash' ? (
-              <div className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border/50 bg-card">
-                <SyntaxHighlighter
-                  language="bash"
-                  style={oneDark}
-                  wrapLongLines={wrapText}
-                  customStyle={{ margin: 0, padding: '0.45rem 0.7rem', fontSize: '0.75rem', background: 'transparent', lineHeight: '1.5' }}
-                  codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace' } }}
-                >
-                  {value}
-                </SyntaxHighlighter>
+              <div className="min-w-0 flex-1">
+                {isMultilineCommand && (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded((e) => !e)}
+                    className="flex w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                    title={expanded ? 'Collapse command' : 'Show full command'}
+                  >
+                    <svg className={`h-3 w-3 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                    <span className="min-w-0 flex-1 truncate font-mono text-foreground/80">{expanded ? 'Command' : commandLines[0]}</span>
+                    {!expanded && <span className="shrink-0 opacity-60">+{commandLines.length - 1}</span>}
+                  </button>
+                )}
+                {(!isMultilineCommand || expanded) && (
+                  <div className="mt-0.5 overflow-x-auto rounded-md border border-border/50 bg-card">
+                    <SyntaxHighlighter
+                      language="bash"
+                      style={oneDark}
+                      wrapLongLines={wrapText}
+                      customStyle={{ margin: 0, padding: '0.45rem 0.7rem', fontSize: '0.75rem', background: 'transparent', lineHeight: '1.5' }}
+                      codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace' } }}
+                    >
+                      {value}
+                    </SyntaxHighlighter>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="min-w-0 flex-1 rounded border border-border/50 bg-muted/50 px-2.5 py-1">

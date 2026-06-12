@@ -118,16 +118,33 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
               {message.content}
             </div>
             {message.images && message.images.length > 0 && (
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {message.images.map((img, idx) => (
-                  <img
-                    key={img.name || idx}
-                    src={img.data}
-                    alt={img.name}
-                    className="h-auto max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
-                    onClick={() => window.open(img.data, '_blank')}
-                  />
-                ))}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {message.images.map((img, idx) =>
+                  (img.data || '').startsWith('data:image/') ? (
+                    <img
+                      key={img.name || idx}
+                      src={img.data}
+                      alt={img.name}
+                      title={img.name}
+                      className="h-16 w-16 cursor-pointer rounded-lg border border-border/40 object-cover transition-opacity hover:opacity-80"
+                      onClick={() => window.open(img.data, '_blank')}
+                    />
+                  ) : (
+                    <button
+                      key={img.name || idx}
+                      type="button"
+                      title={img.name}
+                      onClick={() => window.open(img.data, '_blank')}
+                      className="flex max-w-[220px] items-center gap-2 rounded-lg border border-border/40 bg-black/20 px-2.5 py-2 text-left text-xs transition-colors hover:bg-black/30"
+                    >
+                      <svg className="h-4 w-4 shrink-0 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      <span className="truncate">{img.name}</span>
+                    </button>
+                  ),
+                )}
               </div>
             )}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
@@ -138,7 +155,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
             </div>
           </div>
           {!isGrouped && (
-            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm text-white sm:flex">
+            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground sm:flex">
               U
             </div>
           )}

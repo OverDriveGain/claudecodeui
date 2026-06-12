@@ -21,6 +21,30 @@
   }
 }
 
+/* MyMu brand loader — each letter swells small→big→small in sequence */
+@keyframes mymu-letter-pulse {
+  0%, 55%, 100% { transform: scale(1); opacity: 0.4; }
+  27% { transform: scale(1.55); opacity: 1; }
+}
+.mymu-loader {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: 'Koulen', system-ui, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: hsl(var(--primary));
+}
+.mymu-loader span {
+  display: inline-block;
+  transform-origin: center bottom;
+  animation: mymu-letter-pulse 1.5s ease-in-out infinite;
+}
+.mymu-loader span:nth-child(1) { animation-delay: 0s; }
+.mymu-loader span:nth-child(2) { animation-delay: 0.16s; }
+.mymu-loader span:nth-child(3) { animation-delay: 0.32s; }
+.mymu-loader span:nth-child(4) { animation-delay: 0.48s; }
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -88,15 +112,17 @@
   .dark {
     /* CLion (JetBrains New UI) Dark palette — neutral charcoal, low saturation,
        with CLion's clean blue accent (#3574F0). No more blue-tinted surfaces. */
-    --background: 60 2% 12%;         /* #1f1f1e conversation bg */
+    /* Neutral dark scale anchored on the M icon's bg (#222222 = the darkest =
+       the chat), fading lighter for the surfaces above it. */
+    --background: 0 0% 13%;          /* #222222 conversation bg (the M's bg, darkest) */
     --foreground: 220 11% 89%;       /* #DFE1E5 default text */
-    --card: 60 2% 17%;              /* #2c2c2a composer / cards */
+    --card: 0 0% 18%;               /* #2e2e2e composer / cards */
     --sidebar: 0 0% 15%;            /* #262626 left panel */
     --card-foreground: 220 11% 89%;
-    --popover: 220 6% 18%;
+    --popover: 0 0% 18%;
     --popover-foreground: 220 11% 89%;
-    --primary: 220 86% 58%;          /* #3574F0 accent blue */
-    --primary-foreground: 0 0% 100%;
+    --primary: 264 56% 70%;          /* #AA88DD — the M (brand accent) */
+    --primary-foreground: 0 0% 13%;  /* dark text on the light-purple accent */
     --secondary: 222 6% 24%;         /* #393B40 */
     --secondary-foreground: 220 11% 89%;
     --muted: 220 6% 18%;
@@ -107,19 +133,19 @@
     --destructive-foreground: 0 0% 100%;
     --border: 222 6% 24%;            /* #393B40 */
     --input: 222 5% 30%;             /* #43454A input border */
-    --ring: 220 86% 58%;
+    --ring: 264 56% 70%;
 
     /* Nav design tokens — dark overrides */
     --nav-glass-bg: 220 6% 18% / 0.55;
     --nav-glass-blur: 24px;
     --nav-glass-saturate: 1.6;
-    --nav-tab-glow: 220 86% 58% / 0.25;
-    --nav-tab-ring: 220 86% 58% / 0.15;
+    --nav-tab-glow: 264 56% 70% / 0.25;
+    --nav-tab-ring: 264 56% 70% / 0.15;
     --nav-float-shadow: 0 0% 0% / 0.35;
     --nav-float-ring: 222 6% 24% / 0.3;
     --nav-divider-color: 222 6% 24% / 0.5;
     --nav-input-bg: 222 6% 24% / 0.5;
-    --nav-input-focus-ring: 220 86% 58% / 0.25;
+    --nav-input-focus-ring: 264 56% 70% / 0.25;
   }
 }
 
