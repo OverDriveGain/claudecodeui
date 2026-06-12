@@ -29,6 +29,8 @@
  */
 
 import { readFileSync } from 'fs';
+import { mkdir, readFile, writeFile, rename, readdir, stat, unlink } from 'fs/promises';
+import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 
@@ -235,24 +237,122 @@ function evictSessionEventsCache() {
   }
 }
 
+// ── Disk persistence for the event cache ───────────────────────────────────────
+// The in-memory cache above is wiped on every restart, so a big session (10k+
+// events) pays the full ~10s relay page-through again on the first open after a
+// restart. We persist the raw event log to disk and, on a cold process, load it and
+// top up only the events created since the saved cursor. This is safe with ZERO
+// invalidation logic because the relay event log is APPEND-ONLY: the cached prefix
+// always matches the relay's prefix, so the on-disk copy can only ever be extended,
+// never become wrong. Any failure (missing/corrupt file, write error, bad cursor)
+// silently falls back to the exact pre-existing behaviour — a full page-through — so
+// the worst case is "no speed-up", never incorrect history. Raw events (not
+// normalized) are stored, so a normalizer change can't leave stale rendered data.
+const EVENTS_CACHE_DIR =
+  process.env.RC_EVENTS_CACHE_DIR || path.join(os.homedir(), '.cache', 'ccui-rc-events');
+const EVENTS_DISK_MAX = 80;            // cap files on disk (LRU by mtime)
+const EVENTS_DISK_SAVE_THROTTLE_MS = 15000; // don't rewrite a multi-MB file on every top-up
+
+// sessionIds are relay ids (cse_…/session_…) — alnum + underscore, safe as filenames.
+function eventsCacheFile(sessionId) {
+  return path.join(EVENTS_CACHE_DIR, `${sessionId}.json`);
+}
+
+async function loadDiskEvents(sessionId) {
+  try {
+    const j = JSON.parse(await readFile(eventsCacheFile(sessionId), 'utf8'));
+    if (j && Array.isArray(j.events) && j.events.length) {
+      return { events: j.events, lastId: typeof j.lastId === 'string' ? j.lastId : null };
+    }
+  } catch { /* missing/corrupt → caller pages from the relay */ }
+  return null;
+}
+
+let diskEvictInFlight = false;
+async function evictDiskEvents() {
+  if (diskEvictInFlight) return;
+  diskEvictInFlight = true;
+  try {
+    const all = await readdir(EVENTS_CACHE_DIR);
+    // Sweep orphaned temp files left by a write that was killed before the rename.
+    for (const f of all.filter((f) => f.endsWith('.tmp'))) {
+      try {
+        if (Date.now() - (await stat(path.join(EVENTS_CACHE_DIR, f))).mtimeMs > 60000) {
+          await unlink(path.join(EVENTS_CACHE_DIR, f)).catch(() => {});
+        }
+      } catch { /* ignore */ }
+    }
+    const files = all.filter((f) => f.endsWith('.json'));
+    if (files.length <= EVENTS_DISK_MAX) return;
+    const withMtime = await Promise.all(
+      files.map(async (f) => {
+        try { return { f, m: (await stat(path.join(EVENTS_CACHE_DIR, f))).mtimeMs }; }
+        catch { return { f, m: 0 }; }
+      }),
+    );
+    withMtime.sort((a, b) => a.m - b.m); // oldest first
+    for (const { f } of withMtime.slice(0, files.length - EVENTS_DISK_MAX)) {
+      await unlink(path.join(EVENTS_CACHE_DIR, f)).catch(() => {});
+    }
+  } catch { /* best-effort */ }
+  finally { diskEvictInFlight = false; }
+}
+
+async function saveDiskEvents(sessionId, events, lastId) {
+  try {
+    await mkdir(EVENTS_CACHE_DIR, { recursive: true });
+    const file = eventsCacheFile(sessionId);
+    const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await writeFile(tmp, JSON.stringify({ lastId: lastId || null, events, savedAt: Date.now() }));
+    await rename(tmp, file); // atomic — a crash mid-write can't corrupt the live file
+    void evictDiskEvents();
+  } catch { /* disk full / read-only / etc — in-memory cache still works */ }
+}
+
 /**
- * Cached event history for a session. First call pays the full page-through;
- * later calls serve from cache and (when `topUp`) fetch only events created after
- * the last cursor — append-only transcripts make this safe. Returns the full
+ * Cached event history for a session. First call (cold process) loads the on-disk
+ * copy when present and tops it up from the relay, else pages the whole history;
+ * later calls serve from memory and (when `topUp`) fetch only events created after
+ * the last cursor — append-only transcripts make all of this safe. Returns the full
  * oldest-first raw event array; the caller windows/normalizes it.
  */
 export async function getSessionEventsCached(sessionId, { topUp = true } = {}) {
   let entry = sessionEventsCache.get(sessionId);
   if (!entry) {
+    const disk = await loadDiskEvents(sessionId);
+    if (disk) {
+      // Warm-start from disk, then sync only the suffix the relay added since.
+      entry = { events: disk.events, lastId: disk.lastId, fetchedAt: Date.now(), lastDiskSaveAt: Date.now() };
+      let appended = false;
+      if (topUp) {
+        try {
+          const { events: fresh, lastId } = await getSessionEvents(sessionId, { after: entry.lastId });
+          if (fresh.length) { entry.events = entry.events.concat(fresh); if (lastId) entry.lastId = lastId; appended = true; }
+        } catch { /* keep the disk copy; the GUI dedups by uuid and the next call retries */ }
+      }
+      sessionEventsCache.set(sessionId, entry);
+      evictSessionEventsCache();
+      if (appended) await saveDiskEvents(sessionId, entry.events, entry.lastId);
+      return entry.events;
+    }
+    // No disk copy → original behaviour: page the whole history, then persist it.
     const { events, lastId } = await getSessionEvents(sessionId, {});
-    entry = { events, lastId, fetchedAt: Date.now() };
+    entry = { events, lastId, fetchedAt: Date.now(), lastDiskSaveAt: Date.now() };
     sessionEventsCache.set(sessionId, entry);
     evictSessionEventsCache();
+    await saveDiskEvents(sessionId, entry.events, entry.lastId);
   } else if (topUp) {
     const { events: fresh, lastId } = await getSessionEvents(sessionId, { after: entry.lastId });
     if (fresh.length) {
       entry.events = entry.events.concat(fresh);
       if (lastId) entry.lastId = lastId;
+      // Throttle disk writes: an actively-watched big session tops up often, and the
+      // file is multi-MB. A lagging on-disk cursor just means a few re-fetched
+      // (uuid-deduped) events next cold start — harmless.
+      if (Date.now() - (entry.lastDiskSaveAt || 0) > EVENTS_DISK_SAVE_THROTTLE_MS) {
+        entry.lastDiskSaveAt = Date.now();
+        await saveDiskEvents(sessionId, entry.events, entry.lastId);
+      }
     }
     entry.fetchedAt = Date.now();
   }
