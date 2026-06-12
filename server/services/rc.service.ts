@@ -115,16 +115,19 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
       // older sessions remain.
       .filter((s) => s.id && captureAllows(cleanAgentTitle(s.title)));
 
-    // One agent has many sessions (each restart makes a new one, often under a
-    // drifted title). Collapse to one leaf keyed on the STABLE git repo (fall back
-    // to title when absent). listAgents is most-recent-first, so the first session
-    // per key is the live one to drive — dead older sessions are dropped.
-    // No usable directory/cwd is exposed for bridge sessions, and only ~18% carry
-    // a git repo — so key on the repo when present, else the cleaned title (which
-    // absorbs the common "/name" vs "name" slash-launch drift).
+    // One agent has many sessions (each restart makes a new one). Collapse to one
+    // leaf per agent. Key on the CLEANED TITLE first: the capture filter above
+    // already guarantees every surviving session's cleaned title equals a roster
+    // agent name (and cleanAgentTitle absorbs the "/name" vs "name" slash drift), so
+    // the title is the stable identity here. Keying on repo first was WRONG — the
+    // same agent's sessions inconsistently carry a git repo (some do, some don't),
+    // which split one agent (e.g. bti-website) into a repo-keyed leaf AND a
+    // title-keyed leaf, surfacing stale duplicates. Fall back to repo, then id, only
+    // when a title is somehow absent. listAgents is most-recent-first, so the first
+    // session per key is the live one to drive — dead older sessions are dropped.
     const byKey = new Map<string, RemoteAgent>();
     for (const a of mapped) {
-      const key = a.repo || cleanAgentTitle(a.title) || a.title;
+      const key = cleanAgentTitle(a.title) || a.repo || a.id;
       if (!byKey.has(key)) byKey.set(key, a);
     }
 
