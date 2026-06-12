@@ -292,7 +292,18 @@ export async function sendMessage(sessionId, content) {
  * continues in the background.
  */
 export async function attachSession(sessionId, ws, normalize) {
-  if (activeRemoteSessions.has(sessionId)) return activeRemoteSessions.get(sessionId);
+  // Rebind to the LATEST GUI writer. The browser↔server WS reconnects on mobile
+  // network blips, tab reloads, and SW updates — handing us a fresh writer while
+  // the upstream relay subscription is still alive. Without rebinding, frames keep
+  // streaming to the dead original writer and the chat silently stops updating
+  // ("works at first, then nothing"). The handlers below read `entry.ws`, so this
+  // single assignment redirects the live stream to the new connection.
+  const existing = activeRemoteSessions.get(sessionId);
+  if (existing) {
+    existing.ws = ws;
+    if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
+    return existing;
+  }
   const { token, orgUuid } = getRemoteAuth();
   const url = `${WS_BASE}/v1/sessions/ws/${sessionId}/subscribe?organization_uuid=${orgUuid}`;
   const upstream = new WebSocket(url, {
@@ -310,13 +321,16 @@ export async function attachSession(sessionId, ws, normalize) {
   upstream.on('message', (data) => {
     let m;
     try { m = JSON.parse(data.toString()); } catch { return; }
+    // Always write to the CURRENT writer (rebound on reconnect), never the one
+    // captured when this upstream first opened.
+    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
 
     // Permission prompt — the agent wants to use a tool; relay to the GUI's
     // existing permission UI. `rc:` prefixes the id so the answer routes back here.
     if (m.type === 'control_request' && m.request?.subtype === 'can_use_tool') {
       const rawId = m.request_id || crypto.randomUUID();
       pendingRemotePermissions.set(rawId, { sessionId });
-      ws.send(createNormalizedMessage({
+      out.send(createNormalizedMessage({
         kind: 'permission_request',
         requestId: `rc:${rawId}`,
         toolName: m.request.tool_name,
@@ -329,7 +343,7 @@ export async function attachSession(sessionId, ws, normalize) {
     // The agent withdrew a prompt (e.g. it timed out) — dismiss it in the GUI.
     if (m.type === 'control_cancel_request') {
       pendingRemotePermissions.delete(m.request_id);
-      ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId: m.request_id, sessionId, provider: 'claude' }));
+      out.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId: m.request_id, sessionId, provider: 'claude' }));
       return;
     }
     if (m.type === 'control_response') return; // ack frame — nothing to render
@@ -339,9 +353,9 @@ export async function attachSession(sessionId, ws, normalize) {
     if (normalize) {
       try {
         const normalized = normalize(m, sessionId) || [];
-        for (const out of normalized) ws.send(out);
+        for (const frame of normalized) out.send(frame);
       } catch (err) {
-        ws.send(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
+        out.send(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
       }
     }
     // End-of-TURN: a `result` SDK message means the agent finished this turn. The
@@ -353,17 +367,19 @@ export async function attachSession(sessionId, ws, normalize) {
       const e = activeRemoteSessions.get(sessionId);
       if (e && !e.turnActive) return;
       if (e) e.turnActive = false;
-      ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
+      out.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
     }
   });
 
   upstream.on('close', (code) => {
+    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
     activeRemoteSessions.delete(sessionId);
     // 4003 = unauthorized (permanent). Anything else: the worker/session ended.
-    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code === 4003 ? 1 : 0, sessionId, provider: 'claude' }));
+    out.send(createNormalizedMessage({ kind: 'complete', exitCode: code === 4003 ? 1 : 0, sessionId, provider: 'claude' }));
   });
   upstream.on('error', (err) => {
-    ws.send(createNormalizedMessage({ kind: 'error', content: `rc ws: ${err.message}`, sessionId, provider: 'claude' }));
+    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
+    out.send(createNormalizedMessage({ kind: 'error', content: `rc ws: ${err.message}`, sessionId, provider: 'claude' }));
   });
 
   await new Promise((resolve, reject) => {
