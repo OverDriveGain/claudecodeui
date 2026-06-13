@@ -113,7 +113,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
       {message.type === 'user' ? (
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className="group flex-1 rounded-2xl rounded-br-md bg-[#30302f] px-3 py-2 text-gray-100 shadow-sm sm:flex-initial sm:px-4">
+          <div className="group flex-1 rounded-2xl rounded-br-md bg-[#2e2e2e] px-3 py-2 text-gray-100 shadow-sm sm:flex-initial sm:px-4">
             <div dir="auto" className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
               {message.content}
             </div>

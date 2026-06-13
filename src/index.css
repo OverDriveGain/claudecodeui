@@ -113,41 +113,41 @@
   }
 
   .dark {
-    /* CLion (JetBrains New UI) Dark palette — neutral charcoal, low saturation,
-       with CLion's clean blue accent (#3574F0). No more blue-tinted surfaces. */
-    /* Neutral dark scale anchored on the M icon's bg (#222222 = the darkest =
-       the chat), fading lighter for the surfaces above it. */
-    --background: 0 0% 13%;          /* #222222 conversation bg (the M's bg, darkest) */
-    --foreground: 220 11% 89%;       /* #DFE1E5 default text */
-    --card: 0 0% 18%;               /* #2e2e2e composer / cards */
-    --sidebar: 0 0% 15%;            /* #262626 left panel */
-    --card-foreground: 220 11% 89%;
-    --popover: 0 0% 18%;
-    --popover-foreground: 220 11% 89%;
-    --primary: 264 56% 70%;          /* #AA88DD — the M (brand accent) */
-    --primary-foreground: 0 0% 13%;  /* dark text on the light-purple accent */
-    --secondary: 222 6% 24%;         /* #393B40 */
-    --secondary-foreground: 220 11% 89%;
-    --muted: 220 6% 18%;
-    --muted-foreground: 220 6% 55%;  /* #868A91 muted text */
-    --accent: 222 6% 24%;            /* #393B40 hover/selected */
-    --accent-foreground: 220 11% 89%;
-    --destructive: 354 70% 54%;      /* #DB5C5C CLion error red */
+    /* MyMu neutral dark scale — pure grayscale (0% saturation), anchored on the
+       chat background = #222222 (the M icon's bg, the darkest surface). Every
+       surface above it steps lighter on the same neutral axis. No blue tint.
+       Only --primary/--ring (brand purple) and --destructive (error red) carry hue. */
+    --background: 0 0% 13.3%;        /* #222222 conversation bg (chat, darkest) */
+    --foreground: 0 0% 88%;          /* #E0E0E0 default text */
+    --card: 0 0% 16.9%;              /* #2B2B2B composer / cards (elevated surface) */
+    --sidebar: 0 0% 14.9%;           /* #262626 left panel */
+    --card-foreground: 0 0% 88%;
+    --popover: 0 0% 16.9%;           /* #2B2B2B */
+    --popover-foreground: 0 0% 88%;
+    --primary: 264 56% 70%;          /* #AA88DD — the M (brand accent) — UNCHANGED */
+    --primary-foreground: 0 0% 13.3%;/* dark text on the light-purple accent (#222222) */
+    --secondary: 0 0% 22.4%;         /* #393939 */
+    --secondary-foreground: 0 0% 88%;
+    --muted: 0 0% 16.9%;             /* #2B2B2B */
+    --muted-foreground: 0 0% 55%;    /* #8C8C8C muted text */
+    --accent: 0 0% 22.4%;            /* #393939 hover / selected */
+    --accent-foreground: 0 0% 88%;
+    --destructive: 354 70% 54%;      /* #DB5C5C error red — functional, kept */
     --destructive-foreground: 0 0% 100%;
-    --border: 222 6% 24%;            /* #393B40 */
-    --input: 222 5% 30%;             /* #43454A input border */
-    --ring: 264 56% 70%;
+    --border: 0 0% 22.4%;            /* #393939 */
+    --input: 0 0% 27%;               /* #454545 input border */
+    --ring: 264 56% 70%;             /* mirrors primary — UNCHANGED */
 
-    /* Nav design tokens — dark overrides */
-    --nav-glass-bg: 220 6% 18% / 0.55;
+    /* Nav design tokens — dark overrides (neutralized; purple glow kept) */
+    --nav-glass-bg: 0 0% 16.9% / 0.55;
     --nav-glass-blur: 24px;
     --nav-glass-saturate: 1.6;
     --nav-tab-glow: 264 56% 70% / 0.25;
     --nav-tab-ring: 264 56% 70% / 0.15;
     --nav-float-shadow: 0 0% 0% / 0.35;
-    --nav-float-ring: 222 6% 24% / 0.3;
-    --nav-divider-color: 222 6% 24% / 0.5;
-    --nav-input-bg: 222 6% 24% / 0.5;
+    --nav-float-ring: 0 0% 22.4% / 0.3;
+    --nav-divider-color: 0 0% 22.4% / 0.5;
+    --nav-input-bg: 0 0% 22.4% / 0.5;
     --nav-input-focus-ring: 264 56% 70% / 0.25;
   }
 }

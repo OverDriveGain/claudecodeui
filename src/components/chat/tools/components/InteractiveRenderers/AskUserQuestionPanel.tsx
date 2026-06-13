@@ -16,7 +16,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   const [mounted, setMounted] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const otherInputRef = useRef<HTMLInputElement>(null);
+  const otherInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     requestAnimationFrame(() => setMounted(true));
@@ -91,7 +91,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   // Keyboard handler for number keys and navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Don't capture keys when typing in the "Other" input
-    if (e.target instanceof HTMLInputElement) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
     const q = questions[currentStep];
     if (!q) return;
@@ -305,13 +305,15 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
             {isOtherOn && (
               <div className="pl-[30px] pr-0.5">
                 <div className="relative">
-                  <input
+                  <textarea
                     ref={otherInputRef}
-                    type="text"
+                    rows={3}
                     value={otherTexts.get(currentStep) || ''}
                     onChange={(e) => setOtherText(currentStep, e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
+                      // Enter submits/advances; Shift+Enter inserts a newline so a
+                      // longer, multi-line answer can be written and seen.
+                      if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         if (isLast) handleSubmit();
                         else setCurrentStep(s => s + 1);
@@ -319,11 +321,11 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                       // Prevent container keydown from firing
                       e.stopPropagation();
                     }}
-                    placeholder="Type your answer..."
-                    className="w-full rounded-lg border-0 bg-gray-50 px-3 py-1.5 text-[13px] text-gray-900 outline-none ring-1 ring-gray-200 transition-shadow duration-200 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-400 dark:bg-gray-900/60 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-600 dark:focus:ring-blue-500"
+                    placeholder="Type your answer… (Shift+Enter for a new line)"
+                    className="min-h-[4.5rem] w-full resize-y rounded-lg border-0 bg-gray-50 px-3 py-2 text-[13px] leading-relaxed text-gray-900 outline-none ring-1 ring-gray-200 transition-shadow duration-200 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-400 dark:bg-gray-900/60 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-600 dark:focus:ring-blue-500"
                   />
-                  <kbd className="absolute right-2 top-1/2 -translate-y-1/2 rounded border border-gray-200 bg-gray-100 px-1 py-0.5 font-mono text-[9px] text-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-600">
-                    Enter
+                  <kbd className="absolute bottom-2 right-2 rounded border border-gray-200 bg-gray-100 px-1 py-0.5 font-mono text-[9px] text-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-600">
+                    ⏎ send · ⇧⏎ newline
                   </kbd>
                 </div>
               </div>
