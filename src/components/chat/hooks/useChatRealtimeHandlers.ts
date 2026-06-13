@@ -274,7 +274,11 @@ export function useChatRealtimeHandlers({
         setIsLoading(false);
         setCanAbortSession(false);
         setClaudeStatus(null);
-        setPendingPermissionRequests([]);
+        // Clear only THIS session's pending requests (and legacy unscoped ones) — a
+        // turn completing on one agent must not wipe another agent's open question.
+        setPendingPermissionRequests((prev) =>
+          prev.filter((r: PendingPermissionRequest) => r.sessionId && r.sessionId !== sid),
+        );
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
         pendingViewSessionRef.current = null;

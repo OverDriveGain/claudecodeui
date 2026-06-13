@@ -306,10 +306,19 @@ function ChatInterface({
     };
   }, [resetStreamingState]);
 
+  // Pending permission/question requests are kept for ALL sessions in state (so
+  // switching agents and coming back doesn't lose an unanswered question). Show only
+  // the currently-viewed session's here; a request with no sessionId is legacy/global.
+  const viewSessionId = currentSessionId || selectedSession?.id || null;
+  const visiblePermissionRequests = useMemo(
+    () => pendingPermissionRequests.filter((r) => !r.sessionId || r.sessionId === viewSessionId),
+    [pendingPermissionRequests, viewSessionId],
+  );
+
   const permissionContextValue = useMemo(() => ({
-    pendingPermissionRequests,
+    pendingPermissionRequests: visiblePermissionRequests,
     handlePermissionDecision,
-  }), [pendingPermissionRequests, handlePermissionDecision]);
+  }), [visiblePermissionRequests, handlePermissionDecision]);
 
   if (!selectedProject) {
     const selectedProviderLabel =
@@ -390,7 +399,7 @@ function ChatInterface({
         />
 
         <ChatComposer
-          pendingPermissionRequests={pendingPermissionRequests}
+          pendingPermissionRequests={visiblePermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}

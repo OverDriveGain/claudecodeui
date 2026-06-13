@@ -288,11 +288,12 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
     lastProviderRef.current = provider;
   }, [provider]);
 
-  useEffect(() => {
-    setPendingPermissionRequests((previous) =>
-      previous.filter((request) => !request.sessionId || request.sessionId === selectedSession?.id),
-    );
-  }, [selectedSession?.id]);
+  // NOTE: we deliberately do NOT drop other sessions' pending requests when the
+  // selected session changes. Switching to another agent and back used to discard
+  // the first agent's open question (it was filtered out here and never restored),
+  // so a question you didn't answer vanished. Pending requests are kept per-session
+  // in state; the view filters them by the current session for display instead (see
+  // ChatInterface). They're removed only when answered, cancelled, or the turn ends.
 
   useEffect(() => {
     if (provider !== 'cursor') {
