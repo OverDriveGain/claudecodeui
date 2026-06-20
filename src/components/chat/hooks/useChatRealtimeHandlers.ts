@@ -274,11 +274,20 @@ export function useChatRealtimeHandlers({
         setIsLoading(false);
         setCanAbortSession(false);
         setClaudeStatus(null);
-        // Clear only THIS session's pending requests (and legacy unscoped ones) — a
-        // turn completing on one agent must not wipe another agent's open question.
-        setPendingPermissionRequests((prev) =>
-          prev.filter((r: PendingPermissionRequest) => r.sessionId && r.sessionId !== sid),
-        );
+        // Do NOT clear pending permission / AskUserQuestion requests on a normal
+        // `complete`. An agent cannot finish a turn while a tool_use is still
+        // unanswered, so a `complete` arriving with an open question is spurious —
+        // e.g. a backgrounded agent's relay socket idles/drops and emits a synthetic
+        // `complete`. Clearing it there is exactly what made a question "vanish /
+        // become skipped" after switching conversations. Open requests are cleared
+        // the correct way: on answer (resolvePermission removes them) or when the
+        // agent withdraws the prompt (`permission_cancelled`). Only an explicit
+        // user abort cancels still-pending work.
+        if (msg.aborted) {
+          setPendingPermissionRequests((prev) =>
+            prev.filter((r: PendingPermissionRequest) => r.sessionId && r.sessionId !== sid),
+          );
+        }
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
         pendingViewSessionRef.current = null;
