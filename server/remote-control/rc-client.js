@@ -468,8 +468,12 @@ export async function attachSession(sessionId, ws, normalize) {
   });
   // `turnActive` gates the result->complete translation: the bridge replays the
   // previous turn's `result` when we subscribe, which would otherwise fire a
-  // premature `complete` and clear the GUI's "working" state. We only treat a
-  // `result` as end-of-turn once driveRemoteSession has actually sent this turn.
+  // premature `complete` and clear the GUI's "working" state. It is armed by ANY
+  // live-turn signal — our own drive, a live thinking_tokens frame, or a live
+  // can_use_tool request — and reset by the `result` it gates. A re-armable flag
+  // (not a one-shot latch tied to drive) is what lets queued follow-up turns and
+  // turns we merely watch still clear their loader; the replayed stale result has
+  // no live signal preceding it, so it stays suppressed.
   const entry = { upstream, ws, turnActive: false };
   activeRemoteSessions.set(sessionId, entry);
 
@@ -488,6 +492,15 @@ export async function attachSession(sessionId, ws, normalize) {
     // live — gated to the viewed session on the client, and cleared by `result`
     // below. These frames are live-only; history never sees them.
     if (m.type === 'system' && m.subtype === 'thinking_tokens') {
+      // Live work is happening NOW — arm the end-of-turn detector. thinking_tokens
+      // is a live-only frame (never part of the subscribe replay), so this is the
+      // honest "a real turn is in progress" signal. Arming here (not only on our own
+      // drive) is what lets a queued second turn, or a turn driven from the agent's
+      // own terminal that we're merely watching, still clear its `result` → without
+      // it the loader sticks on forever. The replayed stale result still stays
+      // suppressed because no thinking_tokens precedes it.
+      const e = activeRemoteSessions.get(sessionId);
+      if (e) e.turnActive = true;
       out.send({ type: 'session-status', sessionId, isProcessing: true });
       return;
     }
@@ -495,6 +508,10 @@ export async function attachSession(sessionId, ws, normalize) {
     // Permission prompt — the agent wants to use a tool; relay to the GUI's
     // existing permission UI. `rc:` prefixes the id so the answer routes back here.
     if (m.type === 'control_request' && m.request?.subtype === 'can_use_tool') {
+      // A live tool/AskUserQuestion request also means a turn is in progress — arm
+      // the detector so the `result` that follows the answer clears the loader.
+      const eReq = activeRemoteSessions.get(sessionId);
+      if (eReq) eReq.turnActive = true;
       const rawId = m.request_id || crypto.randomUUID();
       pendingRemotePermissions.set(rawId, { sessionId });
       out.send(createNormalizedMessage({
