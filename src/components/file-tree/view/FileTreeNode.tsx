@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from 'react';
-import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { ChevronRight, Folder, FolderOpen, Download } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
 import { Input } from '../../../shared/view/ui';
@@ -102,6 +102,9 @@ export default function FileTreeNode({
       : 'group flex items-center gap-1.5 py-[3px] pr-2 cursor-pointer rounded-sm hover:bg-accent/60 transition-colors duration-100',
     isDirectory && isOpen && 'border-l-2 border-primary/30',
     (isDirectory && !isOpen) || !isDirectory ? 'border-l-2 border-transparent' : '',
+    'relative',
+    // Reserve room on file rows for the always-visible download button.
+    !isDirectory && onDownload ? 'pr-8' : '',
   );
 
   // Render rename input if this item is being renamed
@@ -173,6 +176,20 @@ export default function FileTreeNode({
           <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
           <span className={nameClassName}>{item.name}</span>
         </>
+      )}
+      {item.type === 'file' && onDownload && (
+        <button
+          type="button"
+          title={`Download ${item.name}`}
+          aria-label={`Download ${item.name}`}
+          // Always visible for files — download must never be gated behind a
+          // right-click menu or a (possibly unsupported) preview. Stop propagation
+          // so it downloads instead of opening/previewing the file.
+          onClick={(e) => { e.stopPropagation(); onDownload(item); }}
+          className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground/70 opacity-80 transition-opacity hover:bg-accent hover:text-foreground hover:opacity-100"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
       )}
     </div>
   );
