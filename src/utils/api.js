@@ -141,6 +141,10 @@ export const api = {
     authenticatedFetch(`/api/projects/${projectId}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectId, filePath) =>
     authenticatedFetch(`/api/projects/${projectId}/files/content?path=${encodeURIComponent(filePath)}`),
+  // Stream a file an agent delivered via SendUserFile (authorized by the agent's
+  // own send, not by cwd — see the server endpoint). projectId is `remote:<id>`.
+  readDeliveredFile: (projectId, filePath) =>
+    authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/delivered-file?path=${encodeURIComponent(filePath)}`),
   saveFile: (projectId, filePath, content) =>
     authenticatedFetch(`/api/projects/${projectId}/file`, {
       method: 'PUT',

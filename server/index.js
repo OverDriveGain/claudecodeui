@@ -84,7 +84,8 @@ import providerRoutes from './modules/providers/provider.routes.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
-import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd } from './services/rc.service.js';
+import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd, isAgentCaptureAllowed } from './services/rc.service.js';
+import { getSessionEventsCached } from './remote-control/rc-client.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { c } from './utils/colors.js';
@@ -605,6 +606,70 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         }
+    }
+});
+
+// Serve a file an agent explicitly delivered via the SendUserFile tool.
+//
+// The relay does NOT report a remote agent's cwd (session_context.cwd is often
+// empty), so the normal files/content endpoint — which gates on "path under the
+// project root" — can't serve these. But the agent's SendUserFile tool_use carries
+// the absolute path, and choosing to send it IS the authorization. So we serve the
+// exact bytes only when the requested absolute path actually appears in a
+// SendUserFile delivery in this session's history — the agent's own act of sending
+// is the allowlist, no cwd needed. Host-local read (co-located agents); cross-host
+// delivery is a separate, deferred concern.
+app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const { path: filePath } = req.query;
+        if (!filePath || typeof filePath !== 'string') {
+            return res.status(400).json({ error: 'Missing file path' });
+        }
+        if (!isRemoteProjectId(projectId)) {
+            return res.status(400).json({ error: 'Delivered files are a remote-agent feature' });
+        }
+        const sessionId = sessionIdFromProjectId(projectId);
+        if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) {
+            return res.status(404).json({ error: 'Agent not found' });
+        }
+
+        // Allowlist = every path this session ever delivered via SendUserFile.
+        const events = await getSessionEventsCached(sessionId).catch(() => []);
+        const delivered = new Set();
+        for (const e of events || []) {
+            const content = e?.message?.content;
+            if (!Array.isArray(content)) continue;
+            for (const c of content) {
+                if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
+                    for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
+                }
+            }
+        }
+        const resolved = path.resolve(filePath);
+        if (!delivered.has(resolved)) {
+            return res.status(403).json({ error: 'This file was not delivered by the agent' });
+        }
+
+        try {
+            await fsPromises.access(resolved);
+        } catch {
+            return res.status(404).json({ error: 'File no longer on disk' });
+        }
+        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
+        const stat = await fsPromises.stat(resolved);
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
+        const stream = fs.createReadStream(resolved);
+        stream.pipe(res);
+        stream.on('error', (error) => {
+            console.error('Error streaming delivered file:', error);
+            if (!res.headersSent) res.status(500).json({ error: 'Error reading file' });
+        });
+    } catch (error) {
+        console.error('Error serving delivered file:', error);
+        if (!res.headersSent) res.status(500).json({ error: error.message });
     }
 });
 
