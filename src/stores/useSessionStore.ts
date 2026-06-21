@@ -458,11 +458,24 @@ export function useSessionStore() {
       msg.sessionId === resolvedSessionId
         ? msg
         : { ...msg, sessionId: resolvedSessionId };
-    let updated = [...slot.realtimeMessages, normalizedMessage];
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
+    // Id-keyed, not append-only: a frame that re-arrives with the same id (a relay
+    // streaming snapshot, or the server-side reconnect replay buffer re-sending what
+    // we already have) must REPLACE its prior copy, never stack a second entry with
+    // the same id. Two rows sharing an id collide on the React render key and make
+    // the message flicker/vanish — the intermittent "swallowed then spat back"
+    // bug. Replace-in-place keeps the overlay an id-keyed log (claude.ai/code style).
+    const existingIdx = slot.realtimeMessages.findIndex((m) => m.id === normalizedMessage.id);
+    if (existingIdx >= 0) {
+      const next = [...slot.realtimeMessages];
+      next[existingIdx] = normalizedMessage;
+      slot.realtimeMessages = next;
+    } else {
+      let updated = [...slot.realtimeMessages, normalizedMessage];
+      if (updated.length > MAX_REALTIME_MESSAGES) {
+        updated = updated.slice(-MAX_REALTIME_MESSAGES);
+      }
+      slot.realtimeMessages = updated;
     }
-    slot.realtimeMessages = updated;
     recomputeMergedIfNeeded(slot);
     notify(resolvedSessionId);
   }, [getSlot, notify, resolveSessionId]);
@@ -474,12 +487,18 @@ export function useSessionStore() {
     if (msgs.length === 0) return;
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
-    const normalizedMessages = msgs.map((msg) =>
-      msg.sessionId === resolvedSessionId
-        ? msg
-        : { ...msg, sessionId: resolvedSessionId },
-    );
-    let updated = [...slot.realtimeMessages, ...normalizedMessages];
+    // Id-keyed merge (see appendRealtime): replace same-id rows, append new ones,
+    // and collapse same-id duplicates within the batch — so a re-delivered frame
+    // can never produce two entries sharing a React key.
+    const byId = new Map(slot.realtimeMessages.map((m) => [m.id, m]));
+    const order: string[] = slot.realtimeMessages.map((m) => m.id);
+    for (const msg of msgs) {
+      const normalized =
+        msg.sessionId === resolvedSessionId ? msg : { ...msg, sessionId: resolvedSessionId };
+      if (!byId.has(normalized.id)) order.push(normalized.id);
+      byId.set(normalized.id, normalized);
+    }
+    let updated = order.map((id) => byId.get(id)!);
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
