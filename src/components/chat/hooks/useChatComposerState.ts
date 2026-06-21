@@ -951,10 +951,22 @@ export function useChatComposerState({
           return;
         }
 
+        // On touch devices (phones/tablets) the on-screen keyboard's Return key
+        // must insert a NEWLINE, not send — there's no easy Shift+Enter, and
+        // accidental sends are the norm otherwise. Sending is the send button.
+        // Ctrl/Cmd+Enter still sends (hardware keyboard on a tablet).
+        const isTouch =
+          typeof window !== 'undefined' &&
+          typeof window.matchMedia === 'function' &&
+          window.matchMedia('(pointer: coarse)').matches;
+
         if ((event.ctrlKey || event.metaKey) && !event.shiftKey) {
           event.preventDefault();
           handleSubmit(event);
-        } else if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !sendByCtrlEnter) {
+        } else if (
+          !isTouch &&
+          !event.shiftKey && !event.ctrlKey && !event.metaKey && !sendByCtrlEnter
+        ) {
           event.preventDefault();
           handleSubmit(event);
         }

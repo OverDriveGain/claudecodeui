@@ -330,7 +330,18 @@ export default function ChatComposer({
               onKeyDown={onTextareaKeyDown}
               onPaste={onTextareaPaste}
               onScroll={(event) => onTextareaScrollSync(event.target as HTMLTextAreaElement)}
-              onFocus={() => onInputFocusChange?.(true)}
+              onFocus={() => {
+                onInputFocusChange?.(true);
+                // iOS: when the on-screen keyboard animates up it can sit OVER the
+                // composer, so tapping to type shows a blank area ("I open to write
+                // and see nothing"). Once the keyboard has settled, nudge the
+                // textarea into view. Touch-only so desktop focus is untouched.
+                if (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches) {
+                  setTimeout(() => {
+                    textareaRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                  }, 350);
+                }
+              }}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
               placeholder={placeholder}
