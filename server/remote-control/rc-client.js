@@ -51,6 +51,12 @@ const activeRemoteSessions = new Map();
 const RC_REPLAY_BUFFER_MAX = 400;
 // requestId -> { sessionId } so a permission answer routes to the right upstream WS.
 const pendingRemotePermissions = new Map();
+// rawRequestId -> timestamp of when we answered it. After answering, the agent takes
+// a moment to record the tool_result; until then the question still looks "open" in
+// history, so a re-subscribe would re-surface it (flicker / "asking again"). This
+// short-lived record suppresses re-emitting a question the user already answered.
+const answeredRemotePermissions = new Map();
+const ANSWERED_PERMISSION_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Read the operator's claude.ai OAuth token + org uuid. These are the SAME
@@ -656,6 +662,15 @@ export async function emitOutstandingPermission(sessionId, ws) {
   });
   if (!last || !last.requestId) return false;
 
+  // Already answered by this GUI? The tool_result may not be recorded yet, but we
+  // know it's resolved — don't re-surface it (prevents the answer-window flicker /
+  // "asking again"). Opportunistically prune the TTL map.
+  const answeredAt = answeredRemotePermissions.get(last.requestId);
+  if (answeredAt) {
+    if (Date.now() - answeredAt < ANSWERED_PERMISSION_TTL_MS) return false;
+    answeredRemotePermissions.delete(last.requestId);
+  }
+
   // Liveness: unanswered AND nothing terminal after it. A `result` (or the question
   // already having a tool_result) means the turn finished — the question is stale.
   if (answered.has(last.toolUseId)) return false;
@@ -776,8 +791,15 @@ export function resolveRemotePermission(requestId, decision) {
   const pending = pendingRemotePermissions.get(rawId);
   if (!pending) return false;
   pendingRemotePermissions.delete(rawId);
+  // Remember we answered this so a re-subscribe during the result-write window can't
+  // re-surface it, and drop the buffered permission_request so a reconnect replay
+  // doesn't re-show the now-answered question.
+  answeredRemotePermissions.set(rawId, Date.now());
   const entry = activeRemoteSessions.get(pending.sessionId);
   if (!entry || entry.upstream.readyState !== WebSocket.OPEN) return false;
+  if (Array.isArray(entry.replayBuffer)) {
+    entry.replayBuffer = entry.replayBuffer.filter((f) => f?.requestId !== `rc:${rawId}`);
+  }
   const allow = decision?.allow ?? false;
   entry.upstream.send(JSON.stringify({
     type: 'control_response',
