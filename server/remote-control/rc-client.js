@@ -44,8 +44,11 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // Anthropic's beta tag for the remote-control session/event API.
 const BETA_CCR = 'ccr-byoc-2025-07-29';
 
-// sessionId -> { upstream: WebSocket, ws: clientWriter }
+// sessionId -> { upstream: WebSocket, ws: clientWriter, turnActive, replayBuffer }
 const activeRemoteSessions = new Map();
+// Max frames retained per session for reconnect replay (~one turn's worth). The
+// buffer is cleared at each turn end, so this only caps a single very long turn.
+const RC_REPLAY_BUFFER_MAX = 400;
 // requestId -> { sessionId } so a permission answer routes to the right upstream WS.
 const pendingRemotePermissions = new Map();
 
@@ -459,6 +462,21 @@ export async function attachSession(sessionId, ws, normalize) {
   if (existing) {
     existing.ws = ws;
     if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
+    // Reconnect recovery. The browser↔server WS drops on a tab/window switch (and
+    // mobile backgrounding); while it's down, every frame the upstream relay sends
+    // is written to the now-dead writer and lost. The relay does NOT replay on
+    // re-subscribe (verified: a fresh subscribe yields zero frames) and its events
+    // API lags mid-turn, so the user's just-sent message and the agent's in-flight
+    // output silently vanish until the turn flushes (completion) or a manual refresh
+    // re-pages history. We therefore keep a small per-session buffer of the frames
+    // we emitted and flush it to the freshly-bound writer here — the only lossless
+    // recovery. The client dedups by id, so already-seen frames collapse and only
+    // the missed ones surface.
+    if (Array.isArray(existing.replayBuffer)) {
+      for (const frame of existing.replayBuffer) {
+        try { ws.send(frame); } catch { /* writer race — next reconnect retries */ }
+      }
+    }
     return existing;
   }
   const { token, orgUuid } = getRemoteAuth();
@@ -474,7 +492,10 @@ export async function attachSession(sessionId, ws, normalize) {
   // (not a one-shot latch tied to drive) is what lets queued follow-up turns and
   // turns we merely watch still clear their loader; the replayed stale result has
   // no live signal preceding it, so it stays suppressed.
-  const entry = { upstream, ws, turnActive: false };
+  // replayBuffer holds the meaningful frames of (roughly) the current turn so a
+  // reconnecting client can recover what it missed while its WS was down — see the
+  // rebind branch above. Capped so an idle long-lived session can't grow unbounded.
+  const entry = { upstream, ws, turnActive: false, replayBuffer: [] };
   activeRemoteSessions.set(sessionId, entry);
 
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
@@ -484,7 +505,18 @@ export async function attachSession(sessionId, ws, normalize) {
     try { m = JSON.parse(data.toString()); } catch { return; }
     // Always write to the CURRENT writer (rebound on reconnect), never the one
     // captured when this upstream first opened.
-    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
+    const e0 = activeRemoteSessions.get(sessionId);
+    const out = e0?.ws || ws;
+    // emit = send to the live writer AND retain in the per-session replay buffer so
+    // a reconnecting client recovers it. Transient per-token thinking frames are
+    // sent but NOT buffered (one is enough; the client re-derives the indicator).
+    const emit = (frame) => {
+      if (e0) {
+        e0.replayBuffer.push(frame);
+        if (e0.replayBuffer.length > RC_REPLAY_BUFFER_MAX) e0.replayBuffer.shift();
+      }
+      out.send(frame);
+    };
 
     // Live "thinking" progress. claude.ai/code shows a working indicator driven by
     // these frames (a running token estimate) while the model thinks. Translate it
@@ -514,7 +546,7 @@ export async function attachSession(sessionId, ws, normalize) {
       if (eReq) eReq.turnActive = true;
       const rawId = m.request_id || crypto.randomUUID();
       pendingRemotePermissions.set(rawId, { sessionId });
-      out.send(createNormalizedMessage({
+      emit(createNormalizedMessage({
         kind: 'permission_request',
         requestId: `rc:${rawId}`,
         toolName: m.request.tool_name,
@@ -527,7 +559,7 @@ export async function attachSession(sessionId, ws, normalize) {
     // The agent withdrew a prompt (e.g. it timed out) — dismiss it in the GUI.
     if (m.type === 'control_cancel_request') {
       pendingRemotePermissions.delete(m.request_id);
-      out.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId: m.request_id, sessionId, provider: 'claude' }));
+      emit(createNormalizedMessage({ kind: 'permission_cancelled', requestId: m.request_id, sessionId, provider: 'claude' }));
       return;
     }
     if (m.type === 'control_response') return; // ack frame — nothing to render
@@ -537,9 +569,9 @@ export async function attachSession(sessionId, ws, normalize) {
     if (normalize) {
       try {
         const normalized = normalize(m, sessionId) || [];
-        for (const frame of normalized) out.send(frame);
+        for (const frame of normalized) emit(frame);
       } catch (err) {
-        out.send(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
+        emit(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
       }
     }
     // End-of-TURN: a `result` SDK message means the agent finished this turn. The
@@ -551,7 +583,11 @@ export async function attachSession(sessionId, ws, normalize) {
       const e = activeRemoteSessions.get(sessionId);
       if (e && !e.turnActive) return;
       if (e) e.turnActive = false;
-      out.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
+      emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
+      // Turn finished → the relay's events API now has it, so a reconnect from here
+      // recovers via the normal history refetch. Drop the buffer so it only ever
+      // holds the CURRENT turn (keeps replay small and relevant).
+      if (e) e.replayBuffer = [];
     }
   });
 
