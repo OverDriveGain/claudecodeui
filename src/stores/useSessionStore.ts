@@ -194,9 +194,18 @@ function dedupeOptimisticUserEchoes(merged: NormalizedMessage[]): NormalizedMess
   });
 }
 
+// Stable chronological sort (copy — never mutate a stored ref). Equal/unparseable
+// timestamps keep their relative order (JS sort is stable), so same-turn blocks
+// (a tool_use and its text share one event timestamp) stay in emission order.
+function sortChronologically(list: NormalizedMessage[]): NormalizedMessage[] {
+  return [...list].sort(compareMessagesByTimestamp);
+}
+
 function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) return server;
-  if (server.length === 0) return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes(realtime));
+  if (server.length === 0) {
+    return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes(sortChronologically(realtime)));
+  }
   const serverIds = new Set(server.map(m => m.id));
   const serverUserTexts = new Set(
     server.map(userTextFingerprint).filter((t): t is string => t !== null),
@@ -212,7 +221,12 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
     return true;
   });
   if (extra.length === 0) return server;
-  return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes([...server, ...extra]));
+  // Sort the combined set chronologically BEFORE the adjacency dedup: realtime
+  // frames (including ones the server-side replay buffer re-sends after a reconnect,
+  // which keep their original timestamps) can otherwise land out of arrival order
+  // and render scrambled. Sorting first also lets the adjacency dedup see
+  // chronologically-adjacent duplicates.
+  return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes(sortChronologically([...server, ...extra])));
 }
 
 function compareMessagesByTimestamp(left: NormalizedMessage, right: NormalizedMessage): number {
