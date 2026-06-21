@@ -610,47 +610,59 @@ export async function attachSession(sessionId, ws, normalize) {
 }
 
 /**
- * Surface a tool-permission / AskUserQuestion the agent is STILL waiting on, when
- * the GUI subscribes after it was asked. The relay replays nothing on subscribe
- * (verified) and the live `control_request` fired before we attached, so without
- * this the GUI shows only the read-only transcript copy of the question with no way
- * to answer. We reconstruct it from history: the most recent `can_use_tool`
- * control_request whose tool_use has no `tool_result` yet is still open, and its
- * request_id (from the events API) is exactly the one the relay accepts for a
- * control_response (verified live — answering by that id unblocked a stuck agent).
- * Register it and emit the same `permission_request` frame the live path emits, so
- * the answerable panel renders. Idempotent: the client dedups pending requests by
- * requestId, so re-emitting on a later (re)subscribe is harmless.
+ * Surface a tool-permission / AskUserQuestion the agent is STILL waiting on RIGHT
+ * NOW, when the GUI subscribes after it was asked. The relay replays nothing on
+ * subscribe (verified) and the live `control_request` fired before we attached, so
+ * without this the GUI shows only the read-only transcript copy with no way to
+ * answer. We reconstruct the live request from history and emit the same
+ * `permission_request` the live path would, registering its request_id — the relay
+ * accepts that id for the control_response (verified: answering by it unblocked a
+ * stuck agent). Idempotent: the client dedups pending requests by requestId.
+ *
+ * CRITICAL liveness guard: only the agent's CURRENT block counts. A `can_use_tool`
+ * tool_use can be left unanswered in history forever — the user answered it in the
+ * agent's own terminal, or the turn was interrupted — yet the agent has long moved
+ * on (it's idle, thousands of events later). Re-surfacing such a dangling question
+ * re-asks a DEAD question on every open, and the answer can never resolve it (the
+ * relay no longer honors that id) → an infinite re-ask loop. So we take ONLY the
+ * most-recent control_request and require it to be both unanswered AND the tail of
+ * the transcript — no `result` (turn end) after it. Anything with a later result is
+ * a finished turn, not a live block.
  */
 export async function emitOutstandingPermission(sessionId, ws) {
   let events;
   try { events = await getSessionEventsCached(sessionId); } catch { return false; }
-  if (!Array.isArray(events)) return false;
+  if (!Array.isArray(events) || events.length === 0) return false;
 
-  // tool_use_id -> the control_request that asked for it (carries the request_id +
-  // the input the panel needs); plus the set of tool_use_ids already answered.
-  const controlByToolUse = new Map();
+  // Find the most-recent can_use_tool control_request (its position matters) and
+  // the set of tool_use_ids that already have a tool_result.
+  let last = null;
+  let lastIdx = -1;
   const answered = new Set();
-  for (const e of events) {
+  events.forEach((e, i) => {
     if (e?.type === 'control_request' && e.request?.subtype === 'can_use_tool' && e.request?.tool_use_id) {
-      controlByToolUse.set(e.request.tool_use_id, {
+      last = {
         requestId: e.request_id,
         toolName: e.request.tool_name,
         input: e.request.input,
-      });
+        toolUseId: e.request.tool_use_id,
+      };
+      lastIdx = i;
     }
     const content = e?.message?.content;
     if (Array.isArray(content)) {
       for (const b of content) if (b?.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id);
     }
-  }
+  });
+  if (!last || !last.requestId) return false;
 
-  // Events are oldest→newest, so the last unanswered entry is the live question.
-  let open = null;
-  for (const [toolUseId, ctrl] of controlByToolUse) {
-    if (ctrl.requestId && !answered.has(toolUseId)) open = ctrl;
+  // Liveness: unanswered AND nothing terminal after it. A `result` (or the question
+  // already having a tool_result) means the turn finished — the question is stale.
+  if (answered.has(last.toolUseId)) return false;
+  for (let i = lastIdx + 1; i < events.length; i++) {
+    if (events[i]?.type === 'result') return false;
   }
-  if (!open) return false;
+  const open = last;
 
   pendingRemotePermissions.set(open.requestId, { sessionId });
   const frame = createNormalizedMessage({
