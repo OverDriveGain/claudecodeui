@@ -21,10 +21,11 @@
   }
 }
 
-/* MyMu brand loader — each letter swells small→big→small in sequence */
+/* MyMu brand loader — a soft opacity wave across the letters (subtle, no scale swell).
+   Each letter fades from nearly-hidden up to full brand brightness, in sequence. */
 @keyframes mymu-letter-pulse {
-  0%, 55%, 100% { transform: scale(1); opacity: 0.4; }
-  27% { transform: scale(1.55); opacity: 1; }
+  0%, 60%, 100% { opacity: 0.1; }
+  25% { opacity: 1; }
 }
 .mymu-loader {
   display: inline-flex;
@@ -40,8 +41,7 @@
 }
 .mymu-loader span {
   display: inline-block;
-  transform-origin: center bottom;
-  animation: mymu-letter-pulse 1.5s ease-in-out infinite;
+  animation: mymu-letter-pulse 1.6s ease-in-out infinite;
 }
 .mymu-loader span:nth-child(1) { animation-delay: 0s; }
 .mymu-loader span:nth-child(2) { animation-delay: 0.16s; }
