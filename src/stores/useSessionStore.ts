@@ -5,96 +5,42 @@
  * Session switch = change activeSessionId pointer. No clearing. Old data stays.
  * WebSocket handler = store.appendRealtime(msg.sessionId, msg). One line.
  * No localStorage for messages. Backend JSONL is the source of truth.
+ *
+ * Each session's messages live in ONE id-keyed log (slot.byId). Every source —
+ * server backfill, live frames, optimistic echoes, the streaming placeholder —
+ * UPSERTS into that map by id; rendering derives a sorted, deduped array
+ * (see sessionLog.ts). This is what makes a late/duplicate/out-of-order write
+ * harmless and keeps ordering by timestamp rather than arrival.
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { authenticatedFetch } from '../utils/api';
 import type { LLMProvider } from '../types/app';
+import {
+  deriveLog,
+  rewriteMessageSessionId,
+  EMPTY,
+  type NormalizedMessage,
+  type MessageKind,
+} from './sessionLog';
 
-// ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
-
-export type MessageKind =
-  | 'text'
-  | 'tool_use'
-  | 'tool_result'
-  | 'thinking'
-  | 'stream_delta'
-  | 'stream_end'
-  | 'error'
-  | 'system'
-  | 'complete'
-  | 'status'
-  | 'permission_request'
-  | 'permission_cancelled'
-  | 'session_created'
-  | 'interactive_prompt'
-  | 'task_notification';
-
-export interface NormalizedMessage {
-  id: string;
-  sessionId: string;
-  timestamp: string;
-  provider: LLMProvider;
-  kind: MessageKind;
-
-  // kind-specific fields (flat for simplicity)
-  role?: 'user' | 'assistant';
-  content?: string;
-  /**
-   * Mirrors optional transcript metadata from the server.
-   *
-   * These fields are currently used by Claude history normalization so local
-   * slash commands, local stdout, and compact summaries do not disappear when
-   * the session store hydrates from REST history.
-   */
-  displayText?: string;
-  commandName?: string;
-  commandMessage?: string;
-  commandArgs?: string;
-  isLocalCommand?: boolean;
-  isLocalCommandStdout?: boolean;
-  isCompactSummary?: boolean;
-  /** system-notice severity (compact_boundary/informational): 'info' | 'warning' | 'error' */
-  level?: string;
-  isSystemNotice?: boolean;
-  images?: string[];
-  toolName?: string;
-  toolInput?: unknown;
-  toolId?: string;
-  toolResult?: { content: string; isError: boolean; toolUseResult?: unknown } | null;
-  isError?: boolean;
-  text?: string;
-  tokens?: number;
-  canInterrupt?: boolean;
-  tokenBudget?: unknown;
-  requestId?: string;
-  input?: unknown;
-  context?: unknown;
-  newSessionId?: string;
-  status?: string;
-  summary?: string;
-  exitCode?: number;
-  actualSessionId?: string;
-  parentToolUseId?: string;
-  subagentTools?: unknown[];
-  isFinal?: boolean;
-  // Cursor-specific ordering
-  sequence?: number;
-  rowid?: number;
-}
+// Re-export so existing imports (`from '../stores/useSessionStore'`) keep working.
+export type { NormalizedMessage, MessageKind };
 
 // ─── Per-session slot ────────────────────────────────────────────────────────
 
 export type SessionStatus = 'idle' | 'loading' | 'streaming' | 'error';
 
 export interface SessionSlot {
-  serverMessages: NormalizedMessage[];
-  realtimeMessages: NormalizedMessage[];
+  /** The single source of truth: every message keyed by id, insertion-ordered. */
+  byId: Map<string, NormalizedMessage>;
+  /** Cached render view (chronological + echo-deduped), recomputed lazily. */
   merged: NormalizedMessage[];
-  /** @internal Cache-invalidation refs for computeMerged */
-  _lastServerRef: NormalizedMessage[];
-  _lastRealtimeRef: NormalizedMessage[];
+  /** @internal Bumped on every log mutation; merged is recomputed when it lags. */
+  _logVersion: number;
+  /** @internal Version `merged` was computed at. */
+  _mergedAtVersion: number;
   status: SessionStatus;
   fetchedAt: number;
   total: number;
@@ -102,206 +48,41 @@ export interface SessionSlot {
   offset: number;
   tokenUsage: unknown;
   /** @internal Monotonic counter to discard out-of-order server fetch responses. */
-  _fetchSeq?: number;
+  _fetchSeq: number;
 }
-
-const EMPTY: NormalizedMessage[] = [];
 
 function createEmptySlot(): SessionSlot {
   return {
-    serverMessages: EMPTY,
-    realtimeMessages: EMPTY,
+    byId: new Map(),
     merged: EMPTY,
-    _lastServerRef: EMPTY,
-    _lastRealtimeRef: EMPTY,
+    _logVersion: 0,
+    _mergedAtVersion: -1,
     status: 'idle',
     fetchedAt: 0,
     total: 0,
     hasMore: false,
     offset: 0,
     tokenUsage: null,
+    _fetchSeq: 0,
   };
 }
 
-/**
- * Compute merged messages: server + realtime, deduped by id and adjacent
- * assistant echo (same trimmed text), so finalized stream rows do not stack
- * on top of the persisted copy before realtime is cleared.
- */
-function userTextFingerprint(m: NormalizedMessage): string | null {
-  if (m.kind !== 'text' || m.role !== 'user') return null;
-  const t = (m.content || '').trim();
-  return t.length > 0 ? t : null;
+/** Recompute slot.merged from the log only when the log changed since last time. */
+function commit(slot: SessionSlot): void {
+  if (slot._mergedAtVersion === slot._logVersion) return;
+  slot.merged = deriveLog(slot.byId);
+  slot._mergedAtVersion = slot._logVersion;
 }
 
-/**
- * After `finalizeStreaming`, the client holds a synthetic assistant `text` row
- * while the sessions API soon returns the same reply with a different id.
- * Those sit back-to-back in merged order and look like duplicate bubbles until
- * `refreshFromServer` clears realtime. Collapse same-text assistant rows and
- * stream_placeholder → text when content matches.
- */
-function dedupeAdjacentAssistantEchoes(merged: NormalizedMessage[]): NormalizedMessage[] {
-  const out: NormalizedMessage[] = [];
-  for (const m of merged) {
-    const prev = out[out.length - 1];
-    if (prev) {
-      if (prev.kind === 'stream_delta' && m.kind === 'text' && m.role === 'assistant') {
-        const ps = (prev.content || '').trim();
-        const ms = (m.content || '').trim();
-        if (ps.length > 0 && ps === ms) {
-          out[out.length - 1] = m;
-          continue;
-        }
-      }
-      if (
-        prev.kind === 'text'
-        && m.kind === 'text'
-        && prev.role === 'assistant'
-        && m.role === 'assistant'
-      ) {
-        const ms = (m.content || '').trim();
-        if (ms.length > 0 && ms === (prev.content || '').trim()) {
-          continue;
-        }
-      }
-    }
-    out.push(m);
-  }
-  return out;
-}
-
-/**
- * Drop optimistic user rows (`local_*` ids) whose text also exists as a real
- * (non-local) user row anywhere in the list. The real copy can arrive via the
- * server fetch OR the live stream (relay echoes the user's own message with a
- * non-local id), and the queue path can briefly add more than one optimistic
- * copy — so dedup against the whole merged set, not just the server slice.
- * This is what stops a sent message from showing twice (or thrice when queued).
- */
-function dedupeOptimisticUserEchoes(merged: NormalizedMessage[]): NormalizedMessage[] {
-  const realUserTexts = new Set<string>();
-  for (const m of merged) {
-    if (m.id.startsWith('local_')) continue;
-    const fp = userTextFingerprint(m);
-    if (fp) realUserTexts.add(fp);
-  }
-  if (realUserTexts.size === 0) return merged;
-  return merged.filter((m) => {
-    if (!m.id.startsWith('local_')) return true;
-    const fp = userTextFingerprint(m);
-    return !(fp && realUserTexts.has(fp));
-  });
-}
-
-// Stable chronological sort (copy — never mutate a stored ref). Equal/unparseable
-// timestamps keep their relative order (JS sort is stable), so same-turn blocks
-// (a tool_use and its text share one event timestamp) stay in emission order.
-function sortChronologically(list: NormalizedMessage[]): NormalizedMessage[] {
-  return [...list].sort(compareMessagesByTimestamp);
-}
-
-function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  if (realtime.length === 0) return server;
-  if (server.length === 0) {
-    return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes(sortChronologically(realtime)));
-  }
-  const serverIds = new Set(server.map(m => m.id));
-  const serverUserTexts = new Set(
-    server.map(userTextFingerprint).filter((t): t is string => t !== null),
-  );
-  const extra = realtime.filter((m) => {
-    if (serverIds.has(m.id)) return false;
-    // Optimistic user rows use `local_*` ids; once the same text exists on the
-    // server-backed copy, drop the realtime echo to avoid duplicate bubbles.
-    if (m.id.startsWith('local_')) {
-      const fp = userTextFingerprint(m);
-      if (fp && serverUserTexts.has(fp)) return false;
-    }
-    return true;
-  });
-  if (extra.length === 0) return server;
-  // Sort the combined set chronologically BEFORE the adjacency dedup: realtime
-  // frames (including ones the server-side replay buffer re-sends after a reconnect,
-  // which keep their original timestamps) can otherwise land out of arrival order
-  // and render scrambled. Sorting first also lets the adjacency dedup see
-  // chronologically-adjacent duplicates.
-  return dedupeOptimisticUserEchoes(dedupeAdjacentAssistantEchoes(sortChronologically([...server, ...extra])));
-}
-
-function compareMessagesByTimestamp(left: NormalizedMessage, right: NormalizedMessage): number {
-  const leftTime = Date.parse(left.timestamp);
-  const rightTime = Date.parse(right.timestamp);
-
-  if (Number.isNaN(leftTime) || Number.isNaN(rightTime) || leftTime === rightTime) {
-    return 0;
-  }
-
-  return leftTime - rightTime;
-}
-
-function rewriteMessageSessionId(
-  msg: NormalizedMessage,
-  fromSessionId: string,
-  toSessionId: string,
-): NormalizedMessage {
-  const streamingSourceId = `__streaming_${fromSessionId}`;
-  const nextId = msg.id === streamingSourceId ? `__streaming_${toSessionId}` : msg.id;
-
-  if (msg.sessionId === toSessionId && nextId === msg.id) {
-    return msg;
-  }
-
-  return {
-    ...msg,
-    id: nextId,
-    sessionId: toSessionId,
-  };
-}
-
-function mergeMessagesById(
-  existing: NormalizedMessage[],
-  incoming: NormalizedMessage[],
-): NormalizedMessage[] {
-  if (existing.length === 0) return incoming;
-  if (incoming.length === 0) return existing;
-
-  const merged = [...existing, ...incoming];
-  const deduped: NormalizedMessage[] = [];
-  const seen = new Set<string>();
-
-  for (const msg of merged) {
-    if (seen.has(msg.id)) {
-      continue;
-    }
-
-    seen.add(msg.id);
-    deduped.push(msg);
-  }
-
-  deduped.sort(compareMessagesByTimestamp);
-  return deduped;
-}
-
-/**
- * Recompute slot.merged only when the input arrays have actually changed
- * (by reference). Returns true if merged was recomputed.
- */
-function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
-  if (slot.serverMessages === slot._lastServerRef && slot.realtimeMessages === slot._lastRealtimeRef) {
-    return false;
-  }
-  slot._lastServerRef = slot.serverMessages;
-  slot._lastRealtimeRef = slot.realtimeMessages;
-  slot.merged = computeMerged(slot.serverMessages, slot.realtimeMessages);
-  return true;
+/** Upsert one message into the log (replace-by-id keeps its position) + mark dirty. */
+function logSet(slot: SessionSlot, msg: NormalizedMessage): void {
+  slot.byId.set(msg.id, msg);
+  slot._logVersion++;
 }
 
 // ─── Stale threshold ─────────────────────────────────────────────────────────
 
 const STALE_THRESHOLD_MS = 30_000;
-
-const MAX_REALTIME_MESSAGES = 500;
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
@@ -362,9 +143,8 @@ export function useSessionStore() {
   }, [resolveSessionId]);
 
   /**
-   * Fetch messages from the provider sessions endpoint and populate serverMessages.
-   *
-   * Provider and project metadata are resolved server-side from `sessionId`.
+   * Fetch messages from the provider sessions endpoint and upsert them into the
+   * log. Provider and project metadata are resolved server-side from `sessionId`.
    */
   const fetchFromServer = useCallback(async (
     sessionId: string,
@@ -379,9 +159,8 @@ export function useSessionStore() {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
     // Stamp this fetch; if a newer fetch is started before we resolve, discard our
-    // (now-stale) response so a late reply can't overwrite fresher server history
-    // — the "reply appears, vanishes, reappears" race.
-    const fetchSeq = (slot._fetchSeq = (slot._fetchSeq ?? 0) + 1);
+    // (now-stale) response so it can't apply stale pagination metadata.
+    const fetchSeq = (slot._fetchSeq += 1);
     slot.status = 'loading';
     notify(resolvedSessionId);
 
@@ -404,13 +183,16 @@ export function useSessionStore() {
       if (slot._fetchSeq !== fetchSeq) return slot; // superseded by a newer fetch
       const messages: NormalizedMessage[] = data.messages || [];
 
-      slot.serverMessages = messages;
+      // Upsert (never replace the list): server is authoritative for its ids, but
+      // realtime-only frames not yet persisted stay in the log untouched.
+      for (const m of messages) slot.byId.set(m.id, m);
+      slot._logVersion++;
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = (opts.offset ?? 0) + messages.length;
       slot.fetchedAt = Date.now();
       slot.status = 'idle';
-      recomputeMergedIfNeeded(slot);
+      commit(slot);
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
       }
@@ -426,7 +208,7 @@ export function useSessionStore() {
   }, [getSlot, notify, resolveSessionId]);
 
   /**
-   * Load older (paginated) messages and prepend to serverMessages.
+   * Load older (paginated) messages and upsert them into the log.
    */
   const fetchMore = useCallback(async (
     sessionId: string,
@@ -455,11 +237,13 @@ export function useSessionStore() {
       const data = await response.json();
       const olderMessages: NormalizedMessage[] = data.messages || [];
 
-      // Prepend older messages (they're earlier in the conversation)
-      slot.serverMessages = [...olderMessages, ...slot.serverMessages];
+      // Older messages carry earlier timestamps; deriveLog re-sorts, so a plain
+      // upsert places them correctly without prepend bookkeeping.
+      for (const m of olderMessages) slot.byId.set(m.id, m);
+      slot._logVersion++;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = slot.offset + olderMessages.length;
-      recomputeMergedIfNeeded(slot);
+      commit(slot);
       notify(resolvedSessionId);
       return slot;
     } catch (error) {
@@ -469,35 +253,16 @@ export function useSessionStore() {
   }, [getSlot, notify, resolveSessionId]);
 
   /**
-   * Append a realtime (WebSocket) message to the correct session slot.
-   * This works regardless of which session is actively viewed.
+   * Append (upsert) a realtime (WebSocket) message into the correct session's log.
+   * Works regardless of which session is actively viewed.
    */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
     const normalizedMessage =
-      msg.sessionId === resolvedSessionId
-        ? msg
-        : { ...msg, sessionId: resolvedSessionId };
-    // Id-keyed, not append-only: a frame that re-arrives with the same id (a relay
-    // streaming snapshot, or the server-side reconnect replay buffer re-sending what
-    // we already have) must REPLACE its prior copy, never stack a second entry with
-    // the same id. Two rows sharing an id collide on the React render key and make
-    // the message flicker/vanish — the intermittent "swallowed then spat back"
-    // bug. Replace-in-place keeps the overlay an id-keyed log (claude.ai/code style).
-    const existingIdx = slot.realtimeMessages.findIndex((m) => m.id === normalizedMessage.id);
-    if (existingIdx >= 0) {
-      const next = [...slot.realtimeMessages];
-      next[existingIdx] = normalizedMessage;
-      slot.realtimeMessages = next;
-    } else {
-      let updated = [...slot.realtimeMessages, normalizedMessage];
-      if (updated.length > MAX_REALTIME_MESSAGES) {
-        updated = updated.slice(-MAX_REALTIME_MESSAGES);
-      }
-      slot.realtimeMessages = updated;
-    }
-    recomputeMergedIfNeeded(slot);
+      msg.sessionId === resolvedSessionId ? msg : { ...msg, sessionId: resolvedSessionId };
+    logSet(slot, normalizedMessage);
+    commit(slot);
     notify(resolvedSessionId);
   }, [getSlot, notify, resolveSessionId]);
 
@@ -508,28 +273,21 @@ export function useSessionStore() {
     if (msgs.length === 0) return;
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
-    // Id-keyed merge (see appendRealtime): replace same-id rows, append new ones,
-    // and collapse same-id duplicates within the batch — so a re-delivered frame
-    // can never produce two entries sharing a React key.
-    const byId = new Map(slot.realtimeMessages.map((m) => [m.id, m]));
-    const order: string[] = slot.realtimeMessages.map((m) => m.id);
     for (const msg of msgs) {
       const normalized =
         msg.sessionId === resolvedSessionId ? msg : { ...msg, sessionId: resolvedSessionId };
-      if (!byId.has(normalized.id)) order.push(normalized.id);
-      byId.set(normalized.id, normalized);
+      slot.byId.set(normalized.id, normalized);
     }
-    let updated = order.map((id) => byId.get(id)!);
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
-    }
-    slot.realtimeMessages = updated;
-    recomputeMergedIfNeeded(slot);
+    slot._logVersion++;
+    commit(slot);
     notify(resolvedSessionId);
   }, [getSlot, notify, resolveSessionId]);
 
   /**
-   * Re-fetch serverMessages from the provider sessions endpoint.
+   * Re-fetch server history (full transcript) and upsert it into the log. Because
+   * this upserts rather than replacing a list, a stale/out-of-order response can
+   * only refresh existing ids — it can never drop the live tail (the old "reply
+   * vanishes then reappears" race), so no reconcile/filter step is needed.
    */
   const refreshFromServer = useCallback(async (
     sessionId: string,
@@ -541,38 +299,22 @@ export function useSessionStore() {
   ) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
-    // Shares _fetchSeq with fetchFromServer so a refresh and a load can't clobber
-    // each other out of order (the "reply vanishes then reappears" race).
-    const fetchSeq = (slot._fetchSeq = (slot._fetchSeq ?? 0) + 1);
+    const fetchSeq = (slot._fetchSeq += 1);
     try {
-      // Catch-up refresh fetches the full transcript (no limit) so a live update
-      // never drops a just-arrived message due to a bounded window racing the
-      // file write. (The bounded variant caused replies to not appear until a
-      // manual refresh; reverted until it can be done without that race.)
-      const params = new URLSearchParams();
-
-      const qs = params.toString();
-      const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
+      const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages`;
       const response = await authenticatedFetch(url);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (slot._fetchSeq !== fetchSeq) return; // superseded by a newer fetch/refresh
 
-      slot.serverMessages = data.messages || [];
-      slot.total = data.total ?? slot.serverMessages.length;
+      const messages: NormalizedMessage[] = data.messages || [];
+      for (const m of messages) slot.byId.set(m.id, m);
+      slot._logVersion++;
+      slot.total = data.total ?? slot.byId.size;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // Reconcile realtime against the fetched history by ID. A streamed message
-      // and its fetched copy share the relay event uuid (provider derives the id
-      // from raw.uuid), so this match is exact: drop realtime rows the server now
-      // has, keep the rest. That keeps a just-streamed reply visible (the relay
-      // events API lags the live stream) WITHOUT clearing everything (which made
-      // replies vanish) and WITHOUT timestamp guesses (which dropped replies).
-      // Optimistic local_* sends stay too — computeMerged dedupes those by text.
-      const serverIds = new Set(slot.serverMessages.map((m) => m.id));
-      slot.realtimeMessages = slot.realtimeMessages.filter((m) => !serverIds.has(m.id));
-      recomputeMergedIfNeeded(slot);
+      commit(slot);
       notify(resolvedSessionId);
     } catch (error) {
       console.error(`[SessionStore] refresh failed for ${resolvedSessionId}:`, error);
@@ -600,67 +342,65 @@ export function useSessionStore() {
   }, [resolveSessionId]);
 
   /**
-   * Update or create a streaming message (accumulated text so far).
-   * Uses a well-known ID so subsequent calls replace the same message.
+   * Update or create the streaming placeholder (accumulated text so far). One
+   * well-known id per session, upserted in place so it streams without stacking.
    */
   const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: LLMProvider) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
     const streamId = `__streaming_${resolvedSessionId}`;
-    const msg: NormalizedMessage = {
+    logSet(slot, {
       id: streamId,
       sessionId: resolvedSessionId,
       timestamp: new Date().toISOString(),
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
-    };
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
-    if (idx >= 0) {
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = msg;
-    } else {
-      slot.realtimeMessages = [...slot.realtimeMessages, msg];
-    }
-    recomputeMergedIfNeeded(slot);
+    });
+    commit(slot);
     notify(resolvedSessionId);
   }, [getSlot, notify, resolveSessionId]);
 
   /**
-   * Finalize streaming: convert the streaming message to a regular text message.
-   * The well-known streaming ID is replaced with a unique text message ID.
+   * Finalize streaming: promote the streaming placeholder to a real assistant text
+   * message (new unique id) so it persists; the server's own copy, if it arrives
+   * with yet another id, is collapsed by the adjacent-echo dedup at render.
    */
   const finalizeStreaming = useCallback((sessionId: string) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = storeRef.current.get(resolvedSessionId);
     if (!slot) return;
     const streamId = `__streaming_${resolvedSessionId}`;
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
-    if (idx >= 0) {
-      const stream = slot.realtimeMessages[idx];
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = {
-        ...stream,
-        id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        kind: 'text',
-        role: 'assistant',
-      };
-      recomputeMergedIfNeeded(slot);
-      notify(resolvedSessionId);
-    }
+    const stream = slot.byId.get(streamId);
+    if (!stream) return;
+    slot.byId.delete(streamId);
+    const finalId = `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    slot.byId.set(finalId, { ...stream, id: finalId, kind: 'text', role: 'assistant' });
+    slot._logVersion++;
+    commit(slot);
+    notify(resolvedSessionId);
   }, [notify, resolveSessionId]);
 
   /**
-   * Clear realtime messages for a session (e.g., after stream completes and server fetch catches up).
+   * Drop ephemeral (optimistic / streaming-placeholder) entries from the log,
+   * leaving server- and realtime-confirmed messages. (Currently unused; kept for
+   * API stability.)
    */
   const clearRealtime = useCallback((sessionId: string) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = storeRef.current.get(resolvedSessionId);
-    if (slot) {
-      slot.realtimeMessages = [];
-      recomputeMergedIfNeeded(slot);
-      notify(resolvedSessionId);
+    if (!slot) return;
+    let changed = false;
+    for (const id of [...slot.byId.keys()]) {
+      if (id.startsWith('local_') || id.startsWith('__streaming_')) {
+        slot.byId.delete(id);
+        changed = true;
+      }
     }
+    if (!changed) return;
+    slot._logVersion++;
+    commit(slot);
+    notify(resolvedSessionId);
   }, [notify, resolveSessionId]);
 
   /**
@@ -668,7 +408,10 @@ export function useSessionStore() {
    */
   const getMessages = useCallback((sessionId: string): NormalizedMessage[] => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
-    return storeRef.current.get(resolvedSessionId)?.merged ?? [];
+    const slot = storeRef.current.get(resolvedSessionId);
+    if (!slot) return EMPTY;
+    commit(slot); // ensure merged reflects the latest log
+    return slot.merged;
   }, [resolveSessionId]);
 
   /**
@@ -693,18 +436,13 @@ export function useSessionStore() {
     const targetSlot = store.get(resolvedToSessionId) ?? createEmptySlot();
 
     if (sourceSlot) {
-      const migratedServerMessages = sourceSlot.serverMessages.map((msg) =>
-        rewriteMessageSessionId(msg, resolvedFromSessionId, resolvedToSessionId),
-      );
-      const migratedRealtimeMessages = sourceSlot.realtimeMessages.map((msg) =>
-        rewriteMessageSessionId(msg, resolvedFromSessionId, resolvedToSessionId),
-      );
-
-      targetSlot.serverMessages = mergeMessagesById(targetSlot.serverMessages, migratedServerMessages);
-      targetSlot.realtimeMessages = mergeMessagesById(targetSlot.realtimeMessages, migratedRealtimeMessages);
-      if (targetSlot.realtimeMessages.length > MAX_REALTIME_MESSAGES) {
-        targetSlot.realtimeMessages = targetSlot.realtimeMessages.slice(-MAX_REALTIME_MESSAGES);
+      // Merge the source log into the target by id (rewriting sessionId + the
+      // streaming placeholder's id). Upsert preserves the target's own entries.
+      for (const msg of sourceSlot.byId.values()) {
+        const rewritten = rewriteMessageSessionId(msg, resolvedFromSessionId, resolvedToSessionId);
+        targetSlot.byId.set(rewritten.id, rewritten);
       }
+      targetSlot._logVersion++;
       targetSlot.status =
         sourceSlot.status === 'error'
           ? 'error'
@@ -714,16 +452,12 @@ export function useSessionStore() {
               ? 'loading'
               : targetSlot.status;
       targetSlot.fetchedAt = Math.max(targetSlot.fetchedAt, sourceSlot.fetchedAt, Date.now());
-      targetSlot.total = Math.max(
-        targetSlot.total,
-        sourceSlot.total,
-        targetSlot.serverMessages.length,
-        targetSlot.realtimeMessages.length,
-      );
+      targetSlot.total = Math.max(targetSlot.total, sourceSlot.total, targetSlot.byId.size);
       targetSlot.hasMore = targetSlot.hasMore || sourceSlot.hasMore;
       targetSlot.offset = Math.max(targetSlot.offset, sourceSlot.offset);
       targetSlot.tokenUsage = targetSlot.tokenUsage ?? sourceSlot.tokenUsage;
-      recomputeMergedIfNeeded(targetSlot);
+      targetSlot._fetchSeq = Math.max(targetSlot._fetchSeq, sourceSlot._fetchSeq);
+      commit(targetSlot);
 
       store.set(resolvedToSessionId, targetSlot);
       store.delete(resolvedFromSessionId);

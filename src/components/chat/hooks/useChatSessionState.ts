@@ -330,7 +330,7 @@ export function useChatSessionState({
           projectPath: selectedProject.fullPath || selectedProject.path || '',
           limit: MESSAGES_PER_PAGE,
         });
-        if (!slot || slot.serverMessages.length === 0) return false;
+        if (!slot || slot.byId.size === 0) return false;
 
         pendingScrollRestoreRef.current = { height: previousScrollHeight, top: previousScrollTop };
         setHasMoreMessages(slot.hasMore);
