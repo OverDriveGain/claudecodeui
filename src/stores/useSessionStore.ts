@@ -101,6 +101,8 @@ export interface SessionSlot {
   hasMore: boolean;
   offset: number;
   tokenUsage: unknown;
+  /** @internal Monotonic counter to discard out-of-order server fetch responses. */
+  _fetchSeq?: number;
 }
 
 const EMPTY: NormalizedMessage[] = [];
@@ -362,6 +364,10 @@ export function useSessionStore() {
   ) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
+    // Stamp this fetch; if a newer fetch is started before we resolve, discard our
+    // (now-stale) response so a late reply can't overwrite fresher server history
+    // — the "reply appears, vanishes, reappears" race.
+    const fetchSeq = (slot._fetchSeq = (slot._fetchSeq ?? 0) + 1);
     slot.status = 'loading';
     notify(resolvedSessionId);
 
@@ -381,6 +387,7 @@ export function useSessionStore() {
       }
 
       const data = await response.json();
+      if (slot._fetchSeq !== fetchSeq) return slot; // superseded by a newer fetch
       const messages: NormalizedMessage[] = data.messages || [];
 
       slot.serverMessages = messages;
@@ -520,6 +527,9 @@ export function useSessionStore() {
   ) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
+    // Shares _fetchSeq with fetchFromServer so a refresh and a load can't clobber
+    // each other out of order (the "reply vanishes then reappears" race).
+    const fetchSeq = (slot._fetchSeq = (slot._fetchSeq ?? 0) + 1);
     try {
       // Catch-up refresh fetches the full transcript (no limit) so a live update
       // never drops a just-arrived message due to a bounded window racing the
@@ -533,6 +543,7 @@ export function useSessionStore() {
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      if (slot._fetchSeq !== fetchSeq) return; // superseded by a newer fetch/refresh
 
       slot.serverMessages = data.messages || [];
       slot.total = data.total ?? slot.serverMessages.length;
