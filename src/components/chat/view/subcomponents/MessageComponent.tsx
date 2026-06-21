@@ -15,6 +15,7 @@ import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../share
 
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import { splitInjectedContent, InjectedSegmentChip } from './InjectedContentNote';
 
 type DiffLine = {
   type: string;
@@ -64,6 +65,14 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
   const isCommandOrFileEditToolResponse = Boolean(
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
+  // Collapse injected machinery (loaded-skill payloads, long system-reminders)
+  // into compact chips so they don't dominate the chat as walls of text.
+  const userInjected = useMemo(
+    () => (message.type === 'user' ? splitInjectedContent(userCopyContent) : { text: userCopyContent, segments: [] }),
+    [message.type, userCopyContent],
+  );
+  const userDisplayText = message.type === 'user' ? userInjected.text : userCopyContent;
+  const userIsPureInjection = message.type === 'user' && userInjected.segments.length > 0 && userInjected.text === '';
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
@@ -114,9 +123,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
           <div className="group flex-1 rounded-2xl rounded-br-md bg-[#2e2e2e] px-3 py-2 text-gray-100 shadow-sm sm:flex-initial sm:px-4">
-            <div dir="auto" className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-              {message.content}
-            </div>
+            {userDisplayText && (
+              <div dir="auto" className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+                {userDisplayText}
+              </div>
+            )}
+            {userInjected.segments.length > 0 && (
+              <div className={userIsPureInjection ? 'space-y-1' : 'mt-2 space-y-1'}>
+                {userInjected.segments.map((seg, i) => (
+                  <InjectedSegmentChip key={`${seg.kind}-${i}`} seg={seg} />
+                ))}
+              </div>
+            )}
             {message.images && message.images.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {message.images.map((img, idx) =>
