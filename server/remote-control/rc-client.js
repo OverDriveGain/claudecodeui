@@ -609,6 +609,67 @@ export async function attachSession(sessionId, ws, normalize) {
   return entry;
 }
 
+/**
+ * Surface a tool-permission / AskUserQuestion the agent is STILL waiting on, when
+ * the GUI subscribes after it was asked. The relay replays nothing on subscribe
+ * (verified) and the live `control_request` fired before we attached, so without
+ * this the GUI shows only the read-only transcript copy of the question with no way
+ * to answer. We reconstruct it from history: the most recent `can_use_tool`
+ * control_request whose tool_use has no `tool_result` yet is still open, and its
+ * request_id (from the events API) is exactly the one the relay accepts for a
+ * control_response (verified live — answering by that id unblocked a stuck agent).
+ * Register it and emit the same `permission_request` frame the live path emits, so
+ * the answerable panel renders. Idempotent: the client dedups pending requests by
+ * requestId, so re-emitting on a later (re)subscribe is harmless.
+ */
+export async function emitOutstandingPermission(sessionId, ws) {
+  let events;
+  try { events = await getSessionEventsCached(sessionId); } catch { return false; }
+  if (!Array.isArray(events)) return false;
+
+  // tool_use_id -> the control_request that asked for it (carries the request_id +
+  // the input the panel needs); plus the set of tool_use_ids already answered.
+  const controlByToolUse = new Map();
+  const answered = new Set();
+  for (const e of events) {
+    if (e?.type === 'control_request' && e.request?.subtype === 'can_use_tool' && e.request?.tool_use_id) {
+      controlByToolUse.set(e.request.tool_use_id, {
+        requestId: e.request_id,
+        toolName: e.request.tool_name,
+        input: e.request.input,
+      });
+    }
+    const content = e?.message?.content;
+    if (Array.isArray(content)) {
+      for (const b of content) if (b?.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id);
+    }
+  }
+
+  // Events are oldest→newest, so the last unanswered entry is the live question.
+  let open = null;
+  for (const [toolUseId, ctrl] of controlByToolUse) {
+    if (ctrl.requestId && !answered.has(toolUseId)) open = ctrl;
+  }
+  if (!open) return false;
+
+  pendingRemotePermissions.set(open.requestId, { sessionId });
+  const frame = createNormalizedMessage({
+    kind: 'permission_request',
+    requestId: `rc:${open.requestId}`,
+    toolName: open.toolName,
+    input: open.input,
+    sessionId,
+    provider: 'claude',
+  });
+  const entry = activeRemoteSessions.get(sessionId);
+  if (entry) {
+    entry.replayBuffer.push(frame);
+    if (entry.replayBuffer.length > RC_REPLAY_BUFFER_MAX) entry.replayBuffer.shift();
+  }
+  try { ws.send(frame); } catch { /* writer race — next subscribe retries */ }
+  return true;
+}
+
 // A file is "text-like" (embed its decoded content as a text block) by mime or extension.
 const TEXT_MIMES = new Set([
   'application/json', 'application/xml', 'application/javascript', 'application/typescript',

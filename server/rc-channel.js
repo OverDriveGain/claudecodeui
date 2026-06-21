@@ -11,6 +11,7 @@ import {
   abortRemoteSession,
   resolveRemotePermission,
   isActiveRemoteSession,
+  emitOutstandingPermission,
 } from './remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from './services/rc.service.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
@@ -58,6 +59,10 @@ export async function subscribeRemoteChannel(sessionId, writer) {
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return;
   try {
     await attachSession(sessionId, writer, normalizeClaude);
+    // If the agent is waiting on a question/permission asked before we attached,
+    // surface it as an answerable request — the relay won't replay it, so without
+    // this the GUI is stuck showing the read-only transcript copy.
+    await emitOutstandingPermission(sessionId, writer);
   } catch {
     // relay unreachable / transient — the GUI still has history; live mirror resumes
     // on the next open or send.
