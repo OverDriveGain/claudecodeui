@@ -44,7 +44,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // Anthropic's beta tag for the remote-control session/event API.
 const BETA_CCR = 'ccr-byoc-2025-07-29';
 
-// sessionId -> { upstream: WebSocket, ws: clientWriter, turnActive, replayBuffer }
+// sessionId -> { upstream: WebSocket, ws: clientWriter, replayBuffer }
 const activeRemoteSessions = new Map();
 // Max frames retained per session for reconnect replay (~one turn's worth). The
 // buffer is cleared at each turn end, so this only caps a single very long turn.
@@ -490,18 +490,10 @@ export async function attachSession(sessionId, ws, normalize) {
   const upstream = new WebSocket(url, {
     headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
   });
-  // `turnActive` gates the result->complete translation: the bridge replays the
-  // previous turn's `result` when we subscribe, which would otherwise fire a
-  // premature `complete` and clear the GUI's "working" state. It is armed by ANY
-  // live-turn signal — our own drive, a live thinking_tokens frame, or a live
-  // can_use_tool request — and reset by the `result` it gates. A re-armable flag
-  // (not a one-shot latch tied to drive) is what lets queued follow-up turns and
-  // turns we merely watch still clear their loader; the replayed stale result has
-  // no live signal preceding it, so it stays suppressed.
   // replayBuffer holds the meaningful frames of (roughly) the current turn so a
   // reconnecting client can recover what it missed while its WS was down — see the
   // rebind branch above. Capped so an idle long-lived session can't grow unbounded.
-  const entry = { upstream, ws, turnActive: false, replayBuffer: [] };
+  const entry = { upstream, ws, replayBuffer: [] };
   activeRemoteSessions.set(sessionId, entry);
 
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
@@ -530,15 +522,6 @@ export async function attachSession(sessionId, ws, normalize) {
     // live — gated to the viewed session on the client, and cleared by `result`
     // below. These frames are live-only; history never sees them.
     if (m.type === 'system' && m.subtype === 'thinking_tokens') {
-      // Live work is happening NOW — arm the end-of-turn detector. thinking_tokens
-      // is a live-only frame (never part of the subscribe replay), so this is the
-      // honest "a real turn is in progress" signal. Arming here (not only on our own
-      // drive) is what lets a queued second turn, or a turn driven from the agent's
-      // own terminal that we're merely watching, still clear its `result` → without
-      // it the loader sticks on forever. The replayed stale result still stays
-      // suppressed because no thinking_tokens precedes it.
-      const e = activeRemoteSessions.get(sessionId);
-      if (e) e.turnActive = true;
       out.send({ type: 'session-status', sessionId, isProcessing: true });
       return;
     }
@@ -546,10 +529,6 @@ export async function attachSession(sessionId, ws, normalize) {
     // Permission prompt — the agent wants to use a tool; relay to the GUI's
     // existing permission UI. `rc:` prefixes the id so the answer routes back here.
     if (m.type === 'control_request' && m.request?.subtype === 'can_use_tool') {
-      // A live tool/AskUserQuestion request also means a turn is in progress — arm
-      // the detector so the `result` that follows the answer clears the loader.
-      const eReq = activeRemoteSessions.get(sessionId);
-      if (eReq) eReq.turnActive = true;
       const rawId = m.request_id || crypto.randomUUID();
       pendingRemotePermissions.set(rawId, { sessionId });
       emit(createNormalizedMessage({
@@ -583,12 +562,13 @@ export async function attachSession(sessionId, ws, normalize) {
     // End-of-TURN: a `result` SDK message means the agent finished this turn. The
     // WS stays open across turns, so translate it into a per-turn `complete` so the
     // GUI finalizes streaming and clears the "working" state (the session lives on).
-    // Ignore a `result` we didn't initiate (the bridge replays the last turn's
-    // result on subscribe) so it can't prematurely clear the "working" indicator.
+    // We ALWAYS fire complete on a result: every `result` we receive is live (the
+    // relay replays NOTHING on subscribe — verified), so there is no stale replayed
+    // result to suppress. The old `turnActive` guard dropped legitimate end-of-turn
+    // results whenever it happened to be false, which left the loader stuck "working"
+    // after the agent had stopped. Keeping it off is what keeps the loader in sync.
     if (m.type === 'result') {
       const e = activeRemoteSessions.get(sessionId);
-      if (e && !e.turnActive) return;
-      if (e) e.turnActive = false;
       emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
       // Turn finished → the relay's events API now has it, so a reconnect from here
       // recovers via the normal history refetch. Drop the buffer so it only ever
@@ -770,10 +750,6 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
   const content = toUserContent(command, images);
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
   if (hasContent) {
-    // Arm the end-of-turn detector now (after attach/replay, before send) so the
-    // NEXT `result` is treated as this turn's completion — not a stale replayed one.
-    const e = activeRemoteSessions.get(sessionId);
-    if (e) e.turnActive = true;
     const sent = await sendMessage(sessionId, content);
     if (!sent.ok) {
       const reason = sent.notActive
