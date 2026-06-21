@@ -480,7 +480,11 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const messages: NormalizedMessage[] = [];
-    const ts = raw.timestamp || new Date().toISOString();
+    // Prefer `created_at`: the relay stamps it on EVERY event (chronological,
+    // fine-grained), whereas `timestamp` is only present on user events. Reading
+    // `timestamp` first left assistant/system/tool events stamped at load time
+    // (new Date()), which scrambled message order once the store sorts by time.
+    const ts = raw.created_at || raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
 
     /**

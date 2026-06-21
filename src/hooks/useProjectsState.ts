@@ -673,7 +673,9 @@ export function useProjectsState({
         id: sessionId,
         __provider: normalizedProvider,
         __projectId: selectedProject.projectId,
-        summary: '',
+        // For a live remote agent this isn't a "new session" — show the agent's
+        // name as the title instead of the generic "New Session" placeholder.
+        summary: selectedProject.isRemoteAgent ? String(selectedProject.displayName || selectedProject.name || '') : '',
       });
     }
   }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.__provider, selectedSession?.__projectId]);
