@@ -1,5 +1,5 @@
 /* Pure unit tests for the session event-log core. Run: npx tsx src/stores/sessionLog.test.ts */
-import { deriveLog, rewriteMessageSessionId, type NormalizedMessage } from './sessionLog';
+import { deriveLog, rewriteMessageSessionId, sameMessage, type NormalizedMessage } from './sessionLog';
 
 let pass = 0;
 let fail = 0;
@@ -107,6 +107,34 @@ function logOf(...msgs: NormalizedMessage[]) {
   check('rewrite: streaming id rewritten', a.id === '__streaming_new' && a.sessionId === 'new', a.id);
   const b = rewriteMessageSessionId(msg({ id: 'keep', sessionId: 'old', timestamp: 't' }), 'old', 'new');
   check('rewrite: normal id kept, sessionId changed', b.id === 'keep' && b.sessionId === 'new');
+}
+
+// 9. sameMessage: identical content equal; any change not.
+{
+  const a = msg({ id: 'm', timestamp: 't1', role: 'assistant', content: 'hello' });
+  const b = msg({ id: 'm', timestamp: 't1', role: 'assistant', content: 'hello' });
+  const c = msg({ id: 'm', timestamp: 't1', role: 'assistant', content: 'hello!' });
+  check('sameMessage: identical → equal', sameMessage(a, b) === true);
+  check('sameMessage: content diff → not equal', sameMessage(a, c) === false);
+}
+
+// 10. Idempotent upsert: re-applying identical server messages keeps refs (no churn).
+{
+  const m1 = msg({ id: 'a', timestamp: 't1', role: 'user', content: 'hi' });
+  const m2 = msg({ id: 'b', timestamp: 't2', role: 'assistant', content: 'yo' });
+  const log = new Map<string, NormalizedMessage>();
+  const upsert = (msgs: NormalizedMessage[]) => {
+    let changed = false;
+    for (const m of msgs) { const cur = log.get(m.id); if (cur && sameMessage(cur, m)) continue; log.set(m.id, m); changed = true; }
+    return changed;
+  };
+  check('upsert: first apply changes', upsert([m1, m2]) === true);
+  const refA = log.get('a');
+  // Re-fetch returns fresh-but-identical objects (new references, same content).
+  check('upsert: identical re-apply is no-op', upsert([{ ...m1 }, { ...m2 }]) === false);
+  check('upsert: kept the existing object reference', log.get('a') === refA);
+  // A real change is detected.
+  check('upsert: changed message applies', upsert([{ ...m2, content: 'changed' }]) === true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

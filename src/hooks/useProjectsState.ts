@@ -659,13 +659,24 @@ export function useProjectsState({
               ? 'opencode'
             : 'claude';
 
-    setSelectedSession({
-      id: sessionId,
-      __provider: normalizedProvider,
-      __projectId: selectedProject.projectId,
-      summary: '',
-    });
-  }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.__provider]);
+    // Only set when it actually differs. This effect re-runs on every `projects`
+    // change (incl. the 5s agent-status poll); without this guard the fallback
+    // rebuilt selectedSession every tick — a new object reference with an empty
+    // summary — which re-rendered the chat (dropping text selections) and made the
+    // header flicker to "New Session". Idempotent set = stable reference = no churn.
+    const matchesCurrent =
+      selectedSession?.id === sessionId &&
+      selectedSession.__provider === normalizedProvider &&
+      selectedSession.__projectId === selectedProject.projectId;
+    if (!matchesCurrent) {
+      setSelectedSession({
+        id: sessionId,
+        __provider: normalizedProvider,
+        __projectId: selectedProject.projectId,
+        summary: '',
+      });
+    }
+  }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.__provider, selectedSession?.__projectId]);
 
   const handleProjectSelect = useCallback(
     (project: Project) => {

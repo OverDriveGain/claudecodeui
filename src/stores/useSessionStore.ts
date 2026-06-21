@@ -20,6 +20,7 @@ import type { LLMProvider } from '../types/app';
 import {
   deriveLog,
   rewriteMessageSessionId,
+  sameMessage,
   EMPTY,
   type NormalizedMessage,
   type MessageKind,
@@ -74,10 +75,31 @@ function commit(slot: SessionSlot): void {
   slot._mergedAtVersion = slot._logVersion;
 }
 
-/** Upsert one message into the log (replace-by-id keeps its position) + mark dirty. */
-function logSet(slot: SessionSlot, msg: NormalizedMessage): void {
+/**
+ * Upsert one message. Returns true if the log actually changed. An incoming
+ * message identical to the one already stored is a NO-OP — the existing object
+ * reference is kept, so an idle/background refetch of unchanged content triggers
+ * no re-render (and doesn't tear down a text selection).
+ */
+function logSet(slot: SessionSlot, msg: NormalizedMessage): boolean {
+  const cur = slot.byId.get(msg.id);
+  if (cur && sameMessage(cur, msg)) return false;
   slot.byId.set(msg.id, msg);
   slot._logVersion++;
+  return true;
+}
+
+/** Upsert many; returns true if anything changed (one version bump for the batch). */
+function logSetMany(slot: SessionSlot, msgs: NormalizedMessage[]): boolean {
+  let changed = false;
+  for (const m of msgs) {
+    const cur = slot.byId.get(m.id);
+    if (cur && sameMessage(cur, m)) continue;
+    slot.byId.set(m.id, m);
+    changed = true;
+  }
+  if (changed) slot._logVersion++;
+  return changed;
 }
 
 // ─── Stale threshold ─────────────────────────────────────────────────────────
@@ -161,8 +183,14 @@ export function useSessionStore() {
     // Stamp this fetch; if a newer fetch is started before we resolve, discard our
     // (now-stale) response so it can't apply stale pagination metadata.
     const fetchSeq = (slot._fetchSeq += 1);
-    slot.status = 'loading';
-    notify(resolvedSessionId);
+    // Only flash "loading" (and re-render) on a COLD load. A background re-fetch of
+    // an already-populated session must not churn the view — that's what dropped
+    // text selections while idle.
+    const coldLoad = slot.byId.size === 0;
+    if (coldLoad) {
+      slot.status = 'loading';
+      notify(resolvedSessionId);
+    }
 
     try {
       const params = new URLSearchParams();
@@ -183,21 +211,22 @@ export function useSessionStore() {
       if (slot._fetchSeq !== fetchSeq) return slot; // superseded by a newer fetch
       const messages: NormalizedMessage[] = data.messages || [];
 
-      // Upsert (never replace the list): server is authoritative for its ids, but
-      // realtime-only frames not yet persisted stay in the log untouched.
-      for (const m of messages) slot.byId.set(m.id, m);
-      slot._logVersion++;
+      // Idempotent upsert (never replace the list): unchanged messages keep their
+      // existing object reference, so a no-op refetch causes no re-render.
+      const changed = logSetMany(slot, messages);
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = (opts.offset ?? 0) + messages.length;
       slot.fetchedAt = Date.now();
       slot.status = 'idle';
-      commit(slot);
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
       }
-
-      notify(resolvedSessionId);
+      // Re-render only when the messages or the cold-load status actually changed.
+      if (changed || coldLoad) {
+        commit(slot);
+        notify(resolvedSessionId);
+      }
       return slot;
     } catch (error) {
       console.error(`[SessionStore] fetch failed for ${resolvedSessionId}:`, error);
@@ -239,12 +268,13 @@ export function useSessionStore() {
 
       // Older messages carry earlier timestamps; deriveLog re-sorts, so a plain
       // upsert places them correctly without prepend bookkeeping.
-      for (const m of olderMessages) slot.byId.set(m.id, m);
-      slot._logVersion++;
+      const changed = logSetMany(slot, olderMessages);
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = slot.offset + olderMessages.length;
-      commit(slot);
-      notify(resolvedSessionId);
+      if (changed) {
+        commit(slot);
+        notify(resolvedSessionId);
+      }
       return slot;
     } catch (error) {
       console.error(`[SessionStore] fetchMore failed for ${resolvedSessionId}:`, error);
@@ -261,7 +291,7 @@ export function useSessionStore() {
     const slot = getSlot(resolvedSessionId);
     const normalizedMessage =
       msg.sessionId === resolvedSessionId ? msg : { ...msg, sessionId: resolvedSessionId };
-    logSet(slot, normalizedMessage);
+    if (!logSet(slot, normalizedMessage)) return; // identical re-delivery — no churn
     commit(slot);
     notify(resolvedSessionId);
   }, [getSlot, notify, resolveSessionId]);
@@ -273,12 +303,10 @@ export function useSessionStore() {
     if (msgs.length === 0) return;
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
     const slot = getSlot(resolvedSessionId);
-    for (const msg of msgs) {
-      const normalized =
-        msg.sessionId === resolvedSessionId ? msg : { ...msg, sessionId: resolvedSessionId };
-      slot.byId.set(normalized.id, normalized);
-    }
-    slot._logVersion++;
+    const normalized = msgs.map((msg) =>
+      msg.sessionId === resolvedSessionId ? msg : { ...msg, sessionId: resolvedSessionId },
+    );
+    if (!logSetMany(slot, normalized)) return; // nothing new — no churn
     commit(slot);
     notify(resolvedSessionId);
   }, [getSlot, notify, resolveSessionId]);
@@ -309,13 +337,16 @@ export function useSessionStore() {
       if (slot._fetchSeq !== fetchSeq) return; // superseded by a newer fetch/refresh
 
       const messages: NormalizedMessage[] = data.messages || [];
-      for (const m of messages) slot.byId.set(m.id, m);
-      slot._logVersion++;
+      const changed = logSetMany(slot, messages);
       slot.total = data.total ?? slot.byId.size;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      commit(slot);
-      notify(resolvedSessionId);
+      // No-op refetch (idle catch-up with nothing new) → no re-render, so a text
+      // selection survives. Only notify when the log actually changed.
+      if (changed) {
+        commit(slot);
+        notify(resolvedSessionId);
+      }
     } catch (error) {
       console.error(`[SessionStore] refresh failed for ${resolvedSessionId}:`, error);
     }

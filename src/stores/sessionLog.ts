@@ -90,6 +90,17 @@ export interface NormalizedMessage {
   rowid?: number;
 }
 
+/**
+ * Value-equality for two messages with the same id. Used so an idle/background
+ * refetch that returns identical content is a no-op: keeping the EXISTING object
+ * reference means React re-renders nothing, so an in-progress text selection isn't
+ * torn down. (Cheap enough — only runs on fetch, never per render.)
+ */
+export function sameMessage(a: NormalizedMessage, b: NormalizedMessage): boolean {
+  if (a === b) return true;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 // ─── Ordering ────────────────────────────────────────────────────────────────
 
 /**
