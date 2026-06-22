@@ -129,6 +129,9 @@ export function useChatSessionState({
   const topLoadLockRef = useRef(false);
   const pendingScrollRestoreRef = useRef<ScrollRestoreState | null>(null);
   const pendingInitialScrollRef = useRef(true);
+  // Last rendered message count — used so auto-scroll fires ONLY when a new message
+  // actually arrives (count grew), not on every background reload/re-render.
+  const lastMessageCountRef = useRef(0);
   const messagesOffsetRef = useRef(0);
   const scrollPositionRef = useRef({ height: 0, top: 0 });
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -380,6 +383,7 @@ export function useChatSessionState({
     }
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
+    lastMessageCountRef.current = 0;
     setIsUserScrolledUp(false);
   }, [selectedProject?.projectId, selectedSession?.id]);
 
@@ -706,17 +710,23 @@ export function useChatSessionState({
 
   useEffect(() => {
     if (!scrollContainerRef.current || chatMessages.length === 0) return;
+
+    // Track count changes here (before the early-returns) so paginating older
+    // messages updates the baseline too — otherwise the count jump from a "load
+    // more" would later read as growth and yank the view to the bottom.
+    const grew = chatMessages.length > lastMessageCountRef.current;
+    lastMessageCountRef.current = chatMessages.length;
+
     if (isLoadingMoreRef.current || isLoadingMoreMessages || pendingScrollRestoreRef.current) return;
     if (searchScrollActiveRef.current) return;
 
     if (autoScrollToBottom) {
-      // Don't yank the view to the bottom on a background reload while the user is
-      // actively selecting text — that's exactly when an auto-scroll is most
-      // disruptive (it throws away what they were reading/highlighting).
+      // And not while the user is actively selecting text (that's when an
+      // auto-scroll is most disruptive — it throws away what they're highlighting).
       const hasSelection =
         typeof window !== 'undefined' &&
         (window.getSelection?.()?.toString().trim().length ?? 0) > 0;
-      if (!isUserScrolledUp && !hasSelection) setTimeout(() => scrollToBottom(), 50);
+      if (grew && !isUserScrolledUp && !hasSelection) setTimeout(() => scrollToBottom(), 50);
       return;
     }
 
