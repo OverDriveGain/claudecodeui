@@ -541,7 +541,10 @@ export function useChatSessionState({
             projectPath: selectedProject.fullPath || selectedProject.path || '',
           });
 
-          if (Boolean(autoScrollToBottom) && isNearBottom()) {
+          const hasSelection =
+            typeof window !== 'undefined' &&
+            (window.getSelection?.()?.toString().trim().length ?? 0) > 0;
+          if (Boolean(autoScrollToBottom) && isNearBottom() && !hasSelection) {
             setTimeout(() => scrollToBottom(), 200);
           }
         }
@@ -707,7 +710,13 @@ export function useChatSessionState({
     if (searchScrollActiveRef.current) return;
 
     if (autoScrollToBottom) {
-      if (!isUserScrolledUp) setTimeout(() => scrollToBottom(), 50);
+      // Don't yank the view to the bottom on a background reload while the user is
+      // actively selecting text — that's exactly when an auto-scroll is most
+      // disruptive (it throws away what they were reading/highlighting).
+      const hasSelection =
+        typeof window !== 'undefined' &&
+        (window.getSelection?.()?.toString().trim().length ?? 0) > 0;
+      if (!isUserScrolledUp && !hasSelection) setTimeout(() => scrollToBottom(), 50);
       return;
     }
 
