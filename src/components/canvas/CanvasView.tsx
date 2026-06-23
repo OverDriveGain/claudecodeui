@@ -4,6 +4,8 @@ import type { Project } from '../../types/app';
 import { useCanvasState } from '../../stores/useCanvasStore';
 
 import type { CanvasPaneId } from './types';
+import FreePane from './panes/FreePane';
+import ImagePane from './panes/ImagePane';
 
 interface CanvasViewProps {
   selectedProject?: Project | null;
@@ -53,7 +55,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto md:grid-cols-2 lg:grid-cols-3">
         <div className="min-h-[180px]">
-          <PanePlaceholder title={PANE_TITLES.top_view} />
+          <ImagePane title={PANE_TITLES.top_view} asset={canvas.values.top_view} />
         </div>
         <div className="min-h-[180px]">
           <PanePlaceholder title={PANE_TITLES.three_d} />
@@ -62,7 +64,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           <PanePlaceholder title={PANE_TITLES.costs} />
         </div>
         <div className="min-h-[180px]">
-          <PanePlaceholder title={PANE_TITLES.free} />
+          <FreePane content={canvas.values.free} />
         </div>
         <div className="min-h-[180px]">
           <PanePlaceholder title={PANE_TITLES.map} />
