@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
+import CanvasView from '../../canvas/CanvasView';
 import FileTree from '../../file-tree/view/FileTree';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
 import GitPanel from '../../git-panel/view/GitPanel';
@@ -156,6 +157,12 @@ function MainContent({
                 onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
               />
             </ErrorBoundary>
+          </div>
+
+          {/* Canvas uses the block/hidden pattern (not unmount) so heavy pane
+              renderers (three.js) keep their context across tab switches. */}
+          <div className={`h-full overflow-hidden ${activeTab === 'canvas' ? 'block' : 'hidden'}`}>
+            <CanvasView selectedProject={selectedProject} />
           </div>
 
           {activeTab === 'files' && (
