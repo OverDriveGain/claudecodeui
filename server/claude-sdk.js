@@ -28,6 +28,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { createCanvasMcpServer } from './canvas/canvas-mcp.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -536,11 +537,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
       model: resolvedModel || options.model,
     });
 
-    // Load MCP configuration
+    // Load MCP configuration (from ~/.claude.json), then merge in our in-process
+    // Project Canvas server so `update_canvas` is always available alongside any
+    // user-configured MCP servers. The canvas server is in-process (no child),
+    // so it never breaks the local-CLI path even if no .claude.json exists.
     const mcpServers = await loadMcpConfig(options.cwd);
-    if (mcpServers) {
-      sdkOptions.mcpServers = mcpServers;
-    }
+    sdkOptions.mcpServers = {
+      ...(mcpServers || {}),
+      mymu_canvas: createCanvasMcpServer(),
+    };
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
