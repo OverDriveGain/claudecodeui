@@ -5,6 +5,7 @@ import type { SubagentChildTool } from '../types/types';
 
 import { getToolConfig } from './configs/toolConfigs';
 import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer, FileDeliveryContent } from './components';
+import { CANVAS_TOOL_NAME, CanvasUpdateTap } from './CanvasTap';
 import { PlanDisplay } from './components/PlanDisplay';
 import { ToolStatusBadge } from './components/ToolStatusBadge';
 import type { ToolStatus } from './components/ToolStatusBadge';
@@ -137,6 +138,19 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         files={files}
         caption={typeof parsedData?.caption === 'string' ? parsedData.caption : undefined}
         projectId={selectedProject?.projectId}
+      />
+    );
+  }
+
+  // Project Canvas: the `update_canvas` MCP tool drives the Canvas view, not the
+  // chat thread. Tap the INPUT frame into the canvas store and render NOTHING
+  // in-thread (the panes live in the Canvas tab). The result frame is suppressed.
+  if (toolName === CANVAS_TOOL_NAME) {
+    if (mode === 'result') return null;
+    return (
+      <CanvasUpdateTap
+        payload={parsedData}
+        conversationId={selectedProject?.projectId}
       />
     );
   }
