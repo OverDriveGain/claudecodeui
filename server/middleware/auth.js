@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
+
 import { userDb, appConfigDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { runWithUserContext } from '../services/user-context.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -29,7 +31,8 @@ const authenticateToken = async (req, res, next) => {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
       req.user = user;
-      return next();
+      // Carry the user's per-agent visibility for the rest of the request.
+      return runWithUserContext(user.agent_allow, next);
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -69,7 +72,8 @@ const authenticateToken = async (req, res, next) => {
     }
 
     req.user = user;
-    next();
+    // Carry the user's per-agent visibility for the rest of the request.
+    return runWithUserContext(user.agent_allow, next);
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
@@ -95,7 +99,7 @@ const authenticateWebSocket = (token) => {
     try {
       const user = userDb.getFirstUser();
       if (user) {
-        return { id: user.id, userId: user.id, username: user.username };
+        return { id: user.id, userId: user.id, username: user.username, agent_allow: user.agent_allow };
       }
       return null;
     } catch (error) {
@@ -116,7 +120,7 @@ const authenticateWebSocket = (token) => {
     if (!user) {
       return null;
     }
-    return { userId: user.id, username: user.username };
+    return { userId: user.id, username: user.username, agent_allow: user.agent_allow };
   } catch (error) {
     console.error('WebSocket token verification error:', error);
     return null;

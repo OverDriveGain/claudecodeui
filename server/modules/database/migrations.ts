@@ -415,6 +415,10 @@ export const runMigrations = (db: Database) => {
       'has_completed_onboarding',
       'BOOLEAN DEFAULT 0'
     );
+    // Per-user remote-agent visibility. NULL/empty = unrestricted (admin: sees
+    // every agent the deployment allows). A comma-separated glob list restricts
+    // this user to ONLY agents whose name matches — enforced server-side.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_allow', 'TEXT DEFAULT NULL');
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);

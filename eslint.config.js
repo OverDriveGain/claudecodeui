@@ -161,6 +161,7 @@ export default tseslint.config(
             "server/shared/utils.{js,ts}",
             "server/shared/frontmatter.ts",
             "server/shared/claude-cli-path.ts",
+            "server/services/user-context.{js,ts}", // per-request user context (agent visibility) — a cross-cutting runtime helper
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

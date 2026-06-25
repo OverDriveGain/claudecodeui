@@ -8,6 +8,7 @@
 
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
 import { isRemoteControlConfigured, listAgents, getSessionCwd } from '@/remote-control/rc-client.js';
+import { currentAgentAllow } from '@/services/user-context.js';
 
 // Paging the whole fleet is heavier than a single request. The roster itself
 // changes slowly, but worker_status (the running dot) needs to feel live, and the
@@ -87,6 +88,21 @@ function captureAllows(title: string): boolean {
   return true;
 }
 
+/**
+ * Narrow the (already deployment-filtered) agent list to what the CURRENT user is
+ * allowed to see — their per-user `agent_allow` patterns (carried via the request
+ * context). null/empty = unrestricted (admin). Applied on every read, so it gates
+ * the list AND — because isAgentCaptureAllowed derives from this list — drive,
+ * subscribe, history, and file access for that user too. Matches the cleaned
+ * title (what the list already exposes).
+ */
+function filterByUser(agents: RemoteAgent[]): RemoteAgent[] {
+  const allow = currentAgentAllow();
+  if (!allow || allow.length === 0) return agents;
+  const res = allow.map(globToRegExp);
+  return agents.filter((a) => res.some((re) => re.test(a.title)));
+}
+
 let agentCache: { at: number; value: RemoteAgent[] } | null = null;
 
 /**
@@ -98,7 +114,7 @@ let agentCache: { at: number; value: RemoteAgent[] } | null = null;
 export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAgent[]> {
   if (!remoteControlEnabled()) return [];
   const now = Date.now();
-  if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return agentCache.value;
+  if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return filterByUser(agentCache.value);
   try {
     const raw = await listAgents();
     type Mapped = RemoteAgent & { active: boolean };
@@ -145,9 +161,9 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
       );
     agentCache = { at: now, value };
-    return value;
+    return filterByUser(value);
   } catch {
-    return agentCache?.value ?? [];
+    return filterByUser(agentCache?.value ?? []);
   }
 }
 

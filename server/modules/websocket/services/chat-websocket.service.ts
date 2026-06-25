@@ -8,6 +8,7 @@ import type {
   LLMProvider,
 } from '@/shared/types.js';
 import { createNormalizedMessage, parseIncomingJsonObject } from '@/shared/utils.js';
+import { runWithUserContext } from '@/services/user-context.js';
 
 type ChatIncomingMessage = AnyRecord & {
   type?: string;
@@ -114,7 +115,13 @@ export function handleChatConnection(
 
   const writer = new WebSocketWriter(ws, readRequestUserId(request));
 
-  ws.on('message', async (rawMessage) => {
+  // Per-connection agent visibility: every message this socket sends is dispatched
+  // inside the user's context, so the rc.service capture checks enforce per-user
+  // scoping on subscribe/drive (same as HTTP requests via the auth middleware).
+  const agentAllowRaw =
+    (request?.user as { agent_allow?: string | null } | undefined)?.agent_allow ?? null;
+
+  ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, async () => {
     try {
       const parsed = parseIncomingJsonObject(rawMessage);
       if (!parsed) {
@@ -312,7 +319,7 @@ export function handleChatConnection(
         error: message,
       });
     }
-  });
+  }));
 
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');
