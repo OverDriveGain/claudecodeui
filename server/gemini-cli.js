@@ -158,16 +158,18 @@ async function spawnGemini(command, options = {}, ws) {
     const cleanPath = (cwd || projectPath || process.cwd()).replace(/[^\x20-\x7E]/g, '').trim();
     const workingDir = cleanPath;
 
-    // Handle images by saving them to temporary files and passing paths to Gemini
+    // Handle attachments by saving them to temporary files and passing paths to Gemini.
+    // Preserve each file's real name/type so a PDF/text file isn't presented as an image.
     const tempImagePaths = [];
     let tempDir = null;
     if (images && images.length > 0) {
         try {
             // Create temp directory in the project directory so Gemini can access it
-            tempDir = path.join(workingDir, '.tmp', 'images', Date.now().toString());
+            tempDir = path.join(workingDir, '.tmp', 'attachments', Date.now().toString());
             await fs.mkdir(tempDir, { recursive: true });
 
-            // Save each image to a temp file
+            const usedNames = new Set();
+            // Save each attachment to a temp file, keeping its original filename/extension.
             for (const [index, image] of images.entries()) {
                 // Extract base64 data and mime type
                 const matches = image.data.match(/^data:([^;]+);base64,(.+)$/);
@@ -176,8 +178,11 @@ async function spawnGemini(command, options = {}, ws) {
                 }
 
                 const [, mimeType, base64Data] = matches;
-                const extension = mimeType.split('/')[1] || 'png';
-                const filename = `image_${index}.${extension}`;
+                const extension = (mimeType.split('/')[1] || 'bin').replace(/[^a-zA-Z0-9.+-]/g, '');
+                let filename = (image.name || `file_${index}.${extension}`).replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                if (!filename || filename === '_') filename = `file_${index}.${extension}`;
+                if (usedNames.has(filename)) filename = `${index}_${filename}`;
+                usedNames.add(filename);
                 const filepath = path.join(tempDir, filename);
 
                 // Write base64 data to file
@@ -185,10 +190,10 @@ async function spawnGemini(command, options = {}, ws) {
                 tempImagePaths.push(filepath);
             }
 
-            // Include the full image paths in the prompt for Gemini to reference
-            // Gemini CLI can read images from file paths in the prompt
+            // Include the full file paths in the prompt for Gemini to reference
+            // (type-neutral wording — these may be images, PDFs, text, code, …).
             if (tempImagePaths.length > 0 && command && command.trim()) {
-                const imageNote = `\n\n[Images given: ${tempImagePaths.length} images are located at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+                const imageNote = `\n\n[Attached files provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
                 const modifiedCommand = command + imageNote;
 
                 // Update the command in args

@@ -358,10 +358,13 @@ function extractTokenBudget(sdkMessage) {
 }
 
 /**
- * Handles image processing for SDK queries
- * Saves base64 images to temporary files and returns modified prompt with file paths
+ * Handles attachment processing for SDK queries.
+ * Saves each base64 attachment to a temp file PRESERVING its original name/type
+ * (not "image_N.png" for everything) and returns the prompt annotated with the
+ * paths. Images and other files (PDF, text, code, …) are written and described the
+ * same way — by real path — so the agent treats a PDF as a PDF, not an image.
  * @param {string} command - Original user prompt
- * @param {Array} images - Array of image objects with base64 data
+ * @param {Array} images - Array of attachment objects (upload-images shape: { name, data, mimeType })
  * @param {string} cwd - Working directory for temp file creation
  * @returns {Promise<Object>} {modifiedCommand, tempImagePaths, tempDir}
  */
@@ -376,21 +379,28 @@ async function handleImages(command, images, cwd) {
   try {
     // Create temp directory in the project directory
     const workingDir = cwd || process.cwd();
-    tempDir = path.join(workingDir, '.tmp', 'images', Date.now().toString());
+    tempDir = path.join(workingDir, '.tmp', 'attachments', Date.now().toString());
     await fs.mkdir(tempDir, { recursive: true });
 
-    // Save each image to a temp file
+    const usedNames = new Set();
+    // Save each attachment to a temp file, keeping its original filename/extension.
     for (const [index, image] of images.entries()) {
       // Extract base64 data and mime type
       const matches = image.data.match(/^data:([^;]+);base64,(.+)$/);
       if (!matches) {
-        console.error('Invalid image data format');
+        console.error('Invalid attachment data format');
         continue;
       }
 
       const [, mimeType, base64Data] = matches;
-      const extension = mimeType.split('/')[1] || 'png';
-      const filename = `image_${index}.${extension}`;
+      // Prefer the real upload name (sanitized) so the extension/type is preserved;
+      // fall back to file_<n>.<ext-from-mime> when no name was supplied.
+      const extension = (mimeType.split('/')[1] || 'bin').replace(/[^a-zA-Z0-9.+-]/g, '');
+      let filename = (image.name || `file_${index}.${extension}`).replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      if (!filename || filename === '_') filename = `file_${index}.${extension}`;
+      // Avoid collisions when two uploads share a name.
+      if (usedNames.has(filename)) filename = `${index}_${filename}`;
+      usedNames.add(filename);
       const filepath = path.join(tempDir, filename);
 
       // Write base64 data to file
@@ -398,17 +408,16 @@ async function handleImages(command, images, cwd) {
       tempImagePaths.push(filepath);
     }
 
-    // Include the full image paths in the prompt
+    // Annotate the prompt with the saved paths (type-neutral wording).
     let modifiedCommand = command;
     if (tempImagePaths.length > 0 && command && command.trim()) {
-      const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
-      modifiedCommand = command + imageNote;
+      const note = `\n\n[Attached files provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+      modifiedCommand = command + note;
     }
 
-    // Images processed
     return { modifiedCommand, tempImagePaths, tempDir };
   } catch (error) {
-    console.error('Error processing images for SDK:', error);
+    console.error('Error processing attachments for SDK:', error);
     return { modifiedCommand: command, tempImagePaths, tempDir };
   }
 }
