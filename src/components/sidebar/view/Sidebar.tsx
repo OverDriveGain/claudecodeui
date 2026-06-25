@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useAuth } from '../../auth';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
@@ -41,6 +42,12 @@ function Sidebar({
   isMobile,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
+  const { user } = useAuth();
+  // Agent-scoped users (server-set `agent_allow`) have no local projects — surface
+  // their agents in the conversations list too rather than leaving it blank.
+  const agentScoped = Boolean(
+    typeof user?.agent_allow === 'string' && user.agent_allow.trim().length > 0,
+  );
   const { isPWA } = useDeviceSettings({ trackMobile: false });
   const { updateAvailable, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
     'siteboon',
@@ -141,6 +148,7 @@ function Sidebar({
   };
 
   const projectListProps: SidebarProjectListProps = {
+    agentScoped,
     projects,
     filteredProjects,
     selectedProject,
