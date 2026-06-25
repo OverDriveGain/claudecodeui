@@ -11,11 +11,6 @@ export type SidebarProjectListProps = {
   // Which list this instance renders: conversations/projects (default) or the
   // remote-control agents. Agents live in their own top-level tab.
   listKind?: 'projects' | 'agents';
-  // True when the logged-in user is restricted to specific agents (server-set
-  // `agent_allow`). Such users have no local projects — their agent IS their
-  // conversation — so agents are shown in the conversations list too instead of
-  // being filtered out. Unset for admins, who keep the clean agents/conversations split.
-  agentScoped?: boolean;
   projects: Project[];
   filteredProjects: Project[];
   selectedProject: Project | null;
@@ -61,7 +56,6 @@ export type SidebarProjectListProps = {
 
 export default function SidebarProjectList({
   listKind = 'projects',
-  agentScoped = false,
   projects,
   filteredProjects,
   selectedProject,
@@ -181,11 +175,7 @@ export default function SidebarProjectList({
     );
   }
 
-  // Normally agents are kept out of the conversations list (they have their own tab).
-  // For an agent-scoped user there are no local projects — the agent IS their
-  // conversation — so keep agents here too; clicking one opens its relay history
-  // (SidebarProjectItem's remote-agent branch), not a new session.
-  const conversationProjects = filteredProjects.filter((project) => agentScoped || !isAgent(project));
+  const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
   return (
     <div className="pb-safe-area-inset-bottom md:space-y-1">
       {!showProjects ? state : conversationProjects.map(renderItem)}

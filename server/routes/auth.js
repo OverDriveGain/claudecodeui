@@ -62,7 +62,7 @@ router.post('/register', async (req, res) => {
 
       res.json({
         success: true,
-        user: { id: user.id, username: user.username, agent_allow: null },
+        user: { id: user.id, username: user.username },
         token
       });
     } catch (error) {
@@ -110,10 +110,10 @@ router.post('/login', async (req, res) => {
     
     res.json({
       success: true,
-      user: { id: user.id, username: user.username, agent_allow: user.agent_allow ?? null },
+      user: { id: user.id, username: user.username },
       token
     });
-
+    
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
