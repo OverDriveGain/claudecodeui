@@ -40,6 +40,17 @@ function globToRegExp(glob: string): RegExp {
 }
 
 /**
+ * Whether `name` is visible to a user with the given `agentAllow` patterns. null/empty
+ * = unrestricted (true for everything). Pure — takes the patterns explicitly, so it
+ * works off the request context (isNameAllowedForUser) AND off a stored per-connection
+ * allow-list (the watcher's per-client broadcast).
+ */
+export function isNameAllowedFor(name: string, agentAllow: string[] | null | undefined): boolean {
+  if (!agentAllow || agentAllow.length === 0) return true;
+  return agentAllow.some((pattern) => globToRegExp(pattern).test(name));
+}
+
+/**
  * Whether `name` is visible to the CURRENT request's user. Returns true when the
  * user is unrestricted (admin / context-less). Otherwise the name must match one of
  * their `agent_allow` patterns. Used to scope a restricted user to the local project
@@ -47,9 +58,7 @@ function globToRegExp(glob: string): RegExp {
  * list uses — so the per-user filter is one consistent rule across list/history/files.
  */
 export function isNameAllowedForUser(name: string): boolean {
-  const allow = currentAgentAllow();
-  if (!allow || allow.length === 0) return true;
-  return allow.some((pattern) => globToRegExp(pattern).test(name));
+  return isNameAllowedFor(name, currentAgentAllow());
 }
 
 /** Run `fn` with the given user's agent-visibility context active. */

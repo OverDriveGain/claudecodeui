@@ -7,7 +7,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { LLMProvider } from '@/shared/types.js';
-import { getProjectsWithSessions } from '@/modules/projects/index.js';
+import { getProjectsWithSessions, filterProjectsForUser } from '@/modules/projects/index.js';
 
 type WatcherEventType = 'add' | 'change';
 
@@ -292,15 +292,18 @@ async function flushPendingWatcherUpdate(): Promise<void> {
   watcherRefreshInFlight = true;
 
   try {
-    const updatedProjects = await getProjectsWithSessions({ skipSynchronization: true });
+    // Computed with no request context = the unrestricted superset. Each client is
+    // then sent ITS OWN per-user slice below — never the full list — so a restricted
+    // account can't see other agents flicker in via this realtime push (it would
+    // otherwise show every agent until the next user-scoped HTTP refresh).
+    const updatedProjects = await getProjectsWithSessions({ skipSynchronization: true, skipProgress: true });
     const changeTypes = Array.from(queuedUpdate.changeTypes);
     const watchProviders = Array.from(queuedUpdate.providers);
     const updatedSessionIds = Array.from(queuedUpdate.updatedSessionIds);
 
     // Backward-compatible fields stay populated with the first queued values.
-    const updateMessage = JSON.stringify({
+    const baseMessage = {
       type: 'projects_updated',
-      projects: updatedProjects,
       timestamp: new Date().toISOString(),
       changeType: changeTypes[0] ?? 'change',
       updatedSessionId: updatedSessionIds[0] ?? undefined,
@@ -309,12 +312,12 @@ async function flushPendingWatcherUpdate(): Promise<void> {
       updatedSessionIds,
       watchProviders,
       batched: true,
-    });
+    };
 
     connectedClients.forEach(client => {
-      if (client.readyState === WS_OPEN_STATE) {
-        client.send(updateMessage);
-      }
+      if (client.readyState !== WS_OPEN_STATE) return;
+      const projectsForClient = filterProjectsForUser(updatedProjects, client.agentAllow ?? null);
+      client.send(JSON.stringify({ ...baseMessage, projects: projectsForClient }));
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
