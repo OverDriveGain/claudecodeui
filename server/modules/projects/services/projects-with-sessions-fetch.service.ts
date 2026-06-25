@@ -7,7 +7,7 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 import { remoteProjectId, listRemoteAgents } from '@/services/rc.service.js';
-import { currentAgentAllow } from '@/services/user-context.js';
+import { currentAgentAllow, isNameAllowedForUser } from '@/services/user-context.js';
 
 type SessionSummary = {
   id: string;
@@ -308,11 +308,19 @@ export async function getProjectsWithSessions(
     total: totalProjects,
   });
 
-  // A user restricted to specific agents (agent_allow) is an agent operator — they
-  // see ONLY their allowed remote agents' conversations, never the host's local
-  // filesystem projects. Remote agents above are already per-user filtered.
+  // A user restricted by agent_allow sees the SAME list as the host, just filtered
+  // to their agent: the local project(s) whose name matches their allow patterns
+  // (their agent's conversations) plus their allowed remote agents (already
+  // per-user filtered above). Other hosts' local projects are hidden. Match the
+  // display name AND the path basename so a custom-named or path-decoded project
+  // both resolve to the agent name.
   if (currentAgentAllow()?.length) {
-    return projects.filter((p) => p.isRemoteAgent);
+    return projects.filter(
+      (p) =>
+        p.isRemoteAgent ||
+        isNameAllowedForUser(p.displayName) ||
+        isNameAllowedForUser(path.basename(p.path)),
+    );
   }
 
   return projects;

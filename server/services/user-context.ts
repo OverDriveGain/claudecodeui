@@ -33,6 +33,25 @@ export function parseAgentAllow(raw: string | null | undefined): string[] | null
   return patterns.length > 0 ? patterns : null;
 }
 
+/** Compile one `agent_allow` glob (case-insensitive, `*` = wildcard) to a RegExp. */
+function globToRegExp(glob: string): RegExp {
+  const escaped = glob.trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+/**
+ * Whether `name` is visible to the CURRENT request's user. Returns true when the
+ * user is unrestricted (admin / context-less). Otherwise the name must match one of
+ * their `agent_allow` patterns. Used to scope a restricted user to the local project
+ * (and remote agent) that shares its agent's name — the same name match the agent
+ * list uses — so the per-user filter is one consistent rule across list/history/files.
+ */
+export function isNameAllowedForUser(name: string): boolean {
+  const allow = currentAgentAllow();
+  if (!allow || allow.length === 0) return true;
+  return allow.some((pattern) => globToRegExp(pattern).test(name));
+}
+
 /** Run `fn` with the given user's agent-visibility context active. */
 export function runWithUserContext<T>(agentAllowRaw: string | null | undefined, fn: () => T): T {
   return storage.run({ agentAllow: parseAgentAllow(agentAllowRaw) }, fn);
