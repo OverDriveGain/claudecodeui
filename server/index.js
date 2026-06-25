@@ -85,6 +85,7 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd, isAgentCaptureAllowed } from './services/rc.service.js';
+import { currentAgentAllow } from './services/user-context.js';
 import { getSessionEventsCached } from './remote-control/rc-client.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -105,6 +106,9 @@ async function resolveProjectRootById(projectId) {
     if (isRemoteProjectId(projectId)) {
         return await getRemoteAgentCwd(sessionIdFromProjectId(projectId));
     }
+    // Agent-restricted users (agent_allow set) get no access to local-project files —
+    // only their allowed remote agents' folders (handled above).
+    if (currentAgentAllow()?.length) return null;
     return await projectsDb.getProjectPathById(projectId);
 }
 const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';

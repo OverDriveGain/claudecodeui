@@ -13,6 +13,7 @@ import { AppError } from '@/shared/utils.js';
 // Remote-control proxy — read-only history fetch for connected agent sessions.
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
+import { currentAgentAllow } from '@/services/user-context.js';
 
 type ArchivedSessionListItem = {
   sessionId: string;
@@ -138,6 +139,13 @@ export const sessionsService = {
       const start = Math.max(0, totalNormalized - offset - limit);
       const end = Math.max(0, totalNormalized - offset);
       return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit };
+    }
+
+    // Agent-restricted users (agent_allow set) have no access to local-session
+    // history — only their allowed remote agents (handled above). Deny rather than
+    // leak which local sessions exist.
+    if (currentAgentAllow()?.length) {
+      return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
     const session = sessionsDb.getSessionById(sessionId);
