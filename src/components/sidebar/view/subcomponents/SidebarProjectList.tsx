@@ -176,9 +176,15 @@ export default function SidebarProjectList({
   }
 
   const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
+  // Agent-scoped accounts (e.g. a per-agent user) have no local projects, so the
+  // conversations list would be empty — their agent IS their conversation. Fall
+  // back to showing the agents here so the list isn't blank. Accounts with local
+  // projects are unaffected (agents stay in their own tab).
+  const conversationItems =
+    conversationProjects.length > 0 ? conversationProjects : filteredProjects.filter(isAgent);
   return (
     <div className="pb-safe-area-inset-bottom md:space-y-1">
-      {!showProjects ? state : conversationProjects.map(renderItem)}
+      {!showProjects ? state : conversationItems.map(renderItem)}
     </div>
   );
 }
