@@ -18,13 +18,9 @@ export const ThemeProvider = ({ children }) => {
     if (savedTheme) {
       return savedTheme === 'dark';
     }
-    
-    // Check system preference
-    if (window.matchMedia) {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    }
-    
-    return false;
+
+    // BTI identity: default to the dark (black) theme so the app reads red + black.
+    return true;
   });
 
   // Update document class and localStorage when theme changes

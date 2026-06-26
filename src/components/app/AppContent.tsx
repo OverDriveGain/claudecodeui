@@ -139,39 +139,7 @@ function AppContentInner() {
 
   return (
     <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
-      {!isMobile ? (
-        <div className="h-full flex-shrink-0 border-r border-border/50">
-          <Sidebar {...sidebarSharedProps} />
-        </div>
-      ) : (
-        <div
-          className={`fixed inset-0 z-50 flex transition-all duration-150 ease-out ${sidebarOpen ? 'visible opacity-100' : 'invisible opacity-0'
-            }`}
-        >
-          <button
-            className="fixed inset-0 bg-background/60 backdrop-blur-sm transition-opacity duration-150 ease-out"
-            onClick={(event) => {
-              event.stopPropagation();
-              setSidebarOpen(false);
-            }}
-            onTouchStart={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setSidebarOpen(false);
-            }}
-            aria-label={t('versionUpdate.ariaLabels.closeSidebar')}
-          />
-          <div
-            className={`relative h-full w-[85vw] max-w-sm transform border-r border-border/40 bg-card transition-transform duration-150 ease-out sm:w-80 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-              }`}
-            onClick={(event) => event.stopPropagation()}
-            onTouchStart={(event) => event.stopPropagation()}
-          >
-            <Sidebar {...sidebarSharedProps} />
-          </div>
-        </div>
-      )}
-
+      {/* BTI: sidebar removed — single-window app (chat + canvas only). */}
       <div className="flex min-w-0 flex-1 flex-col">
         <MainContent
           selectedProject={selectedProject}

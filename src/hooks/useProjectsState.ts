@@ -3,6 +3,7 @@ import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '../utils/api';
 import { sessionActivityStore } from '../stores/useSessionActivityStore';
+import { IS_PLATFORM, DEFAULT_PROJECT_FOR_EMPTY_SHELL } from '../constants/config';
 import type {
   AppSocketMessage,
   AppTab,
@@ -429,9 +430,14 @@ export function useProjectsState({
     void hydrateProjectTaskMaster(selectedProject.projectId);
   }, [hydrateProjectTaskMaster, selectedProject?.projectId]);
 
-  // Auto-select the project when there is only one, so the user lands on the new session page
+  // Auto-select a project so the user lands straight in (no sidebar/picker).
+  // BTI single-window app: in platform mode always use one dedicated workspace
+  // project; otherwise keep the upstream "only one project" behaviour.
   useEffect(() => {
-    if (!isLoadingProjects && projects.length === 1 && !selectedProject && !sessionId) {
+    if (selectedProject || sessionId) return;
+    if (IS_PLATFORM) {
+      setSelectedProject(DEFAULT_PROJECT_FOR_EMPTY_SHELL as unknown as Project);
+    } else if (!isLoadingProjects && projects.length === 1) {
       setSelectedProject(projects[0]);
     }
   }, [isLoadingProjects, projects, selectedProject, sessionId]);

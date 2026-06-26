@@ -13,9 +13,9 @@ interface CanvasViewProps {
 
 const PANE_TITLES: Record<CanvasPaneId, string> = {
   top_view: 'Top view',
-  three_d: '3D',
+  three_d: 'Section',
   costs: 'Costs',
-  free: 'Notes',
+  free: 'Elevations',
   map: 'Map',
 };
 
@@ -44,15 +44,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-foreground">{t('tabs.canvas', 'Canvas')}</h2>
-        {canvas.note ? (
-          <span className="truncate text-xs text-muted-foreground" title={canvas.note}>
-            {canvas.note}
-          </span>
-        ) : null}
-      </div>
-
+      {/* BTI: 'Canvas' heading removed — clean single window */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto md:grid-cols-2 lg:grid-cols-3">
         <div className="min-h-[180px]">
           <ImagePane title={PANE_TITLES.top_view} asset={canvas.values.top_view} />
@@ -64,7 +56,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           <PanePlaceholder title={PANE_TITLES.costs} />
         </div>
         <div className="min-h-[180px]">
-          <FreePane content={canvas.values.free} />
+          <FreePane title={PANE_TITLES.free} content={canvas.values.free} />
         </div>
         <div className="min-h-[180px]">
           <PanePlaceholder title={PANE_TITLES.map} />

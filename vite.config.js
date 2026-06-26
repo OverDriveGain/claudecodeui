@@ -28,6 +28,11 @@ export default defineConfig(({ mode }) => {
     server: {
       host,
       port: parseInt(env.VITE_PORT) || 5173,
+      // allow serving through the public vhost (build.kikhia.ae) + correct HMR
+      allowedHosts: true,
+      ...(env.VITE_HMR_HOST
+        ? { hmr: { host: env.VITE_HMR_HOST, protocol: 'wss', clientPort: 443 } }
+        : {}),
       proxy: {
         '/api': `http://${proxyHost}:${serverPort}`,
         '/ws': {

@@ -116,106 +116,40 @@ function MainContent({
     return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
+  // BTI single-window app: Canvas panes on top, Chat below. No tab bar, no
+  // sidebar, no files/shell/git/editor — just the two surfaces the customer uses.
   return (
     <div className="flex h-full flex-col">
-      <MainContentHeader
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        selectedProject={selectedProject}
-        selectedSession={selectedSession}
-        shouldShowTasksTab={shouldShowTasksTab}
-        isMobile={isMobile}
-        onMenuClick={onMenuClick}
-      />
-
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
-          <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
-            <ErrorBoundary showDetails>
-              <ChatInterface
-                selectedProject={selectedProject}
-                selectedSession={selectedSession}
-                ws={ws}
-                sendMessage={sendMessage}
-                latestMessage={latestMessage}
-                onFileOpen={handleFileOpen}
-                onInputFocusChange={onInputFocusChange}
-                onSessionActive={onSessionActive}
-                onSessionInactive={onSessionInactive}
-                onSessionProcessing={onSessionProcessing}
-                onSessionNotProcessing={onSessionNotProcessing}
-                processingSessions={processingSessions}
-                onNavigateToSession={onNavigateToSession}
-                onShowSettings={onShowSettings}
-                autoExpandTools={autoExpandTools}
-                showRawParameters={showRawParameters}
-                showThinking={showThinking}
-                autoScrollToBottom={autoScrollToBottom}
-                sendByCtrlEnter={sendByCtrlEnter}
-                externalMessageUpdate={externalMessageUpdate}
-                newSessionTrigger={newSessionTrigger}
-                onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
-              />
-            </ErrorBoundary>
-          </div>
-
-          {/* Canvas uses the block/hidden pattern (not unmount) so heavy pane
-              renderers (three.js) keep their context across tab switches. */}
-          <div className={`h-full overflow-hidden ${activeTab === 'canvas' ? 'block' : 'hidden'}`}>
-            <CanvasView selectedProject={selectedProject} />
-          </div>
-
-          {activeTab === 'files' && (
-            <div className="h-full overflow-hidden">
-              <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
-            </div>
-          )}
-
-          {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
-              <StandaloneShell
-                project={selectedProject}
-                session={selectedSession}
-                showHeader={false}
-                isActive={activeTab === 'shell'}
-              />
-            </div>
-          )}
-
-          {activeTab === 'git' && (
-            <div className="h-full overflow-hidden">
-              <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
-            </div>
-          )}
-
-          {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
-
-          <div className={`h-full overflow-hidden ${activeTab === 'preview' ? 'block' : 'hidden'}`} />
-
-          {activeTab.startsWith('plugin:') && (
-            <div className="h-full overflow-hidden">
-              <PluginTabContent
-                pluginName={activeTab.replace('plugin:', '')}
-                selectedProject={selectedProject}
-                selectedSession={selectedSession}
-              />
-            </div>
-          )}
-        </div>
-
-        <EditorSidebar
-          editingFile={editingFile}
-          isMobile={isMobile}
-          editorExpanded={editorExpanded}
-          editorWidth={editorWidth}
-          hasManualWidth={hasManualWidth}
-          resizeHandleRef={resizeHandleRef}
-          onResizeStart={handleResizeStart}
-          onCloseEditor={handleCloseEditor}
-          onToggleEditorExpand={handleToggleEditorExpand}
-          projectPath={selectedProject.path}
-          fillSpace={activeTab === 'files'}
-        />
+      <div className="min-h-0 flex-[3] overflow-hidden border-b border-border">
+        <CanvasView selectedProject={selectedProject} />
+      </div>
+      <div className="min-h-0 flex-[2] overflow-hidden">
+        <ErrorBoundary showDetails>
+          <ChatInterface
+            selectedProject={selectedProject}
+            selectedSession={selectedSession}
+            ws={ws}
+            sendMessage={sendMessage}
+            latestMessage={latestMessage}
+            onFileOpen={handleFileOpen}
+            onInputFocusChange={onInputFocusChange}
+            onSessionActive={onSessionActive}
+            onSessionInactive={onSessionInactive}
+            onSessionProcessing={onSessionProcessing}
+            onSessionNotProcessing={onSessionNotProcessing}
+            processingSessions={processingSessions}
+            onNavigateToSession={onNavigateToSession}
+            onShowSettings={onShowSettings}
+            autoExpandTools={autoExpandTools}
+            showRawParameters={showRawParameters}
+            showThinking={showThinking}
+            autoScrollToBottom={autoScrollToBottom}
+            sendByCtrlEnter={sendByCtrlEnter}
+            externalMessageUpdate={externalMessageUpdate}
+            newSessionTrigger={newSessionTrigger}
+            onShowAllTasks={null}
+          />
+        </ErrorBoundary>
       </div>
     </div>
   );

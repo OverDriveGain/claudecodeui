@@ -471,7 +471,7 @@ function ChatInterface({
         />
       </div>
 
-      <QuickSettingsPanel />
+      {/* BTI: quick-settings slide-out removed for the clean single-window app */}
 
       <CommandResultModal
         payload={commandModalPayload}
