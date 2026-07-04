@@ -136,8 +136,15 @@ export function useChatRealtimeHandlers({
           const statusSessionId = msg.sessionId;
           if (!statusSessionId) return;
 
+          const isCurrentSession =
+            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
+
           const status = msg.status;
           if (status) {
+            // Only the viewed session's status drives this view's spinner — a
+            // background session's status must not (that was the cross-conversation
+            // "confusion" while another agent was working).
+            if (!isCurrentSession) return;
             const statusInfo = {
               text: status.text || 'Working...',
               tokens: status.tokens || 0,
@@ -149,9 +156,6 @@ export function useChatRealtimeHandlers({
             return;
           }
 
-          // Legacy isProcessing format from check-session-status
-          const isCurrentSession =
-            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
 
           if (msg.isProcessing) {
             onSessionActive?.(statusSessionId);
@@ -182,10 +186,29 @@ export function useChatRealtimeHandlers({
 
     const sid = msg.sessionId || activeViewSessionId;
 
+    // The open ChatInterface's singleton control state (loading spinner, status line,
+    // abort button, permission prompts, session-id adoption, navigation) must be driven
+    // ONLY by frames that belong to the session currently in view. A different session
+    // — e.g. another agent working in the background — streams its frames through this
+    // same handler; those must update only their own store slot (done above via
+    // appendRealtime, which is keyed by `sid`) and must NEVER flip this view's spinner
+    // or re-point it at their session. That cross-session bleed is what made messages
+    // "go to another conversation" while one was busy. A frame with no sessionId (e.g.
+    // the very first frames of a not-yet-created local session, and `session_created`
+    // itself) is always owned by the open composer, so it counts as the active view.
+    const drivesActiveView = !msg.sessionId || sid === activeViewSessionId;
+
     // --- Streaming: buffer for performance ---
     if (msg.kind === 'stream_delta') {
       const text = msg.content || '';
       if (!text) return;
+      // Background session: keep its live text in its own store slot and leave the
+      // active view's coalescing buffer untouched (mixing two sessions' deltas into
+      // one buffer corrupted both).
+      if (!drivesActiveView) {
+        if (sid) sessionStore.appendRealtime(sid, msg as NormalizedMessage);
+        return;
+      }
       accumulatedStreamRef.current += text;
       if (!streamTimerRef.current) {
         streamTimerRef.current = window.setTimeout(() => {
@@ -195,14 +218,14 @@ export function useChatRealtimeHandlers({
           }
         }, 100);
       }
-      // Also route to store for non-active sessions
-      if (sid && sid !== activeViewSessionId) {
-        sessionStore.appendRealtime(sid, msg as NormalizedMessage);
-      }
       return;
     }
 
     if (msg.kind === 'stream_end') {
+      if (!drivesActiveView) {
+        if (sid) sessionStore.finalizeStreaming(sid);
+        return;
+      }
       if (streamTimerRef.current) {
         clearTimeout(streamTimerRef.current);
         streamTimerRef.current = null;
@@ -260,20 +283,26 @@ export function useChatRealtimeHandlers({
       }
 
       case 'complete': {
-        // Flush any remaining streaming state
-        if (streamTimerRef.current) {
-          clearTimeout(streamTimerRef.current);
-          streamTimerRef.current = null;
-        }
-        if (sid && accumulatedStreamRef.current) {
-          sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
+        if (drivesActiveView) {
+          // Flush the active view's remaining streaming state and reset its spinner.
+          if (streamTimerRef.current) {
+            clearTimeout(streamTimerRef.current);
+            streamTimerRef.current = null;
+          }
+          if (sid && accumulatedStreamRef.current) {
+            sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
+            sessionStore.finalizeStreaming(sid);
+          }
+          accumulatedStreamRef.current = '';
+
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+        } else if (sid) {
+          // Background session finished — finalize only its own store slot; never
+          // touch this view's buffer/spinner.
           sessionStore.finalizeStreaming(sid);
         }
-        accumulatedStreamRef.current = '';
-
-        setIsLoading(false);
-        setCanAbortSession(false);
-        setClaudeStatus(null);
         // Do NOT clear pending permission / AskUserQuestion requests on a normal
         // `complete`. An agent cannot finish a turn while a tool_use is still
         // unanswered, so a `complete` arriving with an open question is spurious —
@@ -290,7 +319,9 @@ export function useChatRealtimeHandlers({
         }
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
-        pendingViewSessionRef.current = null;
+        if (drivesActiveView) {
+          pendingViewSessionRef.current = null;
+        }
 
         // Handle aborted case
         if (msg.aborted) {
@@ -331,12 +362,14 @@ export function useChatRealtimeHandlers({
       }
 
       case 'error': {
-        setIsLoading(false);
-        setCanAbortSession(false);
-        setClaudeStatus(null);
+        if (drivesActiveView) {
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+          pendingViewSessionRef.current = null;
+        }
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
-        pendingViewSessionRef.current = null;
         break;
       }
 
@@ -353,9 +386,14 @@ export function useChatRealtimeHandlers({
             receivedAt: new Date(),
           }];
         });
-        setIsLoading(true);
-        setCanAbortSession(true);
-        setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+        // Only the viewed session's prompt drives this view's spinner/status; a
+        // background agent's request is still recorded above (keyed by its sid, and
+        // filtered out of this view) and surfaces when its conversation is opened.
+        if (drivesActiveView) {
+          setIsLoading(true);
+          setCanAbortSession(true);
+          setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+        }
         break;
       }
 
@@ -367,6 +405,10 @@ export function useChatRealtimeHandlers({
       }
 
       case 'status': {
+        // A background session's progress/token status must not drive this view's
+        // spinner or status line — that was the visible "confusion" while another
+        // conversation was working.
+        if (!drivesActiveView) break;
         if (msg.text === 'token_budget' && msg.tokenBudget) {
           setTokenBudget(msg.tokenBudget as Record<string, unknown>);
         } else if (msg.text) {
