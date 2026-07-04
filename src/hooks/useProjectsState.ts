@@ -210,8 +210,16 @@ const isUpdateAdditive = (
     (session) => session.id === selectedSession.id,
   );
 
-  if (!currentSelectedSession || !updatedSelectedSession) {
+  // A brand-new session (just created, now being surfaced by the watcher) is ABSENT
+  // from the current list but PRESENT in the update. That is an additive change and
+  // safe to apply, so the sidebar shows the new session live instead of only after a
+  // manual refresh. Only a session that would DISAPPEAR from the update is treated as
+  // non-additive (and thus withheld to protect the open, streaming session).
+  if (!updatedSelectedSession) {
     return false;
+  }
+  if (!currentSelectedSession) {
+    return true;
   }
 
   return (
