@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import type { MainContentHeaderProps } from '../../types/types';
+import { isNativeMobile } from '../../../../mobile/serverConfig';
 import MobileMenuButton from './MobileMenuButton';
 import MainContentTabSwitcher from './MainContentTabSwitcher';
 import MainContentTitle from './MainContentTitle';
@@ -46,7 +47,8 @@ export default function MainContentHeader({
           />
         </div>
 
-        <div className="relative min-w-0 flex-shrink overflow-hidden sm:flex-shrink-0">
+        {/* Chat-only surface on the native apps: no Files/Shell/Git/Tasks tabs. */}
+        <div className={`relative min-w-0 flex-shrink overflow-hidden sm:flex-shrink-0 ${isNativeMobile() ? 'hidden' : ''}`}>
           {canScrollLeft && (
             <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-background to-transparent" />
           )}

@@ -180,6 +180,49 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [checkOnboardingStatus, setSession],
   );
 
+  // Token sign-in: the user pastes an existing JWT (or one issued by another
+  // channel). We persist it, then validate it against /api/auth/user. Used by
+  // the mobile apps where a token can be entered instead of a password.
+  const loginWithToken = useCallback<AuthContextValue['loginWithToken']>(
+    async (rawToken) => {
+      const nextToken = (rawToken || '').trim();
+      if (!nextToken) {
+        const message = AUTH_ERROR_MESSAGES.loginFailed;
+        setError(message);
+        return { success: false, error: message };
+      }
+      try {
+        setError(null);
+        persistToken(nextToken);
+        setToken(nextToken);
+        const response = await api.auth.user();
+        if (!response.ok) {
+          clearSession();
+          const message = AUTH_ERROR_MESSAGES.loginFailed;
+          setError(message);
+          return { success: false, error: message };
+        }
+        const payload = await parseJsonSafely<AuthUserPayload>(response);
+        if (!payload?.user) {
+          clearSession();
+          const message = AUTH_ERROR_MESSAGES.loginFailed;
+          setError(message);
+          return { success: false, error: message };
+        }
+        setUser(payload.user);
+        setNeedsSetup(false);
+        await checkOnboardingStatus();
+        return { success: true };
+      } catch (caughtError) {
+        console.error('Token login error:', caughtError);
+        clearSession();
+        setError(AUTH_ERROR_MESSAGES.networkError);
+        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+      }
+    },
+    [checkOnboardingStatus, clearSession],
+  );
+
   const logout = useCallback(() => {
     const tokenToInvalidate = token;
     clearSession();
@@ -200,6 +243,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       hasCompletedOnboarding,
       error,
       login,
+      loginWithToken,
       register,
       logout,
       refreshOnboardingStatus,
@@ -209,6 +253,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       hasCompletedOnboarding,
       isLoading,
       login,
+      loginWithToken,
       logout,
       needsSetup,
       refreshOnboardingStatus,
