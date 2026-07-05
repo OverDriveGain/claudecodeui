@@ -28,9 +28,15 @@ function isLocalWebviewHost(host: string): boolean {
   );
 }
 
-/** Rewrite an http(s) fetch/EventSource URL to the configured server, if applicable. */
-function rewriteHttpUrl(rawUrl: string): string {
-  const origin = getServerOrigin();
+const baseHref = (): string =>
+  typeof window !== 'undefined' && window.location ? window.location.href : 'https://localhost/';
+
+/**
+ * Pure rewrite of an http(s) fetch/EventSource URL against an explicit server
+ * origin. Exported for unit testing. Returns `rawUrl` unchanged when `origin`
+ * is empty or the URL does not target the local webview.
+ */
+export function rewriteHttpUrlWith(origin: string, rawUrl: string, base = baseHref()): string {
   if (!origin) return rawUrl;
   if (typeof rawUrl !== 'string') return rawUrl;
 
@@ -41,7 +47,7 @@ function rewriteHttpUrl(rawUrl: string): string {
 
   // Absolute URL that points at the local webview origin -> swap to the server.
   try {
-    const parsed = new URL(rawUrl, window.location.href);
+    const parsed = new URL(rawUrl, base);
     if (isLocalWebviewHost(parsed.host)) {
       const serverUrl = new URL(origin);
       parsed.protocol = serverUrl.protocol;
@@ -54,13 +60,12 @@ function rewriteHttpUrl(rawUrl: string): string {
   return rawUrl;
 }
 
-/** Rewrite a ws(s):// URL built from the local webview host to the server. */
-function rewriteWsUrl(rawUrl: string): string {
-  const origin = getServerOrigin();
+/** Pure rewrite of a ws(s):// URL built from the local webview host to the server. */
+export function rewriteWsUrlWith(origin: string, rawUrl: string, base = baseHref()): string {
   if (!origin) return rawUrl;
   if (typeof rawUrl !== 'string') return rawUrl;
   try {
-    const parsed = new URL(rawUrl, window.location.href);
+    const parsed = new URL(rawUrl, base);
     if (isLocalWebviewHost(parsed.host)) {
       const serverUrl = new URL(origin);
       parsed.protocol = serverUrl.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -71,6 +76,14 @@ function rewriteWsUrl(rawUrl: string): string {
     /* leave as-is */
   }
   return rawUrl;
+}
+
+function rewriteHttpUrl(rawUrl: string): string {
+  return rewriteHttpUrlWith(getServerOrigin(), rawUrl);
+}
+
+function rewriteWsUrl(rawUrl: string): string {
+  return rewriteWsUrlWith(getServerOrigin(), rawUrl);
 }
 
 export function installNetworkShim(): void {

@@ -9,6 +9,7 @@ import {
   setServerOrigin,
 } from '../../../mobile/serverConfig';
 import { useAuth } from '../context/AuthContext';
+
 import AuthErrorAlert from './AuthErrorAlert';
 import AuthInputField from './AuthInputField';
 import AuthScreenLayout from './AuthScreenLayout';
