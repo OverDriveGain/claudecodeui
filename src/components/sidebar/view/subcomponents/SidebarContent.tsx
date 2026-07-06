@@ -510,6 +510,8 @@ export default function SidebarContent({
           )
         ) : searchMode === 'agents' ? (
           <SidebarProjectList {...projectListProps} listKind="agents" />
+        ) : searchMode === 'conversations' ? (
+          <SidebarProjectList {...projectListProps} listKind="conversations" />
         ) : (
           <SidebarProjectList {...projectListProps} listKind="projects" />
         )}
