@@ -15,7 +15,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions');
+// Claude's live-session registry. `CLAUDE_SESSIONS_DIR` overrides the default
+// for relocated ~/.claude layouts (and lets a test instance point at an empty
+// dir to force cross-host federation).
+function sessionsDir(): string {
+  const override = process.env.CLAUDE_SESSIONS_DIR;
+  return override && override.length > 0 ? override : path.join(os.homedir(), '.claude', 'sessions');
+}
 
 // Reading + parsing every session file on each request is wasteful for an
 // interactive file browser; the registry changes slowly, so cache the parsed
@@ -46,10 +52,11 @@ function loadLocalSessions(): Map<string, LocalSession> {
     return cache.map;
   }
 
+  const dir = sessionsDir();
   const map = new Map<string, LocalSession>();
   let files: string[] = [];
   try {
-    files = fs.readdirSync(SESSIONS_DIR);
+    files = fs.readdirSync(dir);
   } catch {
     // No sessions dir (claude never ran here) — empty map, cached briefly.
     cache = { at: now, map };
@@ -59,7 +66,7 @@ function loadLocalSessions(): Map<string, LocalSession> {
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     try {
-      const raw = fs.readFileSync(path.join(SESSIONS_DIR, file), 'utf8');
+      const raw = fs.readFileSync(path.join(dir, file), 'utf8');
       const parsed = JSON.parse(raw) as {
         bridgeSessionId?: unknown;
         cwd?: unknown;
