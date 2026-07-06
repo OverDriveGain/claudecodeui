@@ -666,6 +666,48 @@ app.get('/api/federation/files/content', requireFederationToken, async (req, res
     }
 });
 
+// Delivered file (SendUserFile) for a locally-owned session. Unlike the cwd-jailed
+// endpoints, a delivered path may sit anywhere on disk — so the gate is the agent's
+// OWN act of delivering it: this host re-derives the allowlist from the session's
+// relay events and serves only paths that appear in a SendUserFile tool_use.
+app.get('/api/federation/delivered-file', requireFederationToken, async (req, res) => {
+    try {
+        const session = typeof req.query.session === 'string' ? req.query.session : '';
+        const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        if (!resolveLocalSession(session)) {
+            return res.status(404).json({ error: 'Session not on this host' });
+        }
+        const events = await getSessionEventsCached(session).catch(() => []);
+        const delivered = new Set();
+        for (const e of events || []) {
+            const content = e?.message?.content;
+            if (!Array.isArray(content)) continue;
+            for (const c of content) {
+                if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
+                    for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
+                }
+            }
+        }
+        const resolved = path.resolve(filePath);
+        if (!delivered.has(resolved)) {
+            return res.status(403).json({ error: 'This file was not delivered by the agent' });
+        }
+        try {
+            await fsPromises.access(resolved);
+        } catch {
+            return res.status(404).json({ error: 'File no longer on disk' });
+        }
+        res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
+        await serveFileBytes(req, res, resolved);
+    } catch (error) {
+        console.error('Error serving federated delivered file:', error);
+        if (!res.headersSent) res.status(500).json({ error: error.message });
+    }
+});
+
 // ── Proxy fallbacks (this host FORWARDS to the peer that owns the session) ───
 
 /**
@@ -859,6 +901,9 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
         }
 
         // Allowlist = every path this session ever delivered via SendUserFile.
+        // On the host that OWNS the agent this is derivable (it can read the
+        // session's relay events); a different host may not, and that's fine — a
+        // cross-host request is authorized on the owning peer instead (below).
         const events = await getSessionEventsCached(sessionId).catch(() => []);
         const delivered = new Set();
         for (const e of events || []) {
@@ -871,25 +916,38 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
             }
         }
         const resolved = path.resolve(filePath);
-        if (!delivered.has(resolved)) {
-            return res.status(403).json({ error: 'This file was not delivered by the agent' });
+
+        // Serve locally when this host both authorized it (in the allowlist) and
+        // holds the bytes on disk — the same-host case.
+        if (delivered.has(resolved)) {
+            let onDisk = true;
+            try { await fsPromises.access(resolved); } catch { onDisk = false; }
+            if (onDisk) {
+                // Inline, mime-typed, Range-capable stream (shared with files/content)
+                // so images render and audio/video seek without a manual download.
+                res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
+                await serveFileBytes(req, res, resolved);
+                return;
+            }
         }
 
-        try {
-            await fsPromises.access(resolved);
-        } catch {
-            return res.status(404).json({ error: 'File no longer on disk' });
+        // Not served locally (cross-host agent, or this host can't authorize/hold
+        // it): forward to the peer that owns the session. The peer re-derives the
+        // SendUserFile allowlist from its own relay events and streams the bytes,
+        // so authorization always happens on the host that actually delivered it.
+        if (await shouldFederateRemote(projectId)) {
+            const forwarded = await federateBytesResponse(
+                req,
+                res,
+                sessionId,
+                `/api/federation/delivered-file?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`,
+            );
+            if (forwarded) return;
         }
-        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
-        const stat = await fsPromises.stat(resolved);
-        res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Length', stat.size);
-        res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
-        const stream = fs.createReadStream(resolved);
-        stream.pipe(res);
-        stream.on('error', (error) => {
-            console.error('Error streaming delivered file:', error);
-            if (!res.headersSent) res.status(500).json({ error: 'Error reading file' });
+
+        // No peer owns it: it was either never delivered or is gone from disk.
+        return res.status(delivered.has(resolved) ? 404 : 403).json({
+            error: delivered.has(resolved) ? 'File no longer on disk' : 'This file was not delivered by the agent',
         });
     } catch (error) {
         console.error('Error serving delivered file:', error);
