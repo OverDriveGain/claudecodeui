@@ -44,11 +44,22 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // Anthropic's beta tag for the remote-control session/event API.
 const BETA_CCR = 'ccr-byoc-2025-07-29';
 
-// sessionId -> { upstream: WebSocket, ws: clientWriter, replayBuffer }
+// sessionId -> { upstream: WebSocket, ws: clientWriter, replayBuffer, normalize,
+//                retries, closedByUs, pingTimer, reconnectTimer, alive }
 const activeRemoteSessions = new Map();
 // Max frames retained per session for reconnect replay (~one turn's worth). The
 // buffer is cleared at each turn end, so this only caps a single very long turn.
 const RC_REPLAY_BUFFER_MAX = 400;
+// Upstream keepalive + reconnect tuning. claude.ai/code's own client pings every
+// 30s and retries transient closes; without both, a long-lived quiet subscription
+// dies silently (idle timeout / NAT drop) and the GUI stops receiving until a
+// manual refresh — the exact "message only appears after refresh" failure.
+const RC_PING_INTERVAL_MS = 30 * 1000;
+const RC_RECONNECT_BASE_MS = 1000;
+const RC_RECONNECT_CAP_MS = 30 * 1000;
+const RC_RECONNECT_MAX_RETRIES = 8;
+// Cap the frames emitted from the missed-events top-up after a reconnect.
+const RC_TOPUP_EMIT_MAX = 200;
 // requestId -> { sessionId } so a permission answer routes to the right upstream WS.
 const pendingRemotePermissions = new Map();
 // rawRequestId -> timestamp of when we answered it. After answering, the agent takes
@@ -485,18 +496,121 @@ export async function attachSession(sessionId, ws, normalize) {
     }
     return existing;
   }
+  // replayBuffer holds the meaningful frames of (roughly) the current turn so a
+  // reconnecting client can recover what it missed while its WS was down — see the
+  // rebind branch above. Capped so an idle long-lived session can't grow unbounded.
+  // `normalize` is retained so the upstream can be silently reopened (reconnect)
+  // with the same wiring after a transient relay-side close.
+  const entry = {
+    upstream: null,
+    ws,
+    replayBuffer: [],
+    normalize,
+    retries: 0,
+    closedByUs: false,
+    pingTimer: null,
+    reconnectTimer: null,
+    alive: true,
+  };
+  activeRemoteSessions.set(sessionId, entry);
+
+  if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
+
+  await openRemoteUpstream(sessionId, entry);
+  return entry;
+}
+
+/**
+ * After a reconnect, bridge the gap: events that flushed to the relay's events API
+ * while the upstream was down are pulled (cursor top-up) and emitted through the
+ * normal normalizer. The client's id-keyed event log upserts idempotently, so
+ * frames it already saw collapse and only the missed ones surface. Mid-turn frames
+ * that never flushed are unrecoverable by design (the relay replays nothing); the
+ * replay buffer + next turn's stream cover the visible continuity.
+ */
+async function emitMissedEventsAfterReconnect(sessionId, entry, preDropCount) {
+  try {
+    const all = await getSessionEventsCached(sessionId);
+    const missed = all.slice(Math.max(0, preDropCount));
+    if (missed.length === 0) return;
+    const out = activeRemoteSessions.get(sessionId)?.ws || entry.ws;
+    let emitted = 0;
+    for (const raw of missed) {
+      if (emitted >= RC_TOPUP_EMIT_MAX) break;
+      let frames = [];
+      try { frames = entry.normalize ? entry.normalize(raw, sessionId) : []; } catch { continue; }
+      for (const frame of frames) {
+        try { out.send(frame); } catch { return; }
+        emitted += 1;
+      }
+    }
+  } catch { /* the next manual refresh / history fetch covers it */ }
+}
+
+/** Schedule a reconnect attempt for a transiently-closed upstream (single-flight). */
+function scheduleRemoteReconnect(sessionId, entry) {
+  if (entry.reconnectTimer || entry.closedByUs) return;
+  if (entry.retries >= RC_RECONNECT_MAX_RETRIES) {
+    // Give up: drop the subscription and tell the GUI the stream ended so the
+    // loader clears. Reopening the conversation (or the client's periodic
+    // re-subscribe) starts a fresh attach.
+    activeRemoteSessions.delete(sessionId);
+    const out = entry.ws;
+    try { out.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' })); } catch { /* writer gone */ }
+    return;
+  }
+  const delay = Math.min(RC_RECONNECT_CAP_MS, RC_RECONNECT_BASE_MS * 2 ** entry.retries);
+  entry.retries += 1;
+  entry.reconnectTimer = setTimeout(async () => {
+    entry.reconnectTimer = null;
+    if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) return;
+    // Snapshot the flushed-event count BEFORE reconnecting (disk only, no relay
+    // call) so we know which events to top-up-emit once the stream is back.
+    let preDropCount = 0;
+    try { preDropCount = (await getSessionEventsCached(sessionId, { topUp: false })).length; } catch { /* 0 → capped emit */ }
+    try {
+      await openRemoteUpstream(sessionId, entry);
+      entry.retries = 0;
+      console.log('[rc] upstream reconnected', { sessionId });
+      await emitMissedEventsAfterReconnect(sessionId, entry, preDropCount);
+      // A question/permission asked during the gap would otherwise be invisible.
+      const out = activeRemoteSessions.get(sessionId)?.ws || entry.ws;
+      try { await emitOutstandingPermission(sessionId, out); } catch { /* non-fatal */ }
+    } catch {
+      scheduleRemoteReconnect(sessionId, entry);
+    }
+  }, delay);
+}
+
+/**
+ * Open (or reopen) the upstream relay subscription for `entry` and wire all
+ * handlers. Resolves when the socket is open; rejects on a failed dial. Shared by
+ * the initial attach and the transparent reconnect path.
+ */
+async function openRemoteUpstream(sessionId, entry) {
   const { token, orgUuid } = getRemoteAuth();
   const url = `${WS_BASE}/v1/sessions/ws/${sessionId}/subscribe?organization_uuid=${orgUuid}`;
   const upstream = new WebSocket(url, {
     headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
   });
-  // replayBuffer holds the meaningful frames of (roughly) the current turn so a
-  // reconnecting client can recover what it missed while its WS was down — see the
-  // rebind branch above. Capped so an idle long-lived session can't grow unbounded.
-  const entry = { upstream, ws, replayBuffer: [] };
-  activeRemoteSessions.set(sessionId, entry);
+  entry.upstream = upstream;
+  const ws = entry.ws;
 
-  if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
+  // Keepalive + dead-socket detection (standard ws heartbeat): a silently-dead
+  // TCP connection emits nothing — without pinging, the stream just stops and the
+  // GUI never learns. If a pong doesn't come back within one interval, terminate;
+  // that fires 'close' and the reconnect path below restores the stream.
+  entry.alive = true;
+  upstream.on('pong', () => { entry.alive = true; });
+  entry.pingTimer = setInterval(() => {
+    if (upstream.readyState !== WebSocket.OPEN) return;
+    if (!entry.alive) {
+      try { upstream.terminate(); } catch { /* already dead */ }
+      return;
+    }
+    entry.alive = false;
+    try { upstream.ping(); } catch { /* close handler takes over */ }
+  }, RC_PING_INTERVAL_MS);
 
   upstream.on('message', (data) => {
     let m;
@@ -551,9 +665,9 @@ export async function attachSession(sessionId, ws, normalize) {
 
     // Everything else is a Claude Agent SDK message — normalize via the injected
     // provider normalizer (kept out of this engine so it stays provider-agnostic).
-    if (normalize) {
+    if (entry.normalize) {
       try {
-        const normalized = normalize(m, sessionId) || [];
+        const normalized = entry.normalize(m, sessionId) || [];
         for (const frame of normalized) emit(frame);
       } catch (err) {
         emit(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
@@ -578,21 +692,32 @@ export async function attachSession(sessionId, ws, normalize) {
   });
 
   upstream.on('close', (code) => {
-    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
-    activeRemoteSessions.delete(sessionId);
-    // 4003 = unauthorized (permanent). Anything else: the worker/session ended.
-    out.send(createNormalizedMessage({ kind: 'complete', exitCode: code === 4003 ? 1 : 0, sessionId, provider: 'claude' }));
+    if (entry.pingTimer) { clearInterval(entry.pingTimer); entry.pingTimer = null; }
+    // Deliberate detach (or a superseded entry) — no signal, no reconnect.
+    if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) return;
+    if (code === 4003) {
+      // Unauthorized: permanent. Tell the GUI the stream ended and drop the entry.
+      activeRemoteSessions.delete(sessionId);
+      try { entry.ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId, provider: 'claude' })); } catch { /* writer gone */ }
+      return;
+    }
+    // Transient close (idle timeout, relay blip, dead TCP detected by the
+    // heartbeat): keep the entry (writer + replay buffer stay bound) and reopen in
+    // the background. No `complete` is sent — a mid-turn close would otherwise
+    // wrongly clear the working indicator that the reconnected stream continues.
+    console.log('[rc] upstream closed, scheduling reconnect', { sessionId, code });
+    scheduleRemoteReconnect(sessionId, entry);
   });
   upstream.on('error', (err) => {
-    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
-    out.send(createNormalizedMessage({ kind: 'error', content: `rc ws: ${err.message}`, sessionId, provider: 'claude' }));
+    // Logged, not surfaced: with auto-reconnect a transient socket error is an
+    // implementation detail — an error bubble in the chat would be noise.
+    console.error('[rc] upstream ws error', { sessionId, error: err.message });
   });
 
   await new Promise((resolve, reject) => {
     upstream.once('open', resolve);
     upstream.once('error', reject);
   });
-  return entry;
 }
 
 /**
@@ -793,7 +918,7 @@ export function resolveRemotePermission(requestId, decision) {
 /** Stop the current turn: send an interrupt control_request up the WS. */
 export function abortRemoteSession(sessionId) {
   const entry = activeRemoteSessions.get(sessionId);
-  if (!entry || entry.upstream.readyState !== WebSocket.OPEN) return false;
+  if (!entry || entry.upstream?.readyState !== WebSocket.OPEN) return false;
   entry.upstream.send(JSON.stringify({
     type: 'control_request',
     request_id: crypto.randomUUID(),
@@ -806,7 +931,11 @@ export function abortRemoteSession(sessionId) {
 export function detachSession(sessionId) {
   const entry = activeRemoteSessions.get(sessionId);
   if (!entry) return false;
-  try { entry.upstream.close(); } catch { /* noop */ }
+  // Deliberate close: suppress the reconnect path and stop the timers.
+  entry.closedByUs = true;
+  if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+  if (entry.pingTimer) { clearInterval(entry.pingTimer); entry.pingTimer = null; }
+  try { entry.upstream?.close(); } catch { /* noop */ }
   activeRemoteSessions.delete(sessionId);
   return true;
 }

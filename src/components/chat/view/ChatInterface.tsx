@@ -233,6 +233,17 @@ function ChatInterface({
     if (!agentSessionId) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     sendMessage({ type: 'rc-subscribe', sessionId: agentSessionId });
+    // Belt-and-braces liveness: re-assert the subscription periodically while this
+    // conversation is open. The server attach is idempotent (rebind + replay), so a
+    // healthy stream is a no-op — but if the server-side upstream gave up (relay
+    // outage exhausting its reconnect retries), this restores the live mirror
+    // without the user having to refresh or reopen the conversation.
+    const keepalive = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        sendMessage({ type: 'rc-subscribe', sessionId: agentSessionId });
+      }
+    }, 45_000);
+    return () => clearInterval(keepalive);
   }, [
     ws,
     selectedProject?.isRemoteAgent,
