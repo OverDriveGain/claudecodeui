@@ -120,6 +120,14 @@ export const sessionsService = {
       const events = await getRemoteSessionEventsCached(sessionId);
       const normalized: NormalizedMessage[] = [];
       for (const raw of events) {
+        // Skip subagent-internal events (Task sidechain): the relay stores a
+        // subagent's own prompt/thinking/tools/result inline, each tagged with the
+        // parent Task's tool_use_id. Locally these are folded under the Task tool,
+        // never shown as top-level messages — mirror that so history doesn't render
+        // the subagent's prompt as a user message or its thoughts as unsolicited output.
+        if (raw && typeof raw === 'object' && (raw as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
+          continue;
+        }
         normalized.push(...this.normalizeMessage('claude', raw, sessionId));
       }
 

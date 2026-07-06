@@ -537,6 +537,8 @@ async function emitMissedEventsAfterReconnect(sessionId, entry, preDropCount) {
     let emitted = 0;
     for (const raw of missed) {
       if (emitted >= RC_TOPUP_EMIT_MAX) break;
+      // Same subagent-sidechain filter as the live + history paths.
+      if (raw && typeof raw === 'object' && raw.parent_tool_use_id) continue;
       let frames = [];
       try { frames = entry.normalize ? entry.normalize(raw, sessionId) : []; } catch { continue; }
       for (const frame of frames) {
@@ -662,6 +664,15 @@ async function openRemoteUpstream(sessionId, entry) {
       return;
     }
     if (m.type === 'control_response') return; // ack frame — nothing to render
+
+    // Subagent-internal event: the relay streams a Task subagent's OWN messages
+    // (its prompt, thinking, tool calls, result) inline, each tagged with the
+    // parent Task's tool_use_id. Locally these live in a separate agent-*.jsonl
+    // and are folded under the Task tool — never shown as top-level conversation.
+    // Emitting them here made the subagent's prompt look like a user message and
+    // its thoughts appear unsolicited. Drop them; the parent Task tool_use + its
+    // result (both un-parented) still render the container.
+    if (m.parent_tool_use_id) return;
 
     // Everything else is a Claude Agent SDK message — normalize via the injected
     // provider normalizer (kept out of this engine so it stays provider-agnostic).
