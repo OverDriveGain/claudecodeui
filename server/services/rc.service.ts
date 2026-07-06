@@ -9,6 +9,7 @@
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
 import { isRemoteControlConfigured, listAgents, getSessionCwd } from '@/remote-control/rc-client.js';
 import { currentAgentAllow } from '@/services/user-context.js';
+import { resolveLocalSessionCwd } from '@/services/local-sessions.js';
 
 // Paging the whole fleet is heavier than a single request. The roster itself
 // changes slowly, but worker_status (the running dot) needs to feel live, and the
@@ -183,6 +184,12 @@ export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean>
  */
 export async function getRemoteAgentCwd(sessionId: string): Promise<string | null> {
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return null;
+  // Prefer claude's own per-host session registry (~/.claude/sessions/*.json): it
+  // holds the real cwd for a bridge session, which the relay reports as empty. This
+  // resolves any agent running on THIS host with no relay round-trip. Cross-host
+  // agents miss here and fall through to the relay (and, later, the peer mesh).
+  const localCwd = resolveLocalSessionCwd(sessionId);
+  if (localCwd) return localCwd;
   try {
     return (await getSessionCwd(sessionId)) || null;
   } catch {
