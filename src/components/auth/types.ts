@@ -3,6 +3,9 @@ import type { ReactNode } from 'react';
 export type AuthUser = {
   id?: number | string;
   username: string;
+  // Set for agent-view share-token bearers: the one agent name this session may
+  // see. The UI collapses to that agent's conversation + files (no sidebar).
+  agentView?: string;
   [key: string]: unknown;
 };
 

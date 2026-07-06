@@ -13,6 +13,9 @@ type MainContentTabSwitcherProps = {
   // Remote-control agents are driven over the relay and have no local shell, so the
   // Shell tab is hidden for them; Files browses the agent's working directory.
   isRemoteAgent?: boolean;
+  // Agent-view share-token session: the surface is the conversation + its files —
+  // Chat and Files only, no Shell/Git/Tasks/plugins.
+  agentViewMode?: boolean;
 };
 
 type BuiltInTab = {
@@ -51,6 +54,7 @@ export default function MainContentTabSwitcher({
   setActiveTab,
   shouldShowTasksTab,
   isRemoteAgent = false,
+  agentViewMode = false,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
@@ -69,7 +73,10 @@ export default function MainContentTabSwitcher({
       iconFile: p.icon,
     }));
 
-  const tabs: TabDefinition[] = [...builtInTabs, ...pluginTabs];
+  // Agent view = the conversation and its files, nothing else.
+  const tabs: TabDefinition[] = agentViewMode
+    ? builtInTabs.filter((tab) => tab.id === 'chat' || tab.id === 'files')
+    : [...builtInTabs, ...pluginTabs];
 
   return (
     <PillBar>

@@ -6,10 +6,12 @@ import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import CommandPalette from '../command-palette/CommandPalette';
 import { useWebSocket } from '../../contexts/WebSocketContext';
+import { useAuth } from '../auth/context/AuthContext';
 import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
+import type { SessionWithProvider } from '../sidebar/types/types';
 
 export default function AppContent() {
   return (
@@ -25,6 +27,11 @@ function AppContentInner() {
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { ws, sendMessage, latestMessage, isConnected } = useWebSocket();
+  const { user } = useAuth();
+  // Agent-view share token: the whole app collapses to one agent's conversation
+  // (+ its files) — no sidebar, no palette. Everything else is already invisible
+  // server-side; this is the matching focused layout.
+  const agentViewMode = Boolean(user?.agentView);
   const wasConnectedRef = useRef(false);
 
   const {
@@ -37,6 +44,7 @@ function AppContentInner() {
   } = useSessionProtection();
 
   const {
+    projects,
     selectedProject,
     selectedSession,
     activeTab,
@@ -52,6 +60,8 @@ function AppContentInner() {
     refreshProjectsSilently,
     sidebarSharedProps,
     handleNewSession,
+    handleProjectSelect,
+    handleSessionSelect,
   } = useProjectsState({
     sessionId,
     navigate,
@@ -64,6 +74,25 @@ function AppContentInner() {
     openSettings,
     refreshProjects: refreshProjectsSilently,
   });
+
+  // Agent-view mode: with no sidebar there's nothing to click, so open the (one)
+  // scoped agent automatically — its live remote session, exactly as the sidebar
+  // click would. Prefers the remote agent over a same-named local project.
+  useEffect(() => {
+    if (!agentViewMode || selectedProject || isLoadingProjects || projects.length === 0) return;
+    const agentProject = projects.find((p) => p.isRemoteAgent) ?? projects[0];
+    handleProjectSelect(agentProject);
+    if (agentProject.isRemoteAgent) {
+      const agentSessionId =
+        agentProject.remoteSessionId || agentProject.projectId.replace(/^remote:/, '');
+      handleSessionSelect({
+        id: agentSessionId,
+        __provider: 'claude',
+        __projectId: agentProject.projectId,
+        summary: agentProject.displayName,
+      } as SessionWithProvider);
+    }
+  }, [agentViewMode, selectedProject, isLoadingProjects, projects, handleProjectSelect, handleSessionSelect]);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
@@ -139,7 +168,7 @@ function AppContentInner() {
 
   return (
     <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
-      {!isMobile ? (
+      {agentViewMode ? null : !isMobile ? (
         <div className="h-full flex-shrink-0 border-r border-border/50">
           <Sidebar {...sidebarSharedProps} />
         </div>
@@ -182,6 +211,7 @@ function AppContentInner() {
           sendMessage={sendMessage}
           latestMessage={latestMessage}
           isMobile={isMobile}
+          agentViewMode={agentViewMode}
           onMenuClick={() => setSidebarOpen(true)}
           isLoading={isLoadingProjects}
           onInputFocusChange={setIsInputFocused}
@@ -199,12 +229,14 @@ function AppContentInner() {
         />
       </div>
 
-      <CommandPalette
-        selectedProject={selectedProject}
-        onStartNewChat={handleNewSession}
-        onOpenSettings={() => openSettings()}
-        onShowTab={setActiveTab}
-      />
+      {!agentViewMode && (
+        <CommandPalette
+          selectedProject={selectedProject}
+          onStartNewChat={handleNewSession}
+          onOpenSettings={() => openSettings()}
+          onShowTab={setActiveTab}
+        />
+      )}
     </div>
   );
 }

@@ -1,8 +1,10 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import { userDb } from '../modules/database/index.js';
 import { getConnection } from '../modules/database/connection.js';
-import { generateToken, authenticateToken } from '../middleware/auth.js';
+import { generateToken, authenticateToken, JWT_SECRET } from '../middleware/auth.js';
+import { currentAgentAllow } from '../services/user-context.js';
 
 const router = express.Router();
 const db = getConnection();
@@ -125,6 +127,32 @@ router.get('/user', authenticateToken, (req, res) => {
   res.json({
     user: req.user
   });
+});
+
+// Mint an agent-view share token: a JWT bound to ONE agent name. Whoever opens
+// the app with it (?token=… or token sign-in) gets a focused single-agent view —
+// that agent's conversation + files, nothing else. Server-enforced end to end by
+// the standard agent_allow scoping; the UI collapse is cosmetic on top.
+// Admin-only: a restricted user (or another share-token bearer) must not be able
+// to mint visibility they don't have.
+router.post('/agent-view-token', authenticateToken, (req, res) => {
+  try {
+    if (req.user?.agentView || currentAgentAllow()?.length) {
+      return res.status(403).json({ error: 'Only an unrestricted user can mint agent-view tokens' });
+    }
+    const agent = typeof req.body?.agent === 'string' ? req.body.agent.trim() : '';
+    if (!agent) {
+      return res.status(400).json({ error: 'agent (name) is required' });
+    }
+    // Keep the claim a plain name/glob — it becomes the bearer's agent_allow.
+    const expiresIn = typeof req.body?.expiresIn === 'string' && req.body.expiresIn ? req.body.expiresIn : '30d';
+    const token = jwt.sign({ agentView: agent }, JWT_SECRET, { expiresIn });
+    const url = `${req.protocol}://${req.get('host')}/?token=${encodeURIComponent(token)}`;
+    res.json({ token, url, agent, expiresIn });
+  } catch (error) {
+    console.error('Agent-view token error:', error);
+    res.status(500).json({ error: 'Failed to mint agent-view token' });
+  }
 });
 
 // Logout (client-side token removal, but this endpoint can be used for logging)

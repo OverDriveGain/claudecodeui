@@ -39,6 +39,7 @@ function MainContent({
   sendMessage,
   latestMessage,
   isMobile,
+  agentViewMode = false,
   onMenuClick,
   isLoading,
   onInputFocusChange,
@@ -124,6 +125,7 @@ function MainContent({
         selectedSession={selectedSession}
         shouldShowTasksTab={shouldShowTasksTab}
         isMobile={isMobile}
+        agentViewMode={agentViewMode}
         onMenuClick={onMenuClick}
       />
 

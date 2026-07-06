@@ -55,6 +55,20 @@ const authenticateToken = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
 
+    // Agent-view token: a share token bound to ONE agent name, not a DB user.
+    // The bearer gets exactly that agent's view — the standard per-user scoping
+    // (agent_allow) enforces it across list/history/files/drive, so nothing else
+    // is reachable. No DB row backs it; identity is the signed claim itself.
+    if (typeof decoded.agentView === 'string' && decoded.agentView.length > 0) {
+      req.user = {
+        id: 'agent-view',
+        username: `agent-view:${decoded.agentView}`,
+        agentView: decoded.agentView,
+        agent_allow: decoded.agentView,
+      };
+      return runWithUserContext(decoded.agentView, next);
+    }
+
     // Verify user still exists and is active
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
@@ -115,6 +129,15 @@ const authenticateWebSocket = (token) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // Agent-view share token — same scoped identity as the REST path above.
+    if (typeof decoded.agentView === 'string' && decoded.agentView.length > 0) {
+      return {
+        userId: 'agent-view',
+        username: `agent-view:${decoded.agentView}`,
+        agentView: decoded.agentView,
+        agent_allow: decoded.agentView,
+      };
+    }
     // Verify user actually exists in database (matches REST authenticateToken behavior)
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
