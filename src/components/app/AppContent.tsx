@@ -146,28 +146,38 @@ function AppContentInner() {
     }
   }, [isConnected, selectedSession?.id, sendMessage]);
 
-  // Adjust the app container to stay above the virtual keyboard on iOS Safari.
-  // On Chrome for Android the layout viewport already shrinks when the keyboard opens,
-  // so inset-0 adjusts automatically. On iOS the layout viewport stays full-height and
-  // the keyboard overlays it — we use the Visual Viewport API to track keyboard height
-  // and apply it as a CSS variable that shifts the container's bottom edge up.
+  // Pin the fixed app to the VISUAL viewport so the on-screen keyboard can't
+  // displace it. A position:fixed element is anchored to the LAYOUT viewport,
+  // which iOS does NOT shrink when the keyboard opens — instead iOS shrinks the
+  // visual viewport AND scrolls it up to keep the focused field visible. Because
+  // the fixed app stays on the (unmoved) layout viewport, its top edge slides
+  // above the visible area: focusing the composer makes "everything scroll to the
+  // top." Tracking vv.height + vv.offsetTop (on resize AND scroll) and driving the
+  // container's top/height from them keeps the app exactly overlaying the visible
+  // region, so opening the keyboard never displaces the chat. Desktop/Android:
+  // offsetTop is 0 and vv.height == the window, so this is a no-op there.
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    const root = document.documentElement;
     const update = () => {
-      // Only resize matters — keyboard open/close changes vv.height.
-      // Do NOT listen to scroll: on iOS Safari, scrolling content changes
-      // vv.offsetTop which would make --keyboard-height fluctuate during
-      // normal scrolling, causing the container to bounce up and down.
-      const kb = Math.max(0, window.innerHeight - vv.height);
-      document.documentElement.style.setProperty('--keyboard-height', `${kb}px`);
+      root.style.setProperty('--app-height', `${vv.height}px`);
+      root.style.setProperty('--app-top', `${vv.offsetTop}px`);
     };
+    update();
     vv.addEventListener('resize', update);
-    return () => vv.removeEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
   }, []);
 
   return (
-    <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
+    <div
+      className="fixed left-0 right-0 flex bg-background"
+      style={{ top: 'var(--app-top, 0px)', height: 'var(--app-height, 100dvh)' }}
+    >
       {agentViewMode ? null : !isMobile ? (
         <div className="h-full flex-shrink-0 border-r border-border/50">
           <Sidebar {...sidebarSharedProps} />

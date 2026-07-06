@@ -333,12 +333,9 @@ export default function ChatComposer({
               onFocus={() => {
                 onInputFocusChange?.(true);
                 // NOTE: do NOT scrollIntoView here. On iOS an animated scroll fired
-                // right after focus dismisses the on-screen keyboard mid-open (the
-                // field stays focused, so it won't re-open until you blur — the
-                // "keyboard flashes then nothing, tap several times" bug). The app
-                // container already lifts above the keyboard via --keyboard-height
-                // (AppContent's visualViewport handler), so the composer is visible
-                // without any scroll nudge.
+                // right after focus dismisses the on-screen keyboard mid-open. The
+                // app container is pinned to the visual viewport (AppContent), so
+                // the composer already sits above the keyboard without any nudge.
               }}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
