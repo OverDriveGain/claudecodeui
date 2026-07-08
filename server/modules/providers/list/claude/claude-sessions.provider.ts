@@ -461,6 +461,35 @@ function stripAnsiFormatting(text: string): string {
   return text.replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
+type TaskNotificationPayload = {
+  taskId: string;
+  taskStatus: string;
+  summary: string;
+  outputFile?: string;
+};
+
+/**
+ * Parse task notification XML that Claude emits for background tasks.
+ * Returns null if the content does not match the task notification format.
+ */
+function parseTaskNotification(content: string): TaskNotificationPayload | null {
+  const taskIdMatch = /<task-id>([^<]*)<\/task-id>/.exec(content);
+  const statusMatch = /<status>([^<]*)<\/status>/.exec(content);
+  const summaryMatch = /<summary>([^<]*)<\/summary>/.exec(content);
+  const outputFileMatch = /<output-file>([^<]*)<\/output-file>/.exec(content);
+
+  if (taskIdMatch && statusMatch && summaryMatch) {
+    return {
+      taskId: taskIdMatch[1] || '',
+      taskStatus: statusMatch[1] || 'completed',
+      summary: summaryMatch[1] || '',
+      outputFile: outputFileMatch ? outputFileMatch[1] : undefined,
+    };
+  }
+
+  return null;
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -662,6 +691,25 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               isLocalCommandStdout: true,
             }));
           }
+          return messages;
+        }
+
+        /**
+         * Task notifications are background task status updates emitted by Claude.
+         * Parse them into a proper message type instead of rendering raw XML.
+         */
+        const taskNotif = parseTaskNotification(text);
+        if (taskNotif) {
+          messages.push(createNormalizedMessage({
+            id: baseId,
+            sessionId,
+            timestamp: ts,
+            provider: PROVIDER,
+            kind: 'task_notification',
+            content: taskNotif.summary,
+            status: taskNotif.taskStatus,
+            summary: taskNotif.summary,
+          }));
           return messages;
         }
 
