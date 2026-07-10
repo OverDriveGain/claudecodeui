@@ -14,7 +14,13 @@
     "username": "Username",
     "email": "Email",
     "profile": "Profile",
-    "changePassword": "Change Password"
+    "changePassword": "Change Password",
+    "userInfo": "User Information",
+    "agentAccess": "Agent Access",
+    "session": "Session",
+    "logout": "Log Out",
+    "logoutDescription": "Log out of this account and return to the login screen.",
+    "logoutConfirm": "Are you sure you want to log out?"
   },
   "mcp": {
     "title": "MCP Servers",
@@ -96,6 +102,7 @@
     "tasks": "Tasks",
     "notifications": "Notifications",
     "plugins": "Plugins",
+    "account": "Account",
     "about": "About"
   },
   "notifications": {
