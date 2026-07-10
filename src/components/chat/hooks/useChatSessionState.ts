@@ -347,12 +347,33 @@ export function useChatSessionState({
     [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
   );
 
+  // Grace period after user scrolls to prevent aggressive auto-scroll
+  const userScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const nearBottom = isNearBottom();
-    setIsUserScrolledUp(!nearBottom);
+    // If not near bottom, mark that user scrolled up and set grace period
+    if (!nearBottom) {
+      setIsUserScrolledUp(true);
+      // Clear existing timeout and set a new one: user stays "scrolled up" for 3s
+      // after any scroll event that moves them away from bottom
+      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
+      userScrollTimeoutRef.current = setTimeout(() => {
+        // Only reset if truly at bottom now
+        const container = scrollContainerRef.current;
+        if (container && isNearBottom()) {
+          setIsUserScrolledUp(false);
+        }
+      }, 3000);
+    } else {
+      // At bottom — clear the grace period and allow auto-scroll
+      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
+      userScrollTimeoutRef.current = null;
+      setIsUserScrolledUp(false);
+    }
 
     if (!allMessagesLoadedRef.current) {
       const scrolledNearTop = container.scrollTop < 100;
@@ -385,6 +406,10 @@ export function useChatSessionState({
     pendingScrollRestoreRef.current = null;
     lastMessageCountRef.current = 0;
     setIsUserScrolledUp(false);
+    if (userScrollTimeoutRef.current) {
+      clearTimeout(userScrollTimeoutRef.current);
+      userScrollTimeoutRef.current = null;
+    }
   }, [selectedProject?.projectId, selectedSession?.id]);
 
   // Initial scroll to bottom — robust to lazy content reflow.
@@ -742,7 +767,10 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return;
     container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
+    };
   }, [handleScroll]);
 
   useEffect(() => {
