@@ -347,33 +347,24 @@ export function useChatSessionState({
     [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
   );
 
-  // Grace period after user scrolls to prevent aggressive auto-scroll
-  const userScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Synchronous mirror of "the user has scrolled away from the bottom". The
+  // auto-scroll effect schedules scrollToBottom() on a short delay; while an
+  // agent streams fast there is almost always a scroll queued, so a user who
+  // scrolls up gets yanked back down when that stale timer fires. The delayed
+  // scroll re-reads THIS ref at fire time (React state would be stale in the
+  // closure) and aborts if the user has since scrolled up.
+  const isUserScrolledUpRef = useRef(false);
 
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
+    // A content-growth reflow does not emit a scroll event (it moves the
+    // bottom, not scrollTop), so this only fires on real user/programmatic
+    // scrolls — making it a faithful read of the user's intent.
     const nearBottom = isNearBottom();
-    // If not near bottom, mark that user scrolled up and set grace period
-    if (!nearBottom) {
-      setIsUserScrolledUp(true);
-      // Clear existing timeout and set a new one: user stays "scrolled up" for 3s
-      // after any scroll event that moves them away from bottom
-      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
-      userScrollTimeoutRef.current = setTimeout(() => {
-        // Only reset if truly at bottom now
-        const container = scrollContainerRef.current;
-        if (container && isNearBottom()) {
-          setIsUserScrolledUp(false);
-        }
-      }, 3000);
-    } else {
-      // At bottom — clear the grace period and allow auto-scroll
-      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
-      userScrollTimeoutRef.current = null;
-      setIsUserScrolledUp(false);
-    }
+    isUserScrolledUpRef.current = !nearBottom;
+    setIsUserScrolledUp(!nearBottom);
 
     if (!allMessagesLoadedRef.current) {
       const scrolledNearTop = container.scrollTop < 100;
@@ -406,10 +397,7 @@ export function useChatSessionState({
     pendingScrollRestoreRef.current = null;
     lastMessageCountRef.current = 0;
     setIsUserScrolledUp(false);
-    if (userScrollTimeoutRef.current) {
-      clearTimeout(userScrollTimeoutRef.current);
-      userScrollTimeoutRef.current = null;
-    }
+    isUserScrolledUpRef.current = false;
   }, [selectedProject?.projectId, selectedSession?.id]);
 
   // Initial scroll to bottom — robust to lazy content reflow.
@@ -751,7 +739,14 @@ export function useChatSessionState({
       const hasSelection =
         typeof window !== 'undefined' &&
         (window.getSelection?.()?.toString().trim().length ?? 0) > 0;
-      if (grew && !isUserScrolledUp && !hasSelection) setTimeout(() => scrollToBottom(), 50);
+      // Re-check intent at fire time via the ref: during fast streaming a scroll
+      // is almost always queued, and a user who scrolls up in that window would
+      // otherwise be dragged back to the bottom when this timer fires.
+      if (grew && !isUserScrolledUp && !hasSelection) {
+        setTimeout(() => {
+          if (!isUserScrolledUpRef.current) scrollToBottom();
+        }, 50);
+      }
       return;
     }
 
@@ -769,7 +764,6 @@ export function useChatSessionState({
     container.addEventListener('scroll', handleScroll);
     return () => {
       container.removeEventListener('scroll', handleScroll);
-      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
     };
   }, [handleScroll]);
 
