@@ -13,7 +13,18 @@ import { useSyncExternalStore } from 'react';
  * useSyncExternalStore, so components re-render only when their own session's
  * running boolean flips.
  */
+// Server-inferred running set (transcript file-watcher). This is authoritative for
+// sessions the web UI does not own, but it lags — the watcher only sees a turn once
+// the CLI flushes a transcript write, and a 90s idle-timeout keeps stale entries.
 let runningSessionIds: Set<string> = new Set<string>();
+
+// Locally-known running set: the session the user has OPEN in chat, keyed to that
+// view's live websocket `isLoading`. The chat stream flips this instantly, so
+// merging it in keeps the sidebar's "working" dot in lockstep with the chat loader
+// instead of waiting on the file-watcher — the two surfaces now read one source of
+// truth and can't show different values. Cleared when the turn ends / view closes.
+const localRunningSessionIds: Set<string> = new Set<string>();
+
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -26,6 +37,18 @@ export const sessionActivityStore = {
   setRunning(ids: string[]): void {
     runningSessionIds = new Set(ids);
     emit();
+  },
+  /** Record the open chat view's live running state so the sidebar mirrors it at once. */
+  setLocalRunning(sessionId: string, running: boolean): void {
+    if (!sessionId) return;
+    const had = localRunningSessionIds.has(sessionId);
+    if (running === had) return;
+    if (running) localRunningSessionIds.add(sessionId);
+    else localRunningSessionIds.delete(sessionId);
+    emit();
+  },
+  isRunning(sessionId: string): boolean {
+    return runningSessionIds.has(sessionId) || localRunningSessionIds.has(sessionId);
   },
   getRunningIds(): Set<string> {
     return runningSessionIds;
@@ -40,11 +63,13 @@ export const sessionActivityStore = {
 
 /**
  * Subscribe a component to a single session's running state. Returns a stable
- * boolean so the component re-renders only when that session starts/stops.
+ * boolean so the component re-renders only when that session starts/stops. Merges
+ * the server-inferred set with the open chat view's live state (see above), so the
+ * sidebar and the chat always agree.
  */
 export function useIsSessionRunning(sessionId: string): boolean {
   return useSyncExternalStore(
     sessionActivityStore.subscribe,
-    () => runningSessionIds.has(sessionId),
+    () => sessionActivityStore.isRunning(sessionId),
   );
 }

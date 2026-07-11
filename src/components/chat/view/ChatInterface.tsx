@@ -11,7 +11,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
-import { useIsSessionRunning } from '../../../stores/useSessionActivityStore';
+import { useIsSessionRunning, sessionActivityStore } from '../../../stores/useSessionActivityStore';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -219,6 +219,18 @@ function ChatInterface({
   // only when our own stream isn't already showing progress.
   const openSessionRunning = useIsSessionRunning(currentSessionId || selectedSession?.id || '');
   const externalRunning = openSessionRunning && !isLoading;
+
+  // Publish this open view's live running state into the shared activity store so the
+  // sidebar's "working" dot tracks the chat loader exactly, instead of waiting on the
+  // laggy transcript file-watcher. The store merges this with the server-inferred set,
+  // so both surfaces read one source of truth and can't disagree. Cleared on turn end
+  // and when the viewed session changes / the view unmounts.
+  useEffect(() => {
+    const activeSessionId = currentSessionId || selectedSession?.id || '';
+    if (!activeSessionId) return;
+    sessionActivityStore.setLocalRunning(activeSessionId, isLoading);
+    return () => sessionActivityStore.setLocalRunning(activeSessionId, false);
+  }, [currentSessionId, selectedSession?.id, isLoading]);
 
   // Subscribe-on-open: when viewing a remote-control agent, open a read-only LIVE
   // subscription so its stream mirrors into the GUI exactly like claude.ai/code —

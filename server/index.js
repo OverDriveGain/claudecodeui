@@ -579,6 +579,40 @@ async function serveFileBytes(req, res, resolved) {
     });
 }
 
+/**
+ * The set of absolute paths a session ever delivered via SendUserFile — the
+ * authorization allowlist for the delivered-file endpoints. Derived from the
+ * session's append-only relay history.
+ */
+function deriveDeliveredPaths(events) {
+    const delivered = new Set();
+    for (const e of events || []) {
+        const content = e?.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const c of content) {
+            if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
+                for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
+            }
+        }
+    }
+    return delivered;
+}
+
+/**
+ * Is `resolvedPath` in the session's SendUserFile allowlist? Serves from the warm
+ * in-memory event cache first (topUp:false — NO relay round-trip), because a
+ * playing <video> fires many HTTP Range requests and re-hitting the relay on each
+ * one stalls playback and makes files feel slow / never load. On a miss we refresh
+ * once (topUp:true) to catch a just-delivered file whose event is newer than the
+ * cached prefix, so freshness is preserved without paying the relay cost per range.
+ */
+async function isDeliveredPath(sessionId, resolvedPath) {
+    const warm = await getSessionEventsCached(sessionId, { topUp: false }).catch(() => []);
+    if (deriveDeliveredPaths(warm).has(resolvedPath)) return true;
+    const fresh = await getSessionEventsCached(sessionId, { topUp: true }).catch(() => []);
+    return deriveDeliveredPaths(fresh).has(resolvedPath);
+}
+
 // ── Peer-serving endpoints (this host answers for its OWN local sessions) ────
 
 // Ownership probe: does THIS host run the session? Returns its cwd/name/status.
@@ -680,19 +714,8 @@ app.get('/api/federation/delivered-file', requireFederationToken, async (req, re
         if (!resolveLocalSession(session)) {
             return res.status(404).json({ error: 'Session not on this host' });
         }
-        const events = await getSessionEventsCached(session).catch(() => []);
-        const delivered = new Set();
-        for (const e of events || []) {
-            const content = e?.message?.content;
-            if (!Array.isArray(content)) continue;
-            for (const c of content) {
-                if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
-                    for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
-                }
-            }
-        }
         const resolved = path.resolve(filePath);
-        if (!delivered.has(resolved)) {
+        if (!(await isDeliveredPath(session, resolved))) {
             return res.status(403).json({ error: 'This file was not delivered by the agent' });
         }
         try {
@@ -904,22 +927,14 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
         // On the host that OWNS the agent this is derivable (it can read the
         // session's relay events); a different host may not, and that's fine — a
         // cross-host request is authorized on the owning peer instead (below).
-        const events = await getSessionEventsCached(sessionId).catch(() => []);
-        const delivered = new Set();
-        for (const e of events || []) {
-            const content = e?.message?.content;
-            if (!Array.isArray(content)) continue;
-            for (const c of content) {
-                if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
-                    for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
-                }
-            }
-        }
+        // isDeliveredPath serves from the warm cache first so a playing video's
+        // Range requests don't each hit the relay.
         const resolved = path.resolve(filePath);
+        const isDelivered = await isDeliveredPath(sessionId, resolved);
 
         // Serve locally when this host both authorized it (in the allowlist) and
         // holds the bytes on disk — the same-host case.
-        if (delivered.has(resolved)) {
+        if (isDelivered) {
             let onDisk = true;
             try { await fsPromises.access(resolved); } catch { onDisk = false; }
             if (onDisk) {
@@ -946,8 +961,8 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
         }
 
         // No peer owns it: it was either never delivered or is gone from disk.
-        return res.status(delivered.has(resolved) ? 404 : 403).json({
-            error: delivered.has(resolved) ? 'File no longer on disk' : 'This file was not delivered by the agent',
+        return res.status(isDelivered ? 404 : 403).json({
+            error: isDelivered ? 'File no longer on disk' : 'This file was not delivered by the agent',
         });
     } catch (error) {
         console.error('Error serving delivered file:', error);

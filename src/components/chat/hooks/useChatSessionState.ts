@@ -313,6 +313,18 @@ export function useChatSessionState({
     return scrollHeight - scrollTop - clientHeight < 50;
   }, []);
 
+  // True while any inline <video>/<audio> in the transcript is actively playing.
+  // A new streamed message must NOT yank the view to the bottom mid-playback: that
+  // scrolls the player off-screen (and on iOS drops inline playback) — reads to the
+  // user as the video "closing itself". Mature chat UIs pause auto-scroll while media
+  // plays; we do the same and let it resume once the user pauses/finishes.
+  const isMediaPlaying = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return false;
+    const media = Array.from(container.querySelectorAll('video, audio')) as HTMLMediaElement[];
+    return media.some((m) => !m.paused && !m.ended && m.currentTime > 0);
+  }, []);
+
   const loadOlderMessages = useCallback(
     async (container: HTMLDivElement) => {
       if (!container || isLoadingMoreRef.current || isLoadingMoreMessages) return false;
@@ -742,9 +754,9 @@ export function useChatSessionState({
       // Re-check intent at fire time via the ref: during fast streaming a scroll
       // is almost always queued, and a user who scrolls up in that window would
       // otherwise be dragged back to the bottom when this timer fires.
-      if (grew && !isUserScrolledUp && !hasSelection) {
+      if (grew && !isUserScrolledUp && !hasSelection && !isMediaPlaying()) {
         setTimeout(() => {
-          if (!isUserScrolledUpRef.current) scrollToBottom();
+          if (!isUserScrolledUpRef.current && !isMediaPlaying()) scrollToBottom();
         }, 50);
       }
       return;
@@ -756,7 +768,7 @@ export function useChatSessionState({
     const newHeight = container.scrollHeight;
     const heightDiff = newHeight - prevHeight;
     if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom, isMediaPlaying]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
