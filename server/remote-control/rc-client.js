@@ -102,15 +102,35 @@ export function getRemoteAuth() {
 
 // ── Multi-account credential registry ──────────────────────────────────────────
 // A deployment can drive agents from MORE THAN ONE claude.ai login at once. Set
-// RC_ACCOUNTS to a JSON array of { label, token, orgUuid } and every relay call is
-// routed to the credential that owns the session in question. Backward compatible:
-// with RC_ACCOUNTS unset (or empty/invalid) the registry collapses to a single
-// "default" account sourced exactly as before — RC_OAUTH_TOKEN/RC_ORG_UUID env, else
-// the ~/.claude dotfiles — so existing single-account deployments are untouched.
+// RC_ACCOUNTS to a JSON array; every relay call is routed to the credential that owns
+// the session in question. Backward compatible: with RC_ACCOUNTS unset (or
+// empty/invalid) the registry collapses to a single "default" account sourced exactly
+// as before — RC_OAUTH_TOKEN/RC_ORG_UUID env, else the ~/.claude dotfiles.
 //
-// Accepted per-entry keys (lenient): label|name, token|accessToken,
-// orgUuid|org_uuid|organizationUuid. Entries missing a token or org uuid are dropped.
-function parseAccountsEnv() {
+// Each entry supplies BOTH a token and an org uuid, as literals OR as dotfile paths:
+//   label|name                              display/routing label (optional)
+//   token|accessToken                       literal OAuth token
+//   orgUuid|org_uuid|organizationUuid        literal org uuid
+//   credentialsPath|credentials_path         path to a .credentials.json
+//                                            (.claudeAiOauth.accessToken)
+//   claudeJsonPath|claude_json_path          path to a .claude.json
+//                                            (.oauthAccount.organizationUuid)
+// Paths WIN on freshness: they are read per-call, so an account's `claude` CLI
+// rewriting its dotfile after an OAuth refresh is picked up automatically — literal
+// tokens are a snapshot that expires. Fields can be mixed (literal org + path token).
+// An entry is kept only if it can yield both a token and an org uuid from some source.
+
+function expandHome(p) {
+  return typeof p === 'string' && p.startsWith('~')
+    ? path.join(os.homedir(), p.slice(1))
+    : p;
+}
+function readJsonFile(p) {
+  return JSON.parse(readFileSync(expandHome(p), 'utf8'));
+}
+
+// Parse RC_ACCOUNTS into unresolved SPECS (label + literal creds and/or dotfile paths).
+function parseAccountSpecs() {
   const raw = process.env.RC_ACCOUNTS;
   if (!raw || !raw.trim()) return null;
   let arr;
@@ -122,30 +142,87 @@ function parseAccountsEnv() {
   }
   if (!Array.isArray(arr) || arr.length === 0) return null;
   const seen = new Set();
-  const accounts = [];
+  const specs = [];
   arr.forEach((a, i) => {
     if (!a || typeof a !== 'object') return;
     const label = String(a.label || a.name || `account${i + 1}`).trim() || `account${i + 1}`;
-    const token = a.token || a.accessToken;
-    const orgUuid = a.orgUuid || a.org_uuid || a.organizationUuid;
-    if (!token || !orgUuid || seen.has(label)) return;
+    if (seen.has(label)) return;
+    const spec = {
+      label,
+      token: a.token || a.accessToken || null,
+      orgUuid: a.orgUuid || a.org_uuid || a.organizationUuid || null,
+      credentialsPath: a.credentialsPath || a.credentials_path || null,
+      claudeJsonPath: a.claudeJsonPath || a.claude_json_path || null,
+    };
+    // Need a source for BOTH fields (literal or path), else the entry is unusable.
+    if ((!spec.token && !spec.credentialsPath) || (!spec.orgUuid && !spec.claudeJsonPath)) return;
     seen.add(label);
-    accounts.push({ label, token: String(token), orgUuid: String(orgUuid) });
+    specs.push(spec);
   });
-  return accounts.length ? accounts : null;
+  return specs.length ? specs : null;
 }
 
-// The active credential set. RC_ACCOUNTS wins; otherwise a single "default" account.
-// Read per-call so a deployment changes it with a restart, matching getRemoteAuth.
+// Last successfully-resolved {token, orgUuid} per label — a transient dotfile read
+// failure (mid-rewrite, mount blip) falls back to this instead of dropping the account.
+const lastGoodAccount = new Map();
+// Labels that couldn't be resolved at all (never good) — surfaced via getAccountErrors.
+const accountResolveErrors = new Map();
+
+// Resolve one spec to {label, token, orgUuid}, reading any paths FRESH (per-call →
+// picks up a refreshed/rewritten dotfile). Falls back to last-known-good on a read
+// failure; returns null (and records an error) only if it never resolved.
+function resolveSpec(spec) {
+  let token = spec.token;
+  let orgUuid = spec.orgUuid;
+  let readErr = null;
+  if (!token && spec.credentialsPath) {
+    try { token = readJsonFile(spec.credentialsPath)?.claudeAiOauth?.accessToken || null; }
+    catch (e) { readErr = e; }
+  }
+  if (!orgUuid && spec.claudeJsonPath) {
+    try { orgUuid = readJsonFile(spec.claudeJsonPath)?.oauthAccount?.organizationUuid || null; }
+    catch (e) { readErr = e; }
+  }
+  if (token && orgUuid) {
+    const acct = { label: spec.label, token: String(token), orgUuid: String(orgUuid) };
+    lastGoodAccount.set(spec.label, acct);
+    accountResolveErrors.delete(spec.label);
+    return acct;
+  }
+  const prev = lastGoodAccount.get(spec.label);
+  if (prev) return prev; // transient — reuse last-known-good, no error
+  accountResolveErrors.set(spec.label, {
+    status: 0,
+    message: `could not read credentials (${readErr?.message || 'missing token or org uuid'})`,
+  });
+  return null;
+}
+
+// How many accounts are CONFIGURED (specs), regardless of whether each resolves right
+// now — so the multi-account UI/error surfacing stays on even if one account is
+// temporarily unreadable (its failure is reported rather than silently collapsing to
+// single-account).
+function configuredAccountCount() {
+  const specs = parseAccountSpecs();
+  return specs ? specs.length : 1;
+}
+
+// The active credential set. RC_ACCOUNTS wins (specs resolved per-call); otherwise a
+// single "default" account. If every configured account fails to resolve AND none has
+// a last-known-good value, fall through to the default so a boot-time path glitch
+// doesn't leave the proxy fully dark.
 export function getAccounts() {
-  const multi = parseAccountsEnv();
-  if (multi) return multi;
+  const specs = parseAccountSpecs();
+  if (specs) {
+    const resolved = specs.map(resolveSpec).filter(Boolean);
+    if (resolved.length) return resolved;
+  }
   const { token, orgUuid } = getRemoteAuth();
   return [{ label: 'default', token, orgUuid }];
 }
 
 export function hasMultipleAccounts() {
-  return getAccounts().length > 1;
+  return configuredAccountCount() > 1;
 }
 
 function accountByLabel(label) {
@@ -198,8 +275,13 @@ async function accountTryOrder(sessionId) {
 // Per-account roster-fetch errors from the last listAgents fanout, so the UI can
 // surface "account X failed" without breaking the rest of the list.
 let lastListErrors = new Map();
+// Combine credential-resolve failures (unreadable dotfile path, never good) with
+// roster-fetch failures (expired token → 401). A roster error wins if a label has both.
 export function getAccountErrors() {
-  return [...lastListErrors.entries()].map(([label, e]) => ({ label, ...e }));
+  const out = new Map();
+  for (const [label, e] of accountResolveErrors) out.set(label, e);
+  for (const [label, e] of lastListErrors) out.set(label, e);
+  return [...out.entries()].map(([label, e]) => ({ label, ...e }));
 }
 
 /** Build request headers for the Anthropic API, authed as `account` (or the default). */
