@@ -48,6 +48,9 @@ export type ProjectListItem = {
   remoteSessionId?: string;
   remoteConnected?: boolean;
   remoteRunning?: boolean;
+  // Owning claude.ai account label — set only when >1 account is configured, so the
+  // sidebar can badge which login an agent belongs to.
+  remoteAccount?: string;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -323,6 +326,7 @@ export async function getProjectsWithSessions(
         remoteSessionId: agent.id,
         remoteConnected: agent.connected,
         remoteRunning: agent.running,
+        remoteAccount: agent.account,
       });
     }
   } catch {

@@ -100,9 +100,111 @@ export function getRemoteAuth() {
   return { token, orgUuid };
 }
 
-/** Build request headers for the Anthropic API. */
-function headers({ beta, org, client } = {}) {
+// ── Multi-account credential registry ──────────────────────────────────────────
+// A deployment can drive agents from MORE THAN ONE claude.ai login at once. Set
+// RC_ACCOUNTS to a JSON array of { label, token, orgUuid } and every relay call is
+// routed to the credential that owns the session in question. Backward compatible:
+// with RC_ACCOUNTS unset (or empty/invalid) the registry collapses to a single
+// "default" account sourced exactly as before — RC_OAUTH_TOKEN/RC_ORG_UUID env, else
+// the ~/.claude dotfiles — so existing single-account deployments are untouched.
+//
+// Accepted per-entry keys (lenient): label|name, token|accessToken,
+// orgUuid|org_uuid|organizationUuid. Entries missing a token or org uuid are dropped.
+function parseAccountsEnv() {
+  const raw = process.env.RC_ACCOUNTS;
+  if (!raw || !raw.trim()) return null;
+  let arr;
+  try {
+    arr = JSON.parse(raw);
+  } catch {
+    console.error('[rc] RC_ACCOUNTS is not valid JSON — ignoring, using single-account fallback');
+    return null;
+  }
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  const seen = new Set();
+  const accounts = [];
+  arr.forEach((a, i) => {
+    if (!a || typeof a !== 'object') return;
+    const label = String(a.label || a.name || `account${i + 1}`).trim() || `account${i + 1}`;
+    const token = a.token || a.accessToken;
+    const orgUuid = a.orgUuid || a.org_uuid || a.organizationUuid;
+    if (!token || !orgUuid || seen.has(label)) return;
+    seen.add(label);
+    accounts.push({ label, token: String(token), orgUuid: String(orgUuid) });
+  });
+  return accounts.length ? accounts : null;
+}
+
+// The active credential set. RC_ACCOUNTS wins; otherwise a single "default" account.
+// Read per-call so a deployment changes it with a restart, matching getRemoteAuth.
+export function getAccounts() {
+  const multi = parseAccountsEnv();
+  if (multi) return multi;
   const { token, orgUuid } = getRemoteAuth();
+  return [{ label: 'default', token, orgUuid }];
+}
+
+export function hasMultipleAccounts() {
+  return getAccounts().length > 1;
+}
+
+function accountByLabel(label) {
+  return getAccounts().find((a) => a.label === label) || null;
+}
+
+// sessionId (BOTH cse_/session_ forms) -> owning account label. Populated whenever a
+// roster is fetched (listAgents) and whenever a relay call proves which credential a
+// session answers to. This is the authoritative routing table.
+const sessionAccountMap = new Map();
+function rememberAccountForSession(sessionId, label) {
+  if (!sessionId || !label) return;
+  sessionAccountMap.set(toCseId(sessionId), label);
+  sessionAccountMap.set(toSessionId(sessionId), label);
+}
+function knownAccountForSession(sessionId) {
+  const label =
+    sessionAccountMap.get(sessionId) ||
+    sessionAccountMap.get(toCseId(sessionId)) ||
+    sessionAccountMap.get(toSessionId(sessionId));
+  return label ? accountByLabel(label) : null;
+}
+
+// Resolve which credential owns a session. Fast path for a single-account
+// deployment (the only account). Otherwise consult the routing table; on a COLD miss
+// (an id requested before any roster fetch populated the map) refresh the roster once
+// — a fanout that repopulates the map — then re-check. Returns null only when the id
+// is unknown to every account, in which case read callers try each credential in turn
+// rather than 403 the request.
+async function resolveAccountForSession(sessionId) {
+  const accounts = getAccounts();
+  if (accounts.length <= 1) return accounts[0] || null;
+  const known = knownAccountForSession(sessionId);
+  if (known) return known;
+  try { await listAgents(); } catch { /* degrade — try-all order below */ }
+  return knownAccountForSession(sessionId);
+}
+
+// Credential try-order for a read: the resolved owner first, then the rest (so a
+// cold/unknown session still resolves by probing each account). Single-account
+// deployments get exactly one entry — unchanged behaviour.
+async function accountTryOrder(sessionId) {
+  const accounts = getAccounts();
+  if (accounts.length <= 1) return accounts;
+  const primary = await resolveAccountForSession(sessionId);
+  if (!primary) return accounts;
+  return [primary, ...accounts.filter((a) => a.label !== primary.label)];
+}
+
+// Per-account roster-fetch errors from the last listAgents fanout, so the UI can
+// surface "account X failed" without breaking the rest of the list.
+let lastListErrors = new Map();
+export function getAccountErrors() {
+  return [...lastListErrors.entries()].map(([label, e]) => ({ label, ...e }));
+}
+
+/** Build request headers for the Anthropic API, authed as `account` (or the default). */
+function headers(account, { beta, org, client } = {}) {
+  const { token, orgUuid } = account || getRemoteAuth();
   const h = {
     Authorization: `Bearer ${token}`,
     'anthropic-version': ANTHROPIC_VERSION,
@@ -127,10 +229,9 @@ function toSessionId(sessionId) {
   return sessionId.startsWith('cse_') ? `session_${sessionId.slice('cse_'.length)}` : sessionId;
 }
 
-/** True when a usable OAuth token + org uuid are present (else the proxy is off). */
+/** True when at least one account has a usable OAuth token + org uuid (else off). */
 export function isRemoteControlConfigured() {
-  const { token, orgUuid } = getRemoteAuth();
-  return Boolean(token && orgUuid);
+  return getAccounts().some((a) => a.token && a.orgUuid);
 }
 
 /**
@@ -157,28 +258,9 @@ function isWorkerRunning(s) {
   return Number.isFinite(last) && Date.now() - last < RUNNING_MAX_IDLE_MS;
 }
 
-export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
-  // /v1/code/sessions is paginated (default 20, ordered most-recent-first) with a
-  // `cursor`/`next_cursor` scheme. Reading only page 1 hid every agent that wasn't
-  // recently active (e.g. an idle but connected agent), which is why one had to be
-  // "talked to" to surface. Page through so the WHOLE fleet is returned.
-  const rows = [];
-  let cursor = null;
-  for (let i = 0; i < maxPages; i++) {
-    const url = `${BASE}/v1/code/sessions?limit=${pageSize}`
-      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
-    const r = await fetch(url, { headers: headers() });
-    if (!r.ok) {
-      if (i === 0) throw new Error(`listAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
-      break; // partial fetch — return what we have rather than failing the list
-    }
-    const j = await r.json();
-    const batch = j.data || [];
-    rows.push(...batch);
-    cursor = j.next_cursor;
-    if (!cursor || batch.length === 0) break;
-  }
-  return rows.map((s) => ({
+// Shape one raw relay session row into the app's agent record.
+function mapAgentRow(s) {
+  return {
     id: s.id,
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
@@ -206,7 +288,65 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     // Recency — the same signal the claude.ai "Recents" view orders by.
     lastEventAt: s.last_event_at || s.created_at || '',
     createdAt: s.created_at,
-  }));
+  };
+}
+
+// Page ONE account's whole session list. Never throws — returns { rows, error } so a
+// fanout can degrade gracefully (one expired token doesn't blank the whole roster).
+async function listAgentsForAccount(account, { pageSize, maxPages }) {
+  const rows = [];
+  let cursor = null;
+  for (let i = 0; i < maxPages; i++) {
+    const url = `${BASE}/v1/code/sessions?limit=${pageSize}`
+      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+    let r;
+    try {
+      r = await fetch(url, { headers: headers(account) });
+    } catch (err) {
+      return { rows, error: { status: 0, message: err?.message || 'network error' } };
+    }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      // Partial page-through already yielded rows — keep them, note the error.
+      return { rows, error: { status: r.status, message: body.slice(0, 200) } };
+    }
+    const j = await r.json();
+    const batch = j.data || [];
+    rows.push(...batch);
+    cursor = j.next_cursor;
+    if (!cursor || batch.length === 0) break;
+  }
+  return { rows, error: null };
+}
+
+// /v1/code/sessions is paginated (default 20, most-recent-first) with a
+// `cursor`/`next_cursor` scheme; page through so the WHOLE fleet returns. With
+// multiple accounts, fan out across all of them concurrently, tag each session with
+// its owning account label, and populate the sessionId->account routing table so the
+// drive/history/subscribe paths know which credential to use.
+export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
+  const accounts = getAccounts();
+  const settled = await Promise.all(
+    accounts.map((acc) => listAgentsForAccount(acc, { pageSize, maxPages })),
+  );
+  const errors = new Map();
+  const out = [];
+  settled.forEach((res, i) => {
+    const acc = accounts[i];
+    if (res.error) errors.set(acc.label, res.error);
+    for (const s of res.rows) {
+      rememberAccountForSession(s.id, acc.label);
+      out.push({ ...mapAgentRow(s), account: acc.label });
+    }
+  });
+  lastListErrors = errors;
+  // Every account failed AND produced nothing → throw so the caller (rc.service)
+  // serves its last-good cache, exactly as the single-account path did before.
+  if (out.length === 0 && errors.size === accounts.length && accounts.length > 0) {
+    const first = [...errors.values()][0];
+    throw new Error(`listAgents: all ${accounts.length} account(s) failed (e.g. ${first.status}: ${first.message})`);
+  }
+  return out;
 }
 
 /**
@@ -224,22 +364,34 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
  * Returns `{ events, lastId }` where `lastId` is the cursor to resume from next.
  */
 export async function getSessionEvents(sessionId, { after = null, limit = 1000, maxPages = 1000 } = {}) {
-  const all = [];
-  let cursor = after;
-  let lastId = after;
-  for (let i = 0; i < maxPages; i++) {
-    const url = `${BASE}/v1/sessions/${sessionId}/events?limit=${limit}`
-      + (cursor ? `&after_id=${encodeURIComponent(cursor)}` : '');
-    const r = await fetch(url, { headers: headers({ beta: BETA_CCR, org: true }) });
-    if (!r.ok) break;
-    const j = await r.json();
-    const batch = Array.isArray(j.data) ? j.data : [];
-    all.push(...batch);
-    if (j.last_id) lastId = j.last_id;
-    if (!j.has_more || !batch.length || !j.last_id) break;
-    cursor = j.last_id;
+  // Try the owning account first; on a cold/unknown session, probe each credential in
+  // turn (a foreign session 404s under the wrong token) rather than failing outright.
+  const order = await accountTryOrder(sessionId);
+  for (const account of order) {
+    const all = [];
+    let cursor = after;
+    let lastId = after;
+    let anyOk = false;
+    for (let i = 0; i < maxPages; i++) {
+      const url = `${BASE}/v1/sessions/${sessionId}/events?limit=${limit}`
+        + (cursor ? `&after_id=${encodeURIComponent(cursor)}` : '');
+      const r = await fetch(url, { headers: headers(account, { beta: BETA_CCR, org: true }) });
+      if (!r.ok) break;
+      anyOk = true;
+      const j = await r.json();
+      const batch = Array.isArray(j.data) ? j.data : [];
+      all.push(...batch);
+      if (j.last_id) lastId = j.last_id;
+      if (!j.has_more || !batch.length || !j.last_id) break;
+      cursor = j.last_id;
+    }
+    if (anyOk) {
+      rememberAccountForSession(sessionId, account.label);
+      return { events: all, lastId };
+    }
+    // This account rejected the session (wrong owner / expired) — try the next.
   }
-  return { events: all, lastId };
+  return { events: [], lastId: after };
 }
 
 // sessionId -> { events: rawEvent[], lastId: cursor, fetchedAt: ms }. Turns the
@@ -399,20 +551,25 @@ const sessionCwdCache = new Map();
 export async function getSessionCwd(sessionId) {
   if (!sessionId) return null;
   if (sessionCwdCache.has(sessionId)) return sessionCwdCache.get(sessionId);
-  try {
-    const url = `${BASE}/v1/sessions/${toSessionId(sessionId)}`;
-    const r = await fetch(url, { headers: headers({ beta: BETA_CCR, org: true }) });
-    if (!r.ok) return null;
-    const j = await r.json();
-    const cwd =
-      (j && j.session_context && typeof j.session_context.cwd === 'string' && j.session_context.cwd) ||
-      (j && j.response_shape && j.response_shape.session_context && j.response_shape.session_context.cwd) ||
-      null;
-    if (cwd) sessionCwdCache.set(sessionId, cwd);
-    return cwd || null;
-  } catch {
-    return null;
+  const order = await accountTryOrder(sessionId);
+  for (const account of order) {
+    try {
+      const url = `${BASE}/v1/sessions/${toSessionId(sessionId)}`;
+      const r = await fetch(url, { headers: headers(account, { beta: BETA_CCR, org: true }) });
+      if (!r.ok) continue; // wrong account / expired — try the next
+      rememberAccountForSession(sessionId, account.label);
+      const j = await r.json();
+      const cwd =
+        (j && j.session_context && typeof j.session_context.cwd === 'string' && j.session_context.cwd) ||
+        (j && j.response_shape && j.response_shape.session_context && j.response_shape.session_context.cwd) ||
+        null;
+      if (cwd) sessionCwdCache.set(sessionId, cwd);
+      return cwd || null;
+    } catch {
+      // try the next account
+    }
   }
+  return null;
 }
 
 // ───────────────────────────── DRIVE SIDE ──────────────────────────────────
@@ -437,27 +594,38 @@ export async function sendMessage(sessionId, content) {
     },
   };
   const url = `${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`;
-  let r;
-  try {
-    r = await fetch(url, {
-      method: 'POST',
-      headers: headers({ beta: BETA_CCR, org: true, client: true }),
-      body: JSON.stringify({ events: [event] }),
-    });
-  } catch (err) {
-    console.error('[rc] sendMessage fetch threw', { sessionId, url, error: err?.message });
-    return { ok: false, status: 0, notActive: false };
-  }
-  if (!r.ok) {
+  const order = await accountTryOrder(sessionId);
+  let last = { ok: false, status: 0, notActive: false };
+  for (const account of order) {
+    let r;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers: headers(account, { beta: BETA_CCR, org: true, client: true }),
+        body: JSON.stringify({ events: [event] }),
+      });
+    } catch (err) {
+      console.error('[rc] sendMessage fetch threw', { sessionId, url, account: account.label, error: err?.message });
+      last = { ok: false, status: 0, notActive: false };
+      continue;
+    }
+    if (r.ok) {
+      rememberAccountForSession(sessionId, account.label);
+      return { ok: true, status: r.status, notActive: false };
+    }
     let body = '';
     try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
-    console.error('[rc] sendMessage failed', { sessionId, url, status: r.status, body });
-    // 409 "not active": the session is archived/disconnected and can't receive a
-    // message — surface that clearly instead of a generic failure.
+    // 409 "not active" comes from the OWNING account (the session exists but is
+    // archived) — a definitive answer; don't shop it to other accounts.
     const notActive = r.status === 409 && /not active/i.test(body);
-    return { ok: false, status: r.status, notActive };
+    if (notActive) {
+      rememberAccountForSession(sessionId, account.label);
+      return { ok: false, status: r.status, notActive: true };
+    }
+    console.error('[rc] sendMessage failed', { sessionId, url, account: account.label, status: r.status, body });
+    last = { ok: false, status: r.status, notActive: false };
   }
-  return { ok: true, status: r.status, notActive: false };
+  return last;
 }
 
 /**
@@ -590,7 +758,11 @@ function scheduleRemoteReconnect(sessionId, entry) {
  * the initial attach and the transparent reconnect path.
  */
 async function openRemoteUpstream(sessionId, entry) {
-  const { token, orgUuid } = getRemoteAuth();
+  // Subscribe as the account that owns this session (falls back to the sole/first
+  // account for a single-account deployment or a still-unresolved cold id).
+  const account = (await resolveAccountForSession(sessionId)) || getAccounts()[0] || {};
+  const { token, orgUuid } = account;
+  entry.accountLabel = account.label;
   const url = `${WS_BASE}/v1/sessions/ws/${sessionId}/subscribe?organization_uuid=${orgUuid}`;
   const upstream = new WebSocket(url, {
     headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },

@@ -7,7 +7,13 @@
 // capture policy, and the `remote:<sessionId>` virtual-project id helpers.
 
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
-import { isRemoteControlConfigured, listAgents, getSessionCwd } from '@/remote-control/rc-client.js';
+import {
+  isRemoteControlConfigured,
+  listAgents,
+  getSessionCwd,
+  hasMultipleAccounts,
+  getAccountErrors,
+} from '@/remote-control/rc-client.js';
 import { currentAgentAllow } from '@/services/user-context.js';
 import { resolveLocalSessionCwd } from '@/services/local-sessions.js';
 
@@ -28,6 +34,8 @@ export type RemoteAgent = {
   repo?: string | null; // stable identity across restarts (git repo)
   lastEventAt?: string; // recency — what the claude.ai "Recents" view orders by
   createdAt?: string;
+  account?: string; // owning claude.ai account label — set only when >1 account
+  // is configured (RC_ACCOUNTS), so single-account deployments stay unchanged.
 };
 
 /** Drop the leading slash a slash-command launch leaves on a session title. */
@@ -118,6 +126,9 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
   if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return filterByUser(agentCache.value);
   try {
     const raw = await listAgents();
+    // Only expose the account label when the deployment actually runs >1 account —
+    // keeps single-account deployments visually and behaviourally identical.
+    const multi = hasMultipleAccounts();
     type Mapped = RemoteAgent & { active: boolean };
     const mapped: Mapped[] = (Array.isArray(raw) ? raw : [])
       .map((s: Record<string, unknown>) => ({
@@ -129,6 +140,7 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         repo: s.repo ? String(s.repo) : null,
         lastEventAt: s.lastEventAt ? String(s.lastEventAt) : undefined,
         createdAt: s.createdAt ? String(s.createdAt) : undefined,
+        account: multi && s.account ? String(s.account) : undefined,
       }))
       // Capture policy matches the agent NAME, so test the cleaned title — a
       // slash-launched session ("/environment") must still match the "environment"
@@ -194,5 +206,22 @@ export async function getRemoteAgentCwd(sessionId: string): Promise<string | nul
     return (await getSessionCwd(sessionId)) || null;
   } catch {
     return null;
+  }
+}
+
+export type AccountError = { label: string; status: number; message: string };
+
+/**
+ * Per-account roster-fetch errors from the last agent-list fanout — e.g. an expired
+ * token on one login. Empty when every account is healthy (and always empty for a
+ * single-account deployment, which throws-then-serves-stale instead). Lets the UI
+ * warn "account X failed" without hiding the accounts that DID load.
+ */
+export function listAccountErrors(): AccountError[] {
+  if (!hasMultipleAccounts()) return [];
+  try {
+    return (getAccountErrors() as AccountError[]) ?? [];
+  } catch {
+    return [];
   }
 }

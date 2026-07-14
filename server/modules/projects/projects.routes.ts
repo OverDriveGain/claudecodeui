@@ -7,7 +7,7 @@ import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
-import { listRemoteAgents } from '@/services/rc.service.js';
+import { listRemoteAgents, listAccountErrors } from '@/services/rc.service.js';
 
 const router = express.Router();
 
@@ -105,8 +105,16 @@ router.get(
     } catch {
       agents = [];
     }
+    // Per-account roster errors (multi-account only) so the UI can flag a login whose
+    // token expired without blanking the accounts that loaded fine.
+    let accountErrors: Array<{ label: string; status: number; message: string }> = [];
+    try {
+      accountErrors = listAccountErrors();
+    } catch {
+      accountErrors = [];
+    }
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ agents });
+    res.json({ agents, accountErrors });
   }),
 );
 

@@ -126,6 +126,9 @@ export default function SidebarProjectItem({
     // worker_status==='running' on the relay — the agent is mid-turn. Same signal
     // claude.ai/code shows as a spinner on the session in its left list.
     const isRunning = Boolean(project.remoteRunning);
+    // Owning claude.ai account label — set by the server only when >1 account is
+    // configured, so single-account deployments render exactly as before.
+    const accountLabel = typeof project.remoteAccount === 'string' ? project.remoteAccount : '';
     const openAgent = () => {
       onProjectSelect(project);
       onSessionSelect(
@@ -152,7 +155,17 @@ export default function SidebarProjectItem({
         >
           <SquareTerminal className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1 text-left">
-            <div className="truncate text-sm font-medium text-foreground">{project.displayName}</div>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm font-medium text-foreground">{project.displayName}</span>
+              {accountLabel && (
+                <span
+                  className="flex-shrink-0 rounded-sm bg-primary/10 px-1 py-px text-[10px] font-medium uppercase leading-none tracking-wide text-primary/80"
+                  title={`account: ${accountLabel}`}
+                >
+                  {accountLabel}
+                </span>
+              )}
+            </div>
             <div className="text-xs text-muted-foreground">
               {isRunning ? 'working…' : isOnline ? 'agent' : 'agent · offline'}
             </div>

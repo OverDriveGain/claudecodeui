@@ -75,6 +75,9 @@ export interface Project {
   // worker_status==='running' on the relay — the agent is mid-turn. Drives the
   // sidebar running dot, exactly like claude.ai/code.
   remoteRunning?: boolean;
+  // Owning claude.ai account label — present only when >1 account is configured
+  // (RC_ACCOUNTS). Used to badge which login the agent belongs to.
+  remoteAccount?: string;
   [key: string]: unknown;
 }
 
