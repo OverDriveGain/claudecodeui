@@ -1,0 +1,32 @@
+# XcodeGen spec for the native MyMu iOS client.
+# Generate the project on the build Mac with:  xcodegen generate
+# (the .xcodeproj is generated, not committed — rsync --delete wipes it).
+name: MyMu
+options:
+  bundleIdPrefix: com.mymu
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    # Set on the build host (or in Xcode) — left empty so no team leaks into git.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    GENERATE_INFOPLIST_FILE: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  MyMu:
+    type: application
+    platform: iOS
+    sources:
+      - MyMu
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mymu.app
+        INFOPLIST_FILE: MyMu/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
