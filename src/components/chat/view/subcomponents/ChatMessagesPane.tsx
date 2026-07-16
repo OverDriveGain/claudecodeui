@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useRef } from 'react';
+import { useMemo } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
@@ -112,33 +112,24 @@ export default function ChatMessagesPane({
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
-  const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
-  const allocatedKeysRef = useRef<Set<string>>(new Set());
-  const generatedMessageKeyCounterRef = useRef(0);
 
-  // Keep keys stable across prepends so existing MessageComponent instances retain local state.
-  const getMessageKey = useCallback((message: ChatMessage) => {
-    const existingKey = messageKeyMapRef.current.get(message);
-    if (existingKey) {
-      return existingKey;
-    }
-
-    const intrinsicKey = getIntrinsicMessageKey(message);
-    let candidateKey = intrinsicKey;
-
-    if (!candidateKey || allocatedKeysRef.current.has(candidateKey)) {
-      do {
-        generatedMessageKeyCounterRef.current += 1;
-        candidateKey = intrinsicKey
-          ? `${intrinsicKey}-${generatedMessageKeyCounterRef.current}`
-          : `message-generated-${generatedMessageKeyCounterRef.current}`;
-      } while (allocatedKeysRef.current.has(candidateKey));
-    }
-
-    allocatedKeysRef.current.add(candidateKey);
-    messageKeyMapRef.current.set(message, candidateKey);
-    return candidateKey;
-  }, []);
+  // DETERMINISTIC keys: intrinsic key + occurrence index within THIS render.
+  // The previous WeakMap/allocated-set scheme was only stable while the same
+  // message OBJECTS stayed in memory — any full history refetch (reconnect,
+  // end-of-turn reconcile) replaced the array, every intrinsic key read as
+  // "already taken", and every row got a fresh suffixed key. React then
+  // remounted the ENTIRE transcript: inline videos unmounted/remounted
+  // (visible hide/show flicker, playback reset) on each periodic update.
+  // Same content now always yields the same keys, so refetches are invisible.
+  const messageKeys = useMemo(() => {
+    const seen = new Map<string, number>();
+    return visibleMessages.map((message, index) => {
+      const base = getIntrinsicMessageKey(message) ?? `message-fallback-${index}`;
+      const occurrence = seen.get(base) ?? 0;
+      seen.set(base, occurrence + 1);
+      return occurrence === 0 ? base : `${base}-dup${occurrence}`;
+    });
+  }, [visibleMessages]);
 
   return (
     <div
@@ -253,7 +244,7 @@ export default function ChatMessagesPane({
             const prevMessage = index > 0 ? visibleMessages[index - 1] : null;
             return (
               <MessageComponent
-                key={getMessageKey(message)}
+                key={messageKeys[index]}
                 message={message}
                 prevMessage={prevMessage}
                 createDiff={createDiff}
