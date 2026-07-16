@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
@@ -60,6 +60,18 @@ function MainContent({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
+
+  // Files tab is kept MOUNTED (hidden via CSS) once first visited, like the chat
+  // tab above — unmounting it on tab switch threw away the expanded-folders and
+  // drill-down state, so returning to Files always restarted at the tree root.
+  // Reset on project change so a new project gets a fresh (lazy) mount.
+  const [filesTabVisited, setFilesTabVisited] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'files') setFilesTabVisited(true);
+  }, [activeTab]);
+  useEffect(() => {
+    setFilesTabVisited(false);
+  }, [selectedProject?.projectId]);
 
   const {
     editingFile,
@@ -160,8 +172,8 @@ function MainContent({
             </ErrorBoundary>
           </div>
 
-          {activeTab === 'files' && (
-            <div className="h-full overflow-hidden">
+          {(filesTabVisited || activeTab === 'files') && (
+            <div className={`h-full overflow-hidden ${activeTab === 'files' ? 'block' : 'hidden'}`}>
               <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
             </div>
           )}
