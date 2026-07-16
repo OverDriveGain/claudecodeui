@@ -6,6 +6,7 @@ import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
+import { useIsSessionRunning } from '../../../../stores/useSessionActivityStore';
 
 import TaskIndicator from './TaskIndicator';
 import SidebarProjectSessions from './SidebarProjectSessions';
@@ -120,12 +121,19 @@ export default function SidebarProjectItem({
   // Clicking it binds the agent's existing session (cse_…) so its prior history loads
   // and the live stream renders.
   const isRemoteAgent = Boolean(project.isRemoteAgent) || project.projectId.startsWith('remote:');
+  const agentSessionId = isRemoteAgent
+    ? project.remoteSessionId || project.projectId.replace(/^remote:/, '')
+    : '';
+  // Merge the polled relay worker_status with the shared activity store — the open
+  // chat publishes its live isLoading there (setLocalRunning), so this row lights
+  // up the moment the chat loader does instead of waiting on the poll. Same
+  // single-source-of-truth rule as local sessions; they can't disagree anymore.
+  const liveRunning = useIsSessionRunning(agentSessionId);
   if (isRemoteAgent) {
-    const agentSessionId = project.remoteSessionId || project.projectId.replace(/^remote:/, '');
     const isOnline = project.remoteConnected !== false;
     // worker_status==='running' on the relay — the agent is mid-turn. Same signal
     // claude.ai/code shows as a spinner on the session in its left list.
-    const isRunning = Boolean(project.remoteRunning);
+    const isRunning = Boolean(project.remoteRunning) || liveRunning;
     // Owning claude.ai account label — set by the server only when >1 account is
     // configured, so single-account deployments render exactly as before.
     const accountLabel = typeof project.remoteAccount === 'string' ? project.remoteAccount : '';

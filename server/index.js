@@ -582,35 +582,49 @@ async function serveFileBytes(req, res, resolved) {
 /**
  * The set of absolute paths a session ever delivered via SendUserFile — the
  * authorization allowlist for the delivered-file endpoints. Derived from the
- * session's append-only relay history.
+ * session's append-only relay history. SendUserFile accepts paths RELATIVE to
+ * the agent's cwd, so `agentCwd` anchors those; without it a relative delivery
+ * used to resolve against the SERVER's cwd and 404 ("file no longer on disk").
  */
-function deriveDeliveredPaths(events) {
+function deriveDeliveredPaths(events, agentCwd) {
+    const resolveOne = (p) => (path.isAbsolute(p) ? path.resolve(p) : (agentCwd ? path.resolve(agentCwd, p) : path.resolve(p)));
     const delivered = new Set();
     for (const e of events || []) {
         const content = e?.message?.content;
         if (!Array.isArray(content)) continue;
         for (const c of content) {
             if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
-                for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
+                for (const f of c.input.files) if (typeof f === 'string') delivered.add(resolveOne(f));
             }
         }
     }
     return delivered;
 }
 
+/** The directory the agent works in — anchors relative delivered paths. */
+async function sessionCwdForDelivery(sessionId) {
+    const local = resolveLocalSession(sessionId);
+    if (local?.cwd) return local.cwd;
+    try { return await getRemoteAgentCwd(sessionId); } catch { return null; }
+}
+
 /**
- * Is `resolvedPath` in the session's SendUserFile allowlist? Serves from the warm
+ * Resolve a requested delivered path (absolute OR agent-cwd-relative) and check
+ * it against the session's SendUserFile allowlist. Serves from the warm
  * in-memory event cache first (topUp:false — NO relay round-trip), because a
  * playing <video> fires many HTTP Range requests and re-hitting the relay on each
- * one stalls playback and makes files feel slow / never load. On a miss we refresh
- * once (topUp:true) to catch a just-delivered file whose event is newer than the
- * cached prefix, so freshness is preserved without paying the relay cost per range.
+ * one stalls playback. On a miss we refresh once (topUp:true) to catch a
+ * just-delivered file newer than the cached prefix.
  */
-async function isDeliveredPath(sessionId, resolvedPath) {
+async function resolveDeliveredPath(sessionId, requestedPath) {
+    const cwd = await sessionCwdForDelivery(sessionId);
+    const resolved = path.isAbsolute(requestedPath)
+        ? path.resolve(requestedPath)
+        : (cwd ? path.resolve(cwd, requestedPath) : path.resolve(requestedPath));
     const warm = await getSessionEventsCached(sessionId, { topUp: false }).catch(() => []);
-    if (deriveDeliveredPaths(warm).has(resolvedPath)) return true;
+    if (deriveDeliveredPaths(warm, cwd).has(resolved)) return { delivered: true, resolved };
     const fresh = await getSessionEventsCached(sessionId, { topUp: true }).catch(() => []);
-    return deriveDeliveredPaths(fresh).has(resolvedPath);
+    return { delivered: deriveDeliveredPaths(fresh, cwd).has(resolved), resolved };
 }
 
 // ── Peer-serving endpoints (this host answers for its OWN local sessions) ────
@@ -714,8 +728,8 @@ app.get('/api/federation/delivered-file', requireFederationToken, async (req, re
         if (!resolveLocalSession(session)) {
             return res.status(404).json({ error: 'Session not on this host' });
         }
-        const resolved = path.resolve(filePath);
-        if (!(await isDeliveredPath(session, resolved))) {
+        const { delivered, resolved } = await resolveDeliveredPath(session, filePath);
+        if (!delivered) {
             return res.status(403).json({ error: 'This file was not delivered by the agent' });
         }
         try {
@@ -927,10 +941,10 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
         // On the host that OWNS the agent this is derivable (it can read the
         // session's relay events); a different host may not, and that's fine — a
         // cross-host request is authorized on the owning peer instead (below).
-        // isDeliveredPath serves from the warm cache first so a playing video's
-        // Range requests don't each hit the relay.
-        const resolved = path.resolve(filePath);
-        const isDelivered = await isDeliveredPath(sessionId, resolved);
+        // resolveDeliveredPath serves from the warm cache first so a playing
+        // video's Range requests don't each hit the relay, and anchors relative
+        // paths at the agent's cwd.
+        const { delivered: isDelivered, resolved } = await resolveDeliveredPath(sessionId, filePath);
 
         // Serve locally when this host both authorized it (in the allowlist) and
         // holds the bytes on disk — the same-host case.

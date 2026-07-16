@@ -54,14 +54,15 @@ function streamUrl(projectId: string, path: string): string {
 export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryContentProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [failedPreview, setFailedPreview] = useState<Set<string>>(new Set());
+  // Per-path error count. A media element that errors gets remounted with a
+  // cache-busted URL (a transient stream drop used to kill the player for good —
+  // "video shows, then hides"); only after repeated failures do we fall back to
+  // the download-only row.
+  const MAX_PREVIEW_ATTEMPTS = 3;
+  const [previewAttempts, setPreviewAttempts] = useState<Record<string, number>>({});
 
   const markPreviewFailed = useCallback((path: string) => {
-    setFailedPreview((prev) => {
-      const next = new Set(prev);
-      next.add(path);
-      return next;
-    });
+    setPreviewAttempts((prev) => ({ ...prev, [path]: (prev[path] ?? 0) + 1 }));
   }, []);
 
   // Fetch the bytes once (authenticated) for a forced download that keeps the
@@ -106,8 +107,12 @@ export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryC
       {files.map((path) => {
         const name = basename(path);
         const kind = projectId ? kindOf(path) : 'other';
-        const canPreview = kind !== 'other' && !failedPreview.has(path);
-        const url = projectId ? streamUrl(projectId, path) : '';
+        const attempts = previewAttempts[path] ?? 0;
+        const canPreview = kind !== 'other' && attempts < MAX_PREVIEW_ATTEMPTS;
+        // Bump the URL on each retry so the media element actually refetches
+        // instead of replaying its cached failure.
+        const baseUrl = projectId ? streamUrl(projectId, path) : '';
+        const url = baseUrl && attempts > 0 ? `${baseUrl}&retry=${attempts}` : baseUrl;
 
         return (
           <div key={path} className="overflow-hidden rounded-md border border-border bg-card">
@@ -115,6 +120,7 @@ export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryC
             {canPreview && kind === 'image' && (
               <a href={url} target="_blank" rel="noopener noreferrer" className="block bg-black/5 dark:bg-white/5">
                 <img
+                  key={url}
                   src={url}
                   alt={name}
                   loading="lazy"
@@ -125,6 +131,7 @@ export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryC
             )}
             {canPreview && kind === 'video' && (
               <video
+                key={url}
                 src={url}
                 controls
                 preload="metadata"
@@ -136,7 +143,7 @@ export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryC
             )}
             {canPreview && kind === 'audio' && (
               <div className="px-2.5 pt-2">
-                <audio src={url} controls preload="metadata" onError={() => markPreviewFailed(path)} className="w-full">
+                <audio key={url} src={url} controls preload="metadata" onError={() => markPreviewFailed(path)} className="w-full">
                   Your browser does not support the audio element.
                 </audio>
               </div>
