@@ -286,6 +286,7 @@ function ChatInterface({
     selectedSession,
     currentSessionId,
     setCurrentSessionId,
+    isLoading,
     setIsLoading,
     setCanAbortSession,
     setClaudeStatus,

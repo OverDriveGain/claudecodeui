@@ -55,6 +55,8 @@ interface UseChatRealtimeHandlersArgs {
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
   setCurrentSessionId: (sessionId: string | null) => void;
+  /** The view's CURRENT loading state — gates completion side-effects (sound/title). */
+  isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
   setCanAbortSession: (canAbort: boolean) => void;
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
@@ -82,6 +84,7 @@ export function useChatRealtimeHandlers({
   selectedSession,
   currentSessionId,
   setCurrentSessionId,
+  isLoading,
   setIsLoading,
   setCanAbortSession,
   setClaudeStatus,
@@ -283,6 +286,12 @@ export function useChatRealtimeHandlers({
       }
 
       case 'complete': {
+        // Capture BEFORE the state resets below: the chime/title flash must fire
+        // only when this view actually transitions working → done. `complete`
+        // frames also arrive replayed (reconnect/re-subscribe recovery) and from
+        // OTHER sessions this connection is subscribed to (multi-view fan-out) —
+        // dinging on those played "done" over and over for an already-idle chat.
+        const finishedActiveTurn = drivesActiveView && isLoading;
         if (drivesActiveView) {
           // Flush the active view's remaining streaming state and reset its spinner.
           if (streamTimerRef.current) {
@@ -331,8 +340,10 @@ export function useChatRealtimeHandlers({
           break;
         }
 
-        showCompletionTitleIndicator();
-        void playChatCompletionSound();
+        if (finishedActiveTurn) {
+          showCompletionTitleIndicator();
+          void playChatCompletionSound();
+        }
 
         const actualSessionId =
           typeof msg.actualSessionId === 'string' && msg.actualSessionId.trim().length > 0
@@ -434,6 +445,7 @@ export function useChatRealtimeHandlers({
     selectedSession,
     currentSessionId,
     setCurrentSessionId,
+    isLoading,
     setIsLoading,
     setCanAbortSession,
     setClaudeStatus,
