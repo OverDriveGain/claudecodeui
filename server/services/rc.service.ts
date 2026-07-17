@@ -112,7 +112,13 @@ function filterByUser(agents: RemoteAgent[]): RemoteAgent[] {
   return agents.filter((a) => res.some((re) => re.test(a.title)));
 }
 
-let agentCache: { at: number; value: RemoteAgent[] } | null = null;
+// `value` is the collapsed one-leaf-per-agent list the GUI shows; `sessions` is the
+// UNCOLLAPSED capture-filtered list (every session of every visible agent, cleaned
+// titles). The visibility gate checks `sessions`: an agent restart rotates its leaf
+// to a new session id, and a conversation/files view still open on the OLD id must
+// keep working (files browse, history, drive) — the policy is per-agent, not
+// per-session. Gating on the collapsed list silently 404'd/black-holed those views.
+let agentCache: { at: number; value: RemoteAgent[]; sessions: RemoteAgent[] } | null = null;
 
 /**
  * List the operator's agents — every `claude --remote-control` session, online and
@@ -173,7 +179,11 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
       .sort((a, b) =>
         String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
       );
-    agentCache = { at: now, value };
+    agentCache = {
+      at: now,
+      value,
+      sessions: mapped.map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title })),
+    };
     return filterByUser(value);
   } catch {
     return filterByUser(agentCache?.value ?? []);
@@ -185,8 +195,13 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
  * history so the policy can't be bypassed by guessing a cse_ id from the browser.
  */
 export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean> {
-  const agents = await listRemoteAgents();
-  return agents.some((a) => a.id === sessionId);
+  const agents = await listRemoteAgents(); // refreshes the cache (TTL-guarded)
+  if (agents.some((a) => a.id === sessionId)) return true;
+  // Not the current leaf — allow any OTHER session of a visible agent too (same
+  // capture + per-user title filters). An agent restart rotates the leaf id; views
+  // still open on the previous session must keep browsing/driving it.
+  const sessions = agentCache?.sessions ?? [];
+  return filterByUser(sessions).some((a) => a.id === sessionId);
 }
 
 /**
