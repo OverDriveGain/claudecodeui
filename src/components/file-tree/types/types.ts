@@ -12,6 +12,9 @@ export interface FileTreeNode {
   modified?: string;
   permissionsRwx?: string;
   children?: FileTreeNode[];
+  /** Directory exists but wasn't walked (depth cutoff or mount boundary) — its
+   *  contents load on demand when expanded. */
+  truncated?: boolean;
   [key: string]: unknown;
 }
 

@@ -656,12 +656,25 @@ app.get('/api/federation/files', requireFederationToken, async (req, res) => {
         if (!local) {
             return res.status(404).json({ error: 'Session not on this host' });
         }
-        try {
-            await fsPromises.access(local.cwd);
-        } catch {
-            return res.status(404).json({ error: `Project path not found: ${local.cwd}` });
+        // Same lazy-loading contract as the main files route (depth bound + jailed
+        // subtree re-root) — the calling host forwards the browser's params.
+        const depthRaw = Number.parseInt(String(req.query.depth ?? ''), 10);
+        const treeDepth = Number.isFinite(depthRaw) ? Math.min(Math.max(depthRaw, 1), 10) : 10;
+        const subPath = typeof req.query.path === 'string' ? req.query.path : '';
+        let treeRoot = local.cwd;
+        if (subPath) {
+            const validation = validatePathInProject(local.cwd, subPath);
+            if (!validation.valid) {
+                return res.status(403).json({ error: validation.error });
+            }
+            treeRoot = validation.resolved;
         }
-        const files = await getFileTree(local.cwd, 10, 0, true);
+        try {
+            await fsPromises.access(treeRoot);
+        } catch {
+            return res.status(404).json({ error: `Project path not found: ${treeRoot}` });
+        }
+        const files = await getFileTree(treeRoot, treeDepth, 0, true);
         // Multi-MB tree JSON is gzipped by the app-wide compression middleware
         // (the caller sends Accept-Encoding: gzip) — essential over slow mesh links.
         res.json(files);
@@ -1056,6 +1069,14 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
 
         // Resolve the project's absolute path through the DB (projectId is the
         // primary key of the `projects` table after the identifier migration).
+        // Lazy-loading contract: ?depth= bounds the walk (directories at the cutoff
+        // come back `truncated: true`), ?path= re-roots the walk at a subdirectory
+        // (jailed to the project root) so the client expands truncated dirs on
+        // demand instead of paying for the whole tree up front.
+        const depthRaw = Number.parseInt(String(req.query.depth ?? ''), 10);
+        const treeDepth = Number.isFinite(depthRaw) ? Math.min(Math.max(depthRaw, 1), 10) : 10;
+        const subPath = typeof req.query.path === 'string' ? req.query.path : '';
+
         const actualPath = await resolveProjectRootById(req.params.projectId);
         if (!actualPath) {
             // Cross-host agent: fetch the tree from the peer that owns the session.
@@ -1064,21 +1085,31 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
                 const forwarded = await federateJsonResponse(
                     res,
                     sid,
-                    `/api/federation/files?session=${encodeURIComponent(sid)}`,
+                    `/api/federation/files?session=${encodeURIComponent(sid)}`
+                        + `&depth=${treeDepth}${subPath ? `&path=${encodeURIComponent(subPath)}` : ''}`,
                 );
                 if (forwarded) return;
             }
             return res.status(404).json({ error: 'Project not found' });
         }
 
-        // Check if path exists
-        try {
-            await fsPromises.access(actualPath);
-        } catch (e) {
-            return res.status(404).json({ error: `Project path not found: ${actualPath}` });
+        let treeRoot = actualPath;
+        if (subPath) {
+            const validation = validatePathInProject(actualPath, subPath);
+            if (!validation.valid) {
+                return res.status(403).json({ error: validation.error });
+            }
+            treeRoot = validation.resolved;
         }
 
-        const files = await getFileTree(actualPath, 10, 0, true);
+        // Check if path exists
+        try {
+            await fsPromises.access(treeRoot);
+        } catch (e) {
+            return res.status(404).json({ error: `Project path not found: ${treeRoot}` });
+        }
+
+        const files = await getFileTree(treeRoot, treeDepth, 0, true);
         res.json(files);
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);
@@ -2022,7 +2053,15 @@ function release() {
     activeFsOperations = Math.max(0, activeFsOperations - 1);
 }
 
-async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true) {
+async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true, dirDev = null) {
+    // Device id of the directory being listed — used to detect mount boundaries.
+    // Network mounts (rclone/NFS/SMB) inside a project make the eager walk crawl
+    // or hang (each readdir is a network round-trip, EIO storms on server errors),
+    // so the walk never descends across a filesystem boundary: the mount shows as
+    // a truncated directory and its contents load on demand when opened.
+    if (dirDev === null) {
+        try { dirDev = (await fsPromises.lstat(dirPath)).dev; } catch { dirDev = null; }
+    }
     // Using fsPromises from import
     let entries;
     try {
@@ -2052,12 +2091,14 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
             path: itemPath,
             type: entry.isDirectory() ? 'directory' : 'file'
         };
+        let entryDev = null;
 
         // Get file stats for additional metadata
         try {
             await acquire();
             try {
               const stats = await fsPromises.lstat(itemPath);
+              entryDev = stats.dev;
               item.size = stats.size;
               item.modified = stats.mtime.toISOString();
 
@@ -2090,14 +2131,26 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
             item.permissionsRwx = '---------';
         }
 
-        if (entry.isDirectory() && currentDepth < maxDepth) {
-            // Recurse. Let readdir's own EACCES bubble up through the catch in
-            // the recursive call rather than doing a separate access() probe
-            // (which doubled the round-trip count on SMB without adding info).
-            // The recursive call starts with a bounded readdir; holding a permit
-            // for the whole subtree can deadlock when sibling directories are
-            // waiting on their own children.
-            item.children = await getFileTree(itemPath, maxDepth, currentDepth + 1, showHidden);
+        if (entry.isDirectory()) {
+            const crossesMount = dirDev !== null && entryDev !== null && entryDev !== dirDev;
+            if (crossesMount) {
+                // Different filesystem (rclone/NFS/SMB/bind mount) — never walk it
+                // eagerly; the client fetches its contents on demand via ?path=.
+                item.truncated = true;
+                item.mount = true;
+            } else if (currentDepth < maxDepth) {
+                // Recurse. Let readdir's own EACCES bubble up through the catch in
+                // the recursive call rather than doing a separate access() probe
+                // (which doubled the round-trip count on SMB without adding info).
+                // The recursive call starts with a bounded readdir; holding a permit
+                // for the whole subtree can deadlock when sibling directories are
+                // waiting on their own children.
+                item.children = await getFileTree(itemPath, maxDepth, currentDepth + 1, showHidden, entryDev);
+            } else {
+                // Depth cutoff — the directory exists but its contents weren't
+                // walked; the client loads them on demand (lazy expansion).
+                item.truncated = true;
+            }
         }
 
         return item;

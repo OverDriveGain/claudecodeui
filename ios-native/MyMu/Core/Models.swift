@@ -111,8 +111,13 @@ struct FileNode: Codable, Identifiable, Equatable {
     let type: String   // "directory" | "file"
     let size: Int?
     let children: [FileNode]?
+    /// Directory exists but wasn't walked (depth cutoff or mount boundary) —
+    /// fetch its contents on demand when the user opens it.
+    let truncated: Bool?
 
     var isDir: Bool { type == "directory" }
+    /// True when this directory's children must be fetched before showing.
+    var needsFetch: Bool { isDir && (truncated == true || children == nil) }
     var sortedChildren: [FileNode] {
         (children ?? []).sorted {
             if $0.isDir != $1.isDir { return $0.isDir && !$1.isDir }

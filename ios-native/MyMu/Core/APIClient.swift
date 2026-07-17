@@ -63,9 +63,18 @@ struct APIClient {
         return try JSONDecoder().decode(ProjectsEnvelope.self, from: data).projects
     }
 
-    func files(projectId: String) async throws -> [FileNode] {
+    /// Lazy tree loading: `depth` bounds the server-side walk (cut-off dirs come
+    /// back `truncated`), `path` re-roots it at a subdirectory for on-demand
+    /// expansion — the whole-tree eager walk was multi-MB and crawled on
+    /// network-mounted folders.
+    func files(projectId: String, path: String? = nil, depth: Int = 2) async throws -> [FileNode] {
         let pid = projectId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectId
-        let data = try await request("/api/projects/\(pid)/files")
+        var endpoint = "/api/projects/\(pid)/files?depth=\(depth)"
+        if let path, !path.isEmpty {
+            let p = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+            endpoint += "&path=\(p)"
+        }
+        let data = try await request(endpoint)
         return try JSONDecoder().decode([FileNode].self, from: data)
     }
 

@@ -22,7 +22,7 @@ struct FilesView: View {
             } else if nodes.isEmpty {
                 EmptyStateView(text: "No files.")
             } else {
-                FileBrowser(title: "Files", nodes: nodes, projectId: projectId, token: token)
+                FileBrowser(title: "Files", projectId: projectId, token: token, preloaded: nodes)
             }
         }
         .background(Theme.background)
@@ -35,7 +35,9 @@ struct FilesView: View {
 
     private func load() async {
         do {
-            let tree = try await APIClient(token: token).files(projectId: projectId)
+            // Shallow load: two levels render instantly; deeper folders fetch on
+            // demand when opened (the old whole-tree call was multi-MB and slow).
+            let tree = try await APIClient(token: token).files(projectId: projectId, depth: 2)
             nodes = tree.sorted {
                 if $0.isDir != $1.isDir { return $0.isDir && !$1.isDir }
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -50,32 +52,65 @@ struct FilesView: View {
 }
 
 /// One level of the tree. Recurses via NavigationLink into subdirectories.
+/// A level whose contents weren't preloaded (truncated / no children) fetches
+/// itself on appear — lazy per-level loading.
 struct FileBrowser: View {
     let title: String
-    let nodes: [FileNode]
     let projectId: String
     let token: String
+    /// Preloaded children, or nil → fetch `fetchPath` on appear.
+    var preloaded: [FileNode]? = nil
+    var fetchPath: String? = nil
+
+    @State private var fetched: [FileNode]? = nil
+    @State private var error: String?
+
+    private var nodes: [FileNode]? { preloaded ?? fetched }
 
     var body: some View {
-        List(nodes) { node in
-            row(node)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+        Group {
+            if let nodes {
+                List(nodes) { node in
+                    row(node)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            } else if let error {
+                EmptyStateView(text: error)
+            } else {
+                MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
         .background(Theme.background)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .task {
+            guard preloaded == nil, fetched == nil, let fetchPath else { return }
+            do {
+                let tree = try await APIClient(token: token).files(projectId: projectId, path: fetchPath, depth: 2)
+                fetched = tree.sorted {
+                    if $0.isDir != $1.isDir { return $0.isDir && !$1.isDir }
+                    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+            } catch {
+                self.error = "Couldn’t load this folder."
+            }
+        }
     }
 
     @ViewBuilder
     private func row(_ node: FileNode) -> some View {
         if node.isDir {
             NavigationLink {
-                FileBrowser(title: node.name, nodes: node.sortedChildren, projectId: projectId, token: token)
+                if node.needsFetch {
+                    FileBrowser(title: node.name, projectId: projectId, token: token, fetchPath: node.path)
+                } else {
+                    FileBrowser(title: node.name, projectId: projectId, token: token, preloaded: node.sortedChildren)
+                }
             } label: { label(node) }
         } else {
             NavigationLink {

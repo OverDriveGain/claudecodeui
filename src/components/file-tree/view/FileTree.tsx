@@ -52,7 +52,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     }
   }, [toast]);
 
-  const { files, loading, refreshFiles } = useFileTreeData(selectedProject);
+  const { files, loading, refreshFiles, loadSubtree } = useFileTreeData(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
@@ -100,6 +100,11 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   const handleItemClick = useCallback(
     (item: FileTreeNode) => {
       if (item.type === 'directory') {
+        // Truncated dir (depth cutoff / network mount): fetch its contents on
+        // first expand — this is what keeps the initial tree load instant.
+        if (item.truncated) {
+          void loadSubtree(item.path);
+        }
         toggleDirectory(item.path);
         return;
       }
@@ -141,7 +146,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
 
       onFileOpen?.(item.path);
     },
-    [onFileOpen, selectedProject, toggleDirectory],
+    [onFileOpen, selectedProject, toggleDirectory, loadSubtree],
   );
 
   const formatRelativeTimeLabel = useCallback(

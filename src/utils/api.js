@@ -150,8 +150,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ filePath, content }),
     }),
-  getFiles: (projectId, options = {}) =>
-    authenticatedFetch(`/api/projects/${projectId}/files`, options),
+  // Lazy tree loading: `depth` bounds the walk (server marks cut-off dirs
+  // `truncated`), `path` re-roots it at a subdirectory for on-demand expansion.
+  getFiles: (projectId, { path, depth, ...options } = {}) => {
+    const params = new URLSearchParams();
+    if (depth) params.set('depth', String(depth));
+    if (path) params.set('path', path);
+    const qs = params.toString();
+    return authenticatedFetch(`/api/projects/${projectId}/files${qs ? `?${qs}` : ''}`, options);
+  },
 
   // File operations
   createFile: (projectId, { path, type, name }) =>
