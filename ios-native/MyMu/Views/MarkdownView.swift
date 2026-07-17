@@ -21,15 +21,10 @@ struct MarkdownView: View {
         }
     }
 
+    // UITextView-backed so words/sentences are selectable (partial-range copy) —
+    // SwiftUI Text only supports whole-block copy. Same inline markdown rendering.
     private func inline(_ s: String) -> some View {
-        let opts = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible
-        )
-        let attr = (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
-        return Text(attr)
-            .font(.system(size: 17))
-            .lineSpacing(5)
+        SelectableText(text: s)
             .fixedSize(horizontal: false, vertical: true)
     }
 

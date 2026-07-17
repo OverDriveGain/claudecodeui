@@ -13,14 +13,21 @@ struct MessageRow: View {
     var showActions = false
 
     var body: some View {
-        content
-            .contextMenu {
-                if !copyText.isEmpty {
-                    Button {
-                        UIPasteboard.general.string = copyText
-                    } label: { Label("Copy", systemImage: "doc.on.doc") }
+        // Text messages get NO row-level context menu: long-press there belongs to
+        // the UITextView word/sentence selection (SelectableText); a contextMenu
+        // would swallow the gesture. Other kinds keep long-press → Copy.
+        if message.kind == "text" {
+            content
+        } else {
+            content
+                .contextMenu {
+                    if !copyText.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = copyText
+                        } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    }
                 }
-            }
+        }
     }
 
     @ViewBuilder
@@ -101,6 +108,7 @@ struct MessageRow: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isError == true ? Theme.danger : Theme.mutedText)
                     .lineLimit(10)
+                    .textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 2)
