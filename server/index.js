@@ -7,9 +7,9 @@ import os from 'os';
 import http from 'http';
 import { spawn } from 'child_process';
 import { Readable } from 'node:stream';
-import zlib from 'node:zlib';
 
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import mime from 'mime-types';
 import Database from 'better-sqlite3';
@@ -190,6 +190,14 @@ const wss = createWebSocketServer(server, {
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
+// Gzip all compressible responses (JSON/text/html). Critical for big payloads
+// like deep file trees (3.2MB JSON → ~256KB): the hosts sit behind slow or
+// saturated uplinks (box while an agent renders, berlin home upload), and edge
+// nginx only compresses ITS hop — the app→nginx leg shipped plain multi-MB JSON
+// and took 20-45s ("loading files… nothing loads"). Binary types (video, images,
+// octet-stream) are skipped by the middleware's compressible check, so Range
+// requests and media streaming are unaffected.
+app.use(compression());
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
     limit: '50mb',
@@ -654,17 +662,9 @@ app.get('/api/federation/files', requireFederationToken, async (req, res) => {
             return res.status(404).json({ error: `Project path not found: ${local.cwd}` });
         }
         const files = await getFileTree(local.cwd, 10, 0, true);
-        // A deep tree serializes to multi-MB JSON; over a slow/saturated mesh link
-        // that blows the caller's federation timeout (observed: 3.2MB at ~140KB/s =
-        // 23s > 20s → 502 on the viewing host). Gzip shrinks it ~10× and the
-        // caller's fetch decompresses transparently.
-        const json = JSON.stringify(files);
-        res.setHeader('Content-Type', 'application/json');
-        if (String(req.headers['accept-encoding'] || '').includes('gzip')) {
-            res.setHeader('Content-Encoding', 'gzip');
-            return res.send(zlib.gzipSync(json));
-        }
-        res.send(json);
+        // Multi-MB tree JSON is gzipped by the app-wide compression middleware
+        // (the caller sends Accept-Encoding: gzip) — essential over slow mesh links.
+        res.json(files);
     } catch (error) {
         console.error('[ERROR] Federation file tree error:', error.message);
         res.status(500).json({ error: error.message });
