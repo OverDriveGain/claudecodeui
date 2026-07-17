@@ -44,6 +44,12 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // Anthropic's beta tag for the remote-control session/event API.
 const BETA_CCR = 'ccr-byoc-2025-07-29';
 
+// sendMessage resilience: total passes over the account list, and the backoff
+// base between passes (pass n waits n * base ms). Worst case adds ~2.2s before
+// the user sees a delivery error — cheap insurance against transient relay 401s.
+const RC_SEND_MAX_PASSES = Math.max(1, Number.parseInt(process.env.RC_SEND_MAX_PASSES || '', 10) || 3);
+const RC_SEND_RETRY_BASE_MS = Math.max(100, Number.parseInt(process.env.RC_SEND_RETRY_BASE_MS || '', 10) || 750);
+
 // sessionId -> { upstream: WebSocket, ws: clientWriter, replayBuffer, normalize,
 //                retries, closedByUs, pingTimer, reconnectTimer, alive }
 const activeRemoteSessions = new Map();
@@ -60,6 +66,51 @@ const RC_RECONNECT_CAP_MS = 30 * 1000;
 const RC_RECONNECT_MAX_RETRIES = 8;
 // Cap the frames emitted from the missed-events top-up after a reconnect.
 const RC_TOPUP_EMIT_MAX = 200;
+// Stall watchdog. The upstream subscription can go silently stale: the socket keeps
+// answering transport pings (so the heartbeat sees it alive) while the relay stops
+// forwarding session events — observed in production as "messages stop mid-turn and
+// the loader never clears, until a manual refresh" with ZERO close/error events all
+// day. The heartbeat cannot catch this, so while a turn looks active but the socket
+// has been quiet, cross-check the relay's EVENTS API over HTTP: emit what the socket
+// missed (the client upserts by id, so duplicates collapse), finalize the turn when a
+// flushed `result` shows up, and recycle the demonstrably-stale socket.
+const RC_STALL_CHECK_MS = Math.max(2000, Number.parseInt(process.env.RC_STALL_CHECK_MS || '', 10) || 10 * 1000);
+const RC_STALL_QUIET_MS = Math.max(5000, Number.parseInt(process.env.RC_STALL_QUIET_MS || '', 10) || 20 * 1000);
+// Cap of remembered live-delivered event uuids per session (staleness discriminator:
+// a topped-up event we already streamed is NOT evidence the socket missed anything).
+const RC_SEEN_UUIDS_MAX = 2000;
+// Raw ws OPEN state (ws library constant) — used to prune dead subscriber writers.
+const WS_OPEN_RAW = 1;
+
+/**
+ * All live subscriber writers for a session entry. The GUI can watch one agent from
+ * SEVERAL connections at once (phone + desktop, two tabs, the native app) — each
+ * subscribes with its own writer. The old model kept only the LATEST writer, so
+ * every re-subscribe STOLE the stream from the other viewers: the losing view froze
+ * mid-turn with a stuck loader until its own refresh stole the stream back (the
+ * exact "messages stop + loading forever until refresh" bug). Fan out to every
+ * writer instead; dead ones (closed sockets) are pruned on each use.
+ */
+function liveWriters(entry) {
+  if (!entry) return [];
+  if (!entry.writers) entry.writers = new Set();
+  if (entry.ws) entry.writers.add(entry.ws);
+  for (const w of entry.writers) {
+    const raw = w && w.ws;
+    if (raw && typeof raw.readyState === 'number' && raw.readyState !== WS_OPEN_RAW) {
+      entry.writers.delete(w);
+    }
+  }
+  return [...entry.writers];
+}
+
+/** Send one frame to every live subscriber of the entry (writer races swallowed). */
+function fanOut(entry, frame) {
+  for (const w of liveWriters(entry)) {
+    try { w.send(frame); } catch { /* writer race — pruned on the next emit */ }
+  }
+}
+
 // requestId -> { sessionId } so a permission answer routes to the right upstream WS.
 const pendingRemotePermissions = new Map();
 // rawRequestId -> timestamp of when we answered it. After answering, the agent takes
@@ -678,34 +729,42 @@ export async function sendMessage(sessionId, content) {
   const url = `${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`;
   const order = await accountTryOrder(sessionId);
   let last = { ok: false, status: 0, notActive: false };
-  for (const account of order) {
-    let r;
-    try {
-      r = await fetch(url, {
-        method: 'POST',
-        headers: headers(account, { beta: BETA_CCR, org: true, client: true }),
-        body: JSON.stringify({ events: [event] }),
-      });
-    } catch (err) {
-      console.error('[rc] sendMessage fetch threw', { sessionId, url, account: account.label, error: err?.message });
-      last = { ok: false, status: 0, notActive: false };
-      continue;
+  // The relay intermittently 401s tokens it accepts seconds later, and a starved
+  // host can throw transient network errors — so retry the whole account list a
+  // few times with backoff before surfacing an error to the user. A 409 "not
+  // active" is definitive and returns immediately; everything else is worth
+  // another pass.
+  for (let pass = 0; pass < RC_SEND_MAX_PASSES; pass++) {
+    if (pass > 0) await new Promise((res) => setTimeout(res, RC_SEND_RETRY_BASE_MS * pass));
+    for (const account of order) {
+      let r;
+      try {
+        r = await fetch(url, {
+          method: 'POST',
+          headers: headers(account, { beta: BETA_CCR, org: true, client: true }),
+          body: JSON.stringify({ events: [event] }),
+        });
+      } catch (err) {
+        console.error('[rc] sendMessage fetch threw', { sessionId, url, account: account.label, pass, error: err?.message });
+        last = { ok: false, status: 0, notActive: false };
+        continue;
+      }
+      if (r.ok) {
+        rememberAccountForSession(sessionId, account.label);
+        return { ok: true, status: r.status, notActive: false };
+      }
+      let body = '';
+      try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
+      // 409 "not active" comes from the OWNING account (the session exists but is
+      // archived) — a definitive answer; don't shop it to other accounts or retry.
+      const notActive = r.status === 409 && /not active/i.test(body);
+      if (notActive) {
+        rememberAccountForSession(sessionId, account.label);
+        return { ok: false, status: r.status, notActive: true };
+      }
+      console.error('[rc] sendMessage failed', { sessionId, url, account: account.label, pass, status: r.status, body });
+      last = { ok: false, status: r.status, notActive: false };
     }
-    if (r.ok) {
-      rememberAccountForSession(sessionId, account.label);
-      return { ok: true, status: r.status, notActive: false };
-    }
-    let body = '';
-    try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
-    // 409 "not active" comes from the OWNING account (the session exists but is
-    // archived) — a definitive answer; don't shop it to other accounts.
-    const notActive = r.status === 409 && /not active/i.test(body);
-    if (notActive) {
-      rememberAccountForSession(sessionId, account.label);
-      return { ok: false, status: r.status, notActive: true };
-    }
-    console.error('[rc] sendMessage failed', { sessionId, url, account: account.label, status: r.status, body });
-    last = { ok: false, status: r.status, notActive: false };
   }
   return last;
 }
@@ -728,6 +787,10 @@ export async function attachSession(sessionId, ws, normalize) {
   const existing = activeRemoteSessions.get(sessionId);
   if (existing) {
     existing.ws = ws;
+    // ADD this writer to the subscriber set (don't replace): other open views of the
+    // same agent keep receiving the stream. liveWriters() prunes closed ones.
+    if (!existing.writers) existing.writers = new Set();
+    existing.writers.add(ws);
     if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
     // Reconnect recovery. The browser↔server WS drops on a tab/window switch (and
     // mobile backgrounding); while it's down, every frame the upstream relay sends
@@ -761,6 +824,15 @@ export async function attachSession(sessionId, ws, normalize) {
     pingTimer: null,
     reconnectTimer: null,
     alive: true,
+    // Stall-watchdog state: is a turn in flight, when the upstream last spoke, the
+    // uuids it delivered (to tell truly-missed events from cache-lag duplicates).
+    turnOpen: false,
+    lastUpstreamAt: 0,
+    stallTimer: null,
+    stallSyncInFlight: false,
+    seenEventUuids: new Set(),
+    // Every live subscriber (multiple GUI views of the same agent) — see liveWriters.
+    writers: new Set([ws]),
   };
   activeRemoteSessions.set(sessionId, entry);
 
@@ -783,20 +855,75 @@ async function emitMissedEventsAfterReconnect(sessionId, entry, preDropCount) {
     const all = await getSessionEventsCached(sessionId);
     const missed = all.slice(Math.max(0, preDropCount));
     if (missed.length === 0) return;
-    const out = activeRemoteSessions.get(sessionId)?.ws || entry.ws;
-    let emitted = 0;
-    for (const raw of missed) {
-      if (emitted >= RC_TOPUP_EMIT_MAX) break;
-      // Same subagent-sidechain filter as the live + history paths.
-      if (raw && typeof raw === 'object' && raw.parent_tool_use_id) continue;
-      let frames = [];
-      try { frames = entry.normalize ? entry.normalize(raw, sessionId) : []; } catch { continue; }
-      for (const frame of frames) {
-        try { out.send(frame); } catch { return; }
-        emitted += 1;
-      }
-    }
+    emitRawEvents(sessionId, entry, missed);
   } catch { /* the next manual refresh / history fetch covers it */ }
+}
+
+/**
+ * Emit a slice of RAW relay events to the current writer through the normalizer —
+ * the shared tail of both gap-recovery paths (post-reconnect top-up and the stall
+ * watchdog). The normalizer produces NOTHING for a raw `result` event (the live
+ * socket path translates it separately), so a turn that ENDED inside the recovered
+ * gap must be finalized here too: without the explicit `complete`, the GUI's loader
+ * spun forever even though every message had been delivered.
+ */
+function emitRawEvents(sessionId, entry, rawEvents) {
+  const target = activeRemoteSessions.get(sessionId) || entry;
+  let emitted = 0;
+  for (const raw of rawEvents) {
+    if (emitted >= RC_TOPUP_EMIT_MAX) break;
+    // Same subagent-sidechain filter as the live + history paths.
+    if (raw && typeof raw === 'object' && raw.parent_tool_use_id) continue;
+    let frames = [];
+    try { frames = entry.normalize ? entry.normalize(raw, sessionId) : []; } catch { continue; }
+    for (const frame of frames) {
+      target.replayBuffer.push(frame);
+      if (target.replayBuffer.length > RC_REPLAY_BUFFER_MAX) target.replayBuffer.shift();
+      fanOut(target, frame);
+      emitted += 1;
+    }
+  }
+  if (rawEvents.some((e) => e?.type === 'result')) {
+    target.turnOpen = false;
+    target.replayBuffer = [];
+    const frame = createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' });
+    target.replayBuffer.push(frame);
+    fanOut(target, frame);
+  }
+}
+
+/**
+ * Stall recovery: a turn is open but the upstream socket has been silent past the
+ * quiet threshold. Pull the events API (HTTP — independent of the socket, and with
+ * the account-fallback auth path), emit anything the socket demonstrably missed,
+ * finalize the turn if its `result` flushed, and recycle the stale socket so live
+ * streaming resumes. Cheap when healthy: one cursor-based GET returning nothing.
+ */
+async function syncStalledUpstream(sessionId, entry) {
+  if (entry.stallSyncInFlight) return;
+  entry.stallSyncInFlight = true;
+  try {
+    const before = (await getSessionEventsCached(sessionId, { topUp: false })).length;
+    const all = await getSessionEventsCached(sessionId);
+    // Only events appended by THIS top-up are candidates, and only those the live
+    // socket did NOT deliver count as missed — the cache always lags the live stream
+    // (live frames never touch it), so without the seen-uuid filter a healthy but
+    // quiet socket (agent inside a long tool call) would be recycled mid-turn.
+    const missed = all
+      .slice(Math.max(0, before))
+      .filter((e) => !(e && e.uuid && entry.seenEventUuids.has(e.uuid)));
+    if (missed.length === 0) return;
+    console.log('[rc] stalled upstream: recovering missed events via events API', {
+      sessionId,
+      missed: missed.length,
+      quietMs: Date.now() - (entry.lastUpstreamAt || 0),
+    });
+    emitRawEvents(sessionId, entry, missed);
+    // The socket failed to stream events the relay had — it's stale. Terminate to
+    // fire 'close' → the transparent reconnect path resubscribes with fresh auth.
+    try { entry.upstream?.terminate(); } catch { /* already dead */ }
+  } catch { /* relay unreachable — the next watchdog tick retries */ }
+  finally { entry.stallSyncInFlight = false; }
 }
 
 /** Schedule a reconnect attempt for a transiently-closed upstream (single-flight). */
@@ -807,8 +934,7 @@ function scheduleRemoteReconnect(sessionId, entry) {
     // loader clears. Reopening the conversation (or the client's periodic
     // re-subscribe) starts a fresh attach.
     activeRemoteSessions.delete(sessionId);
-    const out = entry.ws;
-    try { out.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' })); } catch { /* writer gone */ }
+    fanOut(entry, createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
     return;
   }
   const delay = Math.min(RC_RECONNECT_CAP_MS, RC_RECONNECT_BASE_MS * 2 ** entry.retries);
@@ -850,7 +976,6 @@ async function openRemoteUpstream(sessionId, entry) {
     headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
   });
   entry.upstream = upstream;
-  const ws = entry.ws;
 
   // Keepalive + dead-socket detection (standard ws heartbeat): a silently-dead
   // TCP connection emits nothing — without pinging, the stream just stops and the
@@ -868,22 +993,48 @@ async function openRemoteUpstream(sessionId, entry) {
     try { upstream.ping(); } catch { /* close handler takes over */ }
   }, RC_PING_INTERVAL_MS);
 
+  // Stall watchdog (see syncStalledUpstream). Runs for the ENTRY, not the socket:
+  // deliberately NOT cleared in the transient-close handler, so while the reconnect
+  // loop is still dialing, events keep reaching the GUI over HTTP. Self-cancels once
+  // the entry is detached/superseded; idle sessions (turnOpen=false) cost nothing.
+  if (entry.stallTimer) clearInterval(entry.stallTimer);
+  entry.stallTimer = setInterval(() => {
+    if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) {
+      clearInterval(entry.stallTimer);
+      entry.stallTimer = null;
+      return;
+    }
+    if (!entry.turnOpen) return;
+    if (Date.now() - (entry.lastUpstreamAt || 0) < RC_STALL_QUIET_MS) return;
+    void syncStalledUpstream(sessionId, entry);
+  }, RC_STALL_CHECK_MS);
+
   upstream.on('message', (data) => {
     let m;
     try { m = JSON.parse(data.toString()); } catch { return; }
-    // Always write to the CURRENT writer (rebound on reconnect), never the one
-    // captured when this upstream first opened.
-    const e0 = activeRemoteSessions.get(sessionId);
-    const out = e0?.ws || ws;
-    // emit = send to the live writer AND retain in the per-session replay buffer so
-    // a reconnecting client recovers it. Transient per-token thinking frames are
-    // sent but NOT buffered (one is enough; the client re-derives the indicator).
-    const emit = (frame) => {
-      if (e0) {
-        e0.replayBuffer.push(frame);
-        if (e0.replayBuffer.length > RC_REPLAY_BUFFER_MAX) e0.replayBuffer.shift();
+    // Feed the stall watchdog: the socket is demonstrably delivering. Remember the
+    // event uuid so a later events-API top-up can tell "the socket missed this" from
+    // "the cache is just behind the live stream". `result` closes the turn; an ack
+    // frame opens nothing; everything else means the agent is mid-turn.
+    entry.lastUpstreamAt = Date.now();
+    if (m.uuid) {
+      entry.seenEventUuids.add(m.uuid);
+      if (entry.seenEventUuids.size > RC_SEEN_UUIDS_MAX) {
+        entry.seenEventUuids.delete(entry.seenEventUuids.values().next().value);
       }
-      out.send(frame);
+    }
+    if (m.type === 'result') entry.turnOpen = false;
+    else if (m.type !== 'control_response') entry.turnOpen = true;
+    // Always write to the CURRENT subscriber set (rebound/extended on reconnect),
+    // never just the writer captured when this upstream first opened.
+    const e0 = activeRemoteSessions.get(sessionId) || entry;
+    // emit = send to EVERY live subscriber AND retain in the per-session replay
+    // buffer so a reconnecting client recovers it. Transient per-token thinking
+    // frames are sent but NOT buffered (the client re-derives the indicator).
+    const emit = (frame) => {
+      e0.replayBuffer.push(frame);
+      if (e0.replayBuffer.length > RC_REPLAY_BUFFER_MAX) e0.replayBuffer.shift();
+      fanOut(e0, frame);
     };
 
     // Live "thinking" progress. claude.ai/code shows a working indicator driven by
@@ -892,7 +1043,7 @@ async function openRemoteUpstream(sessionId, entry) {
     // live — gated to the viewed session on the client, and cleared by `result`
     // below. These frames are live-only; history never sees them.
     if (m.type === 'system' && m.subtype === 'thinking_tokens') {
-      out.send({ type: 'session-status', sessionId, isProcessing: true });
+      fanOut(e0, { type: 'session-status', sessionId, isProcessing: true });
       return;
     }
 
@@ -948,11 +1099,13 @@ async function openRemoteUpstream(sessionId, entry) {
     // after the agent had stopped. Keeping it off is what keeps the loader in sync.
     if (m.type === 'result') {
       const e = activeRemoteSessions.get(sessionId);
-      emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
-      // Turn finished → the relay's events API now has it, so a reconnect from here
-      // recovers via the normal history refetch. Drop the buffer so it only ever
-      // holds the CURRENT turn (keeps replay small and relevant).
+      // Clear the buffer BEFORE emitting so the `complete` frame itself lands in the
+      // fresh buffer: a client whose WS was down at turn end still learns the turn is
+      // over when it rebinds (its missed content comes from the history refetch).
+      // Clearing after the emit threw the turn-end signal away with the old turn's
+      // frames — a rebound client then sat on a stuck "working" loader forever.
       if (e) e.replayBuffer = [];
+      emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
     }
   });
 
@@ -963,7 +1116,7 @@ async function openRemoteUpstream(sessionId, entry) {
     if (code === 4003) {
       // Unauthorized: permanent. Tell the GUI the stream ended and drop the entry.
       activeRemoteSessions.delete(sessionId);
-      try { entry.ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId, provider: 'claude' })); } catch { /* writer gone */ }
+      fanOut(entry, createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId, provider: 'claude' }));
       return;
     }
     // Transient close (idle timeout, relay blip, dead TCP detected by the
@@ -1141,6 +1294,16 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
   if (hasContent) {
     const sent = await sendMessage(sessionId, content);
+    if (sent.ok) {
+      // Open the turn for the stall watchdog: if the subscribe socket is dead from
+      // the start, NOTHING ever streams — the watchdog is then the only path that
+      // gets the reply (and the turn-end) to the GUI without a manual refresh.
+      const e = activeRemoteSessions.get(sessionId);
+      if (e) {
+        e.turnOpen = true;
+        e.lastUpstreamAt = Math.max(e.lastUpstreamAt || 0, Date.now());
+      }
+    }
     if (!sent.ok) {
       const reason = sent.notActive
         ? 'This agent is offline — its session is archived or disconnected and can’t receive messages. Start/reconnect the agent, then try again.'
@@ -1200,6 +1363,7 @@ export function detachSession(sessionId) {
   entry.closedByUs = true;
   if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
   if (entry.pingTimer) { clearInterval(entry.pingTimer); entry.pingTimer = null; }
+  if (entry.stallTimer) { clearInterval(entry.stallTimer); entry.stallTimer = null; }
   try { entry.upstream?.close(); } catch { /* noop */ }
   activeRemoteSessions.delete(sessionId);
   return true;
