@@ -7,6 +7,7 @@ import os from 'os';
 import http from 'http';
 import { spawn } from 'child_process';
 import { Readable } from 'node:stream';
+import zlib from 'node:zlib';
 
 import express from 'express';
 import cors from 'cors';
@@ -653,7 +654,17 @@ app.get('/api/federation/files', requireFederationToken, async (req, res) => {
             return res.status(404).json({ error: `Project path not found: ${local.cwd}` });
         }
         const files = await getFileTree(local.cwd, 10, 0, true);
-        res.json(files);
+        // A deep tree serializes to multi-MB JSON; over a slow/saturated mesh link
+        // that blows the caller's federation timeout (observed: 3.2MB at ~140KB/s =
+        // 23s > 20s → 502 on the viewing host). Gzip shrinks it ~10× and the
+        // caller's fetch decompresses transparently.
+        const json = JSON.stringify(files);
+        res.setHeader('Content-Type', 'application/json');
+        if (String(req.headers['accept-encoding'] || '').includes('gzip')) {
+            res.setHeader('Content-Encoding', 'gzip');
+            return res.send(zlib.gzipSync(json));
+        }
+        res.send(json);
     } catch (error) {
         console.error('[ERROR] Federation file tree error:', error.message);
         res.status(500).json({ error: error.message });
@@ -765,7 +776,10 @@ async function federateJsonResponse(res, sessionId, peerPathAndQuery) {
     if (!peer) return false;
     try {
         const upstream = await peerFetch(peer, peerPathAndQuery, {
-            signal: AbortSignal.timeout(20000),
+            // 60s: a big file tree over a saturated mesh link needs headroom even
+            // gzipped (the box uplink drops to ~140KB/s while an agent renders).
+            signal: AbortSignal.timeout(60000),
+            headers: { 'Accept-Encoding': 'gzip' },
         });
         const body = await upstream.text();
         res.status(upstream.status);
