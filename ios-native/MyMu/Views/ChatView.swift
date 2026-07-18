@@ -19,7 +19,6 @@ struct ChatView: View {
 
     @EnvironmentObject var appState: AppState
     @StateObject private var relay: RelayClient
-    @State private var input = ""
     @State private var loadError: String?
     @State private var loadingHistory = true
     @State private var atBottom = true
@@ -38,10 +37,6 @@ struct ChatView: View {
     @State private var viewportHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var gapRepair: Task<Void, Never>?
-    @State private var attachments: [PendingAttachment] = []
-    @State private var photoItem: PhotosPickerItem?
-    @State private var showFileImporter = false
-    @State private var attachError: String?
     private let previewMessages: [ChatMessage]?
 
     init(sessionId: String, projectId: String, isRemote: Bool, title: String, token: String,
@@ -61,7 +56,12 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 messagesList
                 if let p = relay.pendingPermission { permissionBanner(p) }
-                inputBar
+                // The composer is its OWN view owning the draft text: a keystroke
+                // re-renders only this small view, never the transcript. When the
+                // whole chat re-rendered per keystroke, the visible-message filter
+                // walked every message's content — typing crawled in conversations
+                // with megabyte transcripts.
+                ChatComposer(relay: relay, onWillSend: { followMode = true })
             }
         }
         .navigationTitle(title)
@@ -139,13 +139,17 @@ struct ChatView: View {
             .coordinateSpace(name: "chatScroll")
             .onAppear { viewportHeight = outer.size.height }
             .onChange(of: outer.size.height) { h in
+                let delta = abs(h - viewportHeight)
                 viewportHeight = h
                 // Keyboard show/hide RESIZES the viewport (~300pt) while UIKit
                 // animates the inset — a single scrollTo mid-animation loses that
                 // race and the view settles over-scrolled: blank strip below the
                 // last message, "have to scroll up" (the post-send gap). Re-pin
                 // across the animation frames like the initial-load path does.
-                if followMode { settleToBottom(proxy) }
+                // Only for keyboard-scale changes: composer line-wraps resize the
+                // viewport by ~20pt per line, and settling on each of those made
+                // TYPING trigger scroll storms.
+                if followMode && delta > 60 { settleToBottom(proxy) }
             }
             .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             .onPreferenceChange(SentinelBottomKey.self) { v in
@@ -225,14 +229,19 @@ struct ChatView: View {
     /// messages produced a ~500pt phantom gap (the "big space" in heavy
     /// tool-driven conversations). Filtering here removes the empty rows entirely.
     private var visibleMessages: [ChatMessage] {
-        relay.messages.filter { m in
+        // isBlank early-exits at the first non-whitespace character and allocates
+        // nothing — trimmingCharacters COPIED each message's whole content, which
+        // made this filter O(total transcript bytes) per render (typing crawled
+        // in conversations holding megabyte tool outputs).
+        func isBlank(_ s: String) -> Bool { s.allSatisfy(\.isWhitespace) }
+        return relay.messages.filter { m in
             switch m.kind {
             case "text":
-                return !m.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                return !isBlank(m.bodyText)
             case "tool_use", "error":
                 return true
             case "tool_result":
-                return !(m.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                return !isBlank(m.content ?? "")
             default:
                 return false
             }
@@ -256,7 +265,93 @@ struct ChatView: View {
         }
     }
 
-    private var inputBar: some View {
+
+    private func permissionBanner(_ p: ChatMessage) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "hand.raised.fill").foregroundColor(Theme.primary)
+                Text("Permission: \(p.toolName ?? "tool")").font(.subheadline).fontWeight(.semibold).foregroundColor(Theme.text)
+            }
+            HStack {
+                Button("Deny") {
+                    if let id = p.requestId { relay.answerPermission(requestId: id, allow: false) }
+                }
+                .buttonStyle(.bordered)
+                .tint(Theme.mutedText)
+                Button("Allow") {
+                    if let id = p.requestId { relay.answerPermission(requestId: id, allow: true) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.primary)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface)
+        .overlay(Rectangle().frame(height: 1).foregroundColor(Theme.border), alignment: .top)
+    }
+
+    private func start() async {
+        if let previewMessages {
+            relay.setHistory(previewMessages)
+            relay.isLoading = true
+            loadingHistory = false
+            #if DEBUG
+            // Simulate a turn COMPLETING: drop the loader + shrink the transcript
+            // (like the end-of-turn history reconcile) to prove no gap opens below.
+            if ProcessInfo.processInfo.environment["MYMU_DEMO_SHRINK"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    relay.isLoading = false
+                    relay.setHistory(Array(previewMessages.prefix(max(1, previewMessages.count - 5))))
+                }
+            }
+            #endif
+            return
+        }
+        // Use the relay's CURRENT id — a new conversation starts with "" and gets
+        // rebound by session_created; tab-return re-runs then fetch the real id.
+        let sid = relay.sessionId
+        if !sid.isEmpty {
+            do {
+                let h = try await appState.api.history(sessionId: sid)
+                relay.setHistory(h.messages)
+            } catch {
+                loadError = error.localizedDescription
+            }
+        }
+        loadingHistory = false
+        relay.connect()
+    }
+}
+
+/// Bottom edge of the transcript's last row, in the scroll view's own
+/// coordinate space (so it's directly comparable to the viewport height).
+private struct SentinelBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// The message composer, isolated so DRAFT-TEXT keystrokes re-render only this
+/// small view — never the transcript above it (whole-chat re-render per
+/// keystroke made typing crawl in conversations with large histories).
+private struct ChatComposer: View {
+    @ObservedObject var relay: RelayClient
+    /// Parent hook fired right before a send (re-arms follow-mode).
+    let onWillSend: () -> Void
+
+    @State private var input = ""
+    @State private var attachments: [PendingAttachment] = []
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showFileImporter = false
+    @State private var attachError: String?
+    @State private var photoPickerPresented = false
+
+    var body: some View {
         VStack(spacing: 0) {
             Rectangle().fill(Theme.border).frame(height: 0.5)
             if !attachments.isEmpty { attachmentChips }
@@ -294,7 +389,7 @@ struct ChatView: View {
                         relay.abort()
                     } else {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        followMode = true
+                        onWillSend()
                         let text = input
                         let files = attachments.map { ["name": $0.name, "data": $0.dataURL] }
                         input = ""
@@ -330,8 +425,6 @@ struct ChatView: View {
             Task { await addPhotoAttachment(item) }
         }
     }
-
-    @State private var photoPickerPresented = false
 
     private var attachmentChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -404,73 +497,4 @@ struct ChatView: View {
     }
 
     private var sendButtonActive: Bool { relay.isLoading || canSend }
-
-    private func permissionBanner(_ p: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "hand.raised.fill").foregroundColor(Theme.primary)
-                Text("Permission: \(p.toolName ?? "tool")").font(.subheadline).fontWeight(.semibold).foregroundColor(Theme.text)
-            }
-            HStack {
-                Button("Deny") {
-                    if let id = p.requestId { relay.answerPermission(requestId: id, allow: false) }
-                }
-                .buttonStyle(.bordered)
-                .tint(Theme.mutedText)
-                Button("Allow") {
-                    if let id = p.requestId { relay.answerPermission(requestId: id, allow: true) }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.primary)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface)
-        .overlay(Rectangle().frame(height: 1).foregroundColor(Theme.border), alignment: .top)
-    }
-
-    private func start() async {
-        if let previewMessages {
-            relay.setHistory(previewMessages)
-            relay.isLoading = true
-            loadingHistory = false
-            #if DEBUG
-            // Simulate a turn COMPLETING: drop the loader + shrink the transcript
-            // (like the end-of-turn history reconcile) to prove no gap opens below.
-            if ProcessInfo.processInfo.environment["MYMU_DEMO_SHRINK"] == "1" {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                    relay.isLoading = false
-                    relay.setHistory(Array(previewMessages.prefix(max(1, previewMessages.count - 5))))
-                }
-            }
-            #endif
-            return
-        }
-        // Use the relay's CURRENT id — a new conversation starts with "" and gets
-        // rebound by session_created; tab-return re-runs then fetch the real id.
-        let sid = relay.sessionId
-        if !sid.isEmpty {
-            do {
-                let h = try await appState.api.history(sessionId: sid)
-                relay.setHistory(h.messages)
-            } catch {
-                loadError = error.localizedDescription
-            }
-        }
-        loadingHistory = false
-        relay.connect()
-    }
-}
-
-/// Bottom edge of the transcript's last row, in the scroll view's own
-/// coordinate space (so it's directly comparable to the viewport height).
-private struct SentinelBottomKey: PreferenceKey {
-    static var defaultValue: CGFloat = .greatestFiniteMagnitude
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-private struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
