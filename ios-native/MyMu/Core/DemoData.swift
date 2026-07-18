@@ -56,4 +56,24 @@ enum DemoData {
         ChatMessage(id: "d5", kind: "text", role: "assistant",
                     content: "Done ✅ — the auth module now validates and refreshes tokens. Anything else?"),
     ]
+
+    /// A LONG, mixed transcript (tall enough to scroll) for reproducing the
+    /// scroll-to-bottom overshoot / phantom-gap bug in the simulator.
+    static var longMessages: [ChatMessage] {
+        var out: [ChatMessage] = []
+        for i in 0..<24 {
+            out.append(ChatMessage(id: "u\(i)", kind: "text", role: "user",
+                                   content: "Question number \(i): can you look into part \(i) of the module and explain what it does in a couple of sentences?"))
+            out.append(ChatMessage(id: "tu\(i)", kind: "tool_use", role: "assistant", toolName: "Read"))
+            out.append(ChatMessage(id: "tr\(i)", kind: "tool_result", role: "assistant",
+                                   content: "Read module/part_\(i).swift (\(40 + i) lines)"))
+            out.append(ChatMessage(id: "a\(i)", kind: "text", role: "assistant",
+                                   content: """
+                                   Part \(i) handles the \(i.isMultiple(of: 2) ? "encoding" : "validation") path. It takes the raw input, \
+                                   normalizes it, and returns a typed result. The tricky bit is the fallback branch that runs when \
+                                   the primary source is unavailable — it retries with a shorter timeout and then degrades gracefully.
+                                   """))
+        }
+        return out
+    }
 }

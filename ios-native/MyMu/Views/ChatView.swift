@@ -122,6 +122,15 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
+                // Anchor the transcript to the BOTTOM: force the content to be at
+                // least as tall as the viewport and bottom-align it (the iMessage/
+                // ChatGPT layout). When the transcript is shorter than the screen —
+                // or SHRINKS after we pinned the bottom (loader row removed at turn
+                // end, history reconcile swapping in a shorter transcript, keyboard
+                // dismissal) — the last message stays glued to the composer instead
+                // of leaving a blank strip above it. Taller-than-screen transcripts
+                // exceed minHeight, so normal scrolling + follow-mode take over.
+                .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .bottomLeading)
                 .background(GeometryReader { g in
                     Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
                 })
@@ -412,6 +421,16 @@ struct ChatView: View {
             relay.setHistory(previewMessages)
             relay.isLoading = true
             loadingHistory = false
+            #if DEBUG
+            // Simulate a turn COMPLETING: drop the loader + shrink the transcript
+            // (like the end-of-turn history reconcile) to prove no gap opens below.
+            if ProcessInfo.processInfo.environment["MYMU_DEMO_SHRINK"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    relay.isLoading = false
+                    relay.setHistory(Array(previewMessages.prefix(max(1, previewMessages.count - 5))))
+                }
+            }
+            #endif
             return
         }
         // Use the relay's CURRENT id — a new conversation starts with "" and gets

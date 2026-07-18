@@ -17,10 +17,11 @@ struct MyMuApp: App {
     private var rootContent: some View {
         #if DEBUG
         let demo = ProcessInfo.processInfo.environment["MYMU_DEMO"]
-        if demo == "chat" {
+        if demo == "chat" || demo == "chatlong" {
             NavigationStack {
                 ChatView(sessionId: "demo", projectId: "demo", isRemote: true,
-                         title: "special-agent", token: "", previewMessages: DemoData.messages)
+                         title: "special-agent", token: "",
+                         previewMessages: demo == "chatlong" ? DemoData.longMessages : DemoData.messages)
             }
         } else if demo == "tabs" {
             MainTabView(store: .demo())
