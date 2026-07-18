@@ -139,17 +139,27 @@ struct ChatView: View {
             .coordinateSpace(name: "chatScroll")
             .onAppear { viewportHeight = outer.size.height }
             .onChange(of: outer.size.height) { h in
-                let delta = abs(h - viewportHeight)
+                let delta = h - viewportHeight
                 viewportHeight = h
-                // Keyboard show/hide RESIZES the viewport (~300pt) while UIKit
-                // animates the inset — a single scrollTo mid-animation loses that
-                // race and the view settles over-scrolled: blank strip below the
-                // last message, "have to scroll up" (the post-send gap). Re-pin
-                // across the animation frames like the initial-load path does.
-                // Only for keyboard-scale changes: composer line-wraps resize the
-                // viewport by ~20pt per line, and settling on each of those made
-                // TYPING trigger scroll storms.
-                if followMode && delta > 60 { settleToBottom(proxy) }
+                // Only keyboard-scale changes (composer line-wraps are ~20pt and
+                // settling on those made typing trigger scroll storms).
+                guard followMode, abs(delta) > 60 else { return }
+                if delta < 0 {
+                    // Keyboard OPENING: ride the system animation with ONE
+                    // animated pin — repeated instant snaps mid-animation yanked
+                    // the transcript up "in a flaky way". A silent correction
+                    // after the animation settles catches any drift.
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                        if followMode { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                } else {
+                    // Keyboard DISMISSING (viewport grows): a single scrollTo
+                    // loses the race against the inset animation and the view
+                    // settles over-scrolled (blank strip below the last message,
+                    // "have to scroll up") — re-pin across the animation frames.
+                    settleToBottom(proxy)
+                }
             }
             .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             .onPreferenceChange(SentinelBottomKey.self) { v in
