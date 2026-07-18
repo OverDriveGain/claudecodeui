@@ -111,7 +111,10 @@ struct MessageRow: View, Equatable {
         if let c = message.content, !c.isEmpty {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "arrow.turn.down.right").font(.caption2).foregroundColor(Theme.mutedText.opacity(0.7))
-                Text(c)
+                // Only ~10 lines ever show, but Text LAYS OUT the whole string —
+                // a runaway tool result (100s of KB, e.g. embedded base64) froze
+                // the chat for seconds per frame. Cap what reaches layout.
+                Text(c.count > 4000 ? String(c.prefix(4000)) + "…" : c)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isError == true ? Theme.danger : Theme.mutedText)
                     .lineLimit(10)

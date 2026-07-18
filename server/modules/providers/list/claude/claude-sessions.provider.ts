@@ -563,6 +563,29 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return messages;
     }
 
+    /**
+     * A tool_result's content can be an array of blocks — including IMAGE blocks
+     * whose base64 payload runs to hundreds of KB. JSON.stringify'ing that into
+     * the normalized `content` shipped megabyte "text" rows that clients then
+     * try to LAY OUT as text (the iOS app froze for seconds per frame on such a
+     * conversation). Extract the text, replace binary blocks with a marker.
+     */
+    const summarizeToolResultContent = (content: unknown): string => {
+      if (typeof content === 'string') return content;
+      if (!Array.isArray(content)) return JSON.stringify(content) ?? '';
+      return content
+        .map((p: AnyRecord) => {
+          if (p?.type === 'text') return String(p.text ?? '');
+          if (p?.type === 'image') {
+            const mime = (p?.source as AnyRecord | undefined)?.media_type || 'image';
+            return `[image: ${mime}]`;
+          }
+          return `[${String(p?.type ?? 'block')}]`;
+        })
+        .filter(Boolean)
+        .join('\n');
+    };
+
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
       const userImages = Array.isArray(raw.message.content)
         ? extractMessageImages(raw.message.content)
@@ -578,7 +601,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'tool_result',
               toolId: part.tool_use_id,
-              content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
+              content: summarizeToolResultContent(part.content),
               isError: Boolean(part.is_error),
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult,
