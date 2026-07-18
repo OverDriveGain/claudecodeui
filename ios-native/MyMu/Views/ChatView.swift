@@ -188,7 +188,11 @@ struct ChatView: View {
                 if !atBottom {
                     Button {
                         followMode = true
-                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        // NON-animated + settled: an animated long jump over the
+                        // LazyVStack overshoots into estimated row space — the
+                        // "big gap at the bottom after scrolling back down". The
+                        // settle re-pins as the real row heights resolve.
+                        settleToBottom(proxy)
                     } label: {
                         Image(systemName: "arrow.down")
                             .font(.system(size: 15, weight: .semibold))
