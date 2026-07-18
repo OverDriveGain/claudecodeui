@@ -5,12 +5,24 @@ import SwiftUI
 struct RecentsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: ProjectsStore
+    @State private var query = ""
+
+    private var filtered: [RecentItem] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return store.recents }
+        return store.recents.filter {
+            $0.session.displayTitle.localizedCaseInsensitiveContains(q)
+                || $0.project.displayName.localizedCaseInsensitiveContains(q)
+        }
+    }
 
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
             content
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Search conversations")
         .navigationTitle("Conversations")
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -23,8 +35,10 @@ struct RecentsView: View {
             MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.recents.isEmpty {
             EmptyStateView(text: "No conversations yet.") { Task { await store.load(appState.api) } }
+        } else if filtered.isEmpty {
+            EmptyStateView(text: "No conversations match “\(query)”.")
         } else {
-            List(store.recents) { item in
+            List(filtered) { item in
                 NavigationLink(value: Route.chat(ChatTarget(
                     sessionId: item.session.id, projectId: item.project.projectId, isRemote: false,
                     title: item.session.displayTitle,

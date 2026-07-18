@@ -7,6 +7,16 @@ struct ArchiveView: View {
     @State private var archived: [Project] = []
     @State private var loading = true
     @State private var error: String?
+    @State private var query = ""
+
+    private var filtered: [RecentItem] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return items }
+        return items.filter {
+            $0.session.displayTitle.localizedCaseInsensitiveContains(q)
+                || $0.project.displayName.localizedCaseInsensitiveContains(q)
+        }
+    }
 
     private var items: [RecentItem] {
         var out: [RecentItem] = []
@@ -23,6 +33,8 @@ struct ArchiveView: View {
             Theme.background.ignoresSafeArea()
             content
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Search archive")
         .navigationTitle("Archive")
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -35,8 +47,10 @@ struct ArchiveView: View {
             MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if items.isEmpty {
             EmptyStateView(text: error ?? "No archived conversations.")
+        } else if filtered.isEmpty {
+            EmptyStateView(text: "No conversations match “\(query)”.")
         } else {
-            List(items) { item in
+            List(filtered) { item in
                 NavigationLink(value: Route.chat(ChatTarget(
                     sessionId: item.session.id, projectId: item.project.projectId, isRemote: false,
                     title: item.session.displayTitle,

@@ -29,6 +29,15 @@ struct ChatView: View {
     // following stop whenever content growth pushed the sentinel away (the old
     // flakiness), so intent and position are tracked separately now.
     @State private var followMode = true
+    // Phantom-gap guard: the content bottom may never REST above the viewport
+    // bottom (that's the "conversation looks blank until I scroll" bug — content
+    // shrinks after we pinned the bottom: end-of-turn history reconcile, media
+    // rows resizing, keyboard dismissal). We watch where the bottom sentinel
+    // actually sits; if it rests well above the fold for ~½s, re-pin.
+    @State private var sentinelBottom: CGFloat = .greatestFiniteMagnitude
+    @State private var viewportHeight: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var gapRepair: Task<Void, Never>?
     @State private var attachments: [PendingAttachment] = []
     @State private var photoItem: PhotosPickerItem?
     @State private var showFileImporter = false
@@ -73,6 +82,7 @@ struct ChatView: View {
     }
 
     private var messagesList: some View {
+        GeometryReader { outer in
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
@@ -95,13 +105,34 @@ struct ChatView: View {
                             .padding(.top, 2)
                     }
                     // Bottom sentinel: visible ⇒ the viewport is at the bottom. Drives
-                    // the ↓ pill and re-arms follow-mode when the user returns down.
+                    // the ↓ pill, re-arms follow-mode, and feeds the gap guard.
                     Color.clear.frame(height: 1).id("bottom")
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: SentinelBottomKey.self,
+                                                   value: g.frame(in: .named("chatScroll")).maxY)
+                        })
                         .onAppear { atBottom = true; followMode = true }
-                        .onDisappear { atBottom = false }
+                        .onDisappear {
+                            atBottom = false
+                            // Offscreen sentinel ⇒ no visible gap; a stale small value
+                            // must never yank a user who scrolled up to read.
+                            sentinelBottom = .greatestFiniteMagnitude
+                            gapRepair?.cancel()
+                        }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                })
+            }
+            .coordinateSpace(name: "chatScroll")
+            .onAppear { viewportHeight = outer.size.height }
+            .onChange(of: outer.size.height) { viewportHeight = $0 }
+            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+            .onPreferenceChange(SentinelBottomKey.self) { v in
+                sentinelBottom = v
+                scheduleGapRepair(proxy)
             }
             .scrollDismissesKeyboard(.interactively)
             // An explicit upward drag is the ONE gesture that means "stop following".
@@ -140,6 +171,28 @@ struct ChatView: View {
                     .padding(.bottom, 10)
                 }
             }
+        }
+        }
+    }
+
+    /// True when the transcript's bottom edge is resting visibly above the fold
+    /// while there is enough content to fill the screen — a phantom blank strip.
+    private var hasPhantomGap: Bool {
+        viewportHeight > 0
+            && contentHeight > viewportHeight + 1
+            && sentinelBottom < viewportHeight - 48
+    }
+
+    /// Debounced repair: rubber-band bounces and in-flight layout put the
+    /// sentinel above the fold transiently, so only a gap that SURVIVES ~½s is
+    /// real. scrollTo just clamps to the true bottom — a no-op when legitimate.
+    private func scheduleGapRepair(_ proxy: ScrollViewProxy) {
+        gapRepair?.cancel()
+        guard hasPhantomGap else { return }
+        gapRepair = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, hasPhantomGap else { return }
+            proxy.scrollTo("bottom", anchor: .bottom)
         }
     }
 
@@ -375,4 +428,16 @@ struct ChatView: View {
         loadingHistory = false
         relay.connect()
     }
+}
+
+/// Bottom edge of the transcript's last row, in the scroll view's own
+/// coordinate space (so it's directly comparable to the viewport height).
+private struct SentinelBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

@@ -64,13 +64,20 @@ struct FileBrowser: View {
 
     @State private var fetched: [FileNode]? = nil
     @State private var error: String?
+    @State private var query = ""
 
     private var nodes: [FileNode]? { preloaded ?? fetched }
+
+    private func filtered(_ nodes: [FileNode]) -> [FileNode] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return nodes }
+        return nodes.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
 
     var body: some View {
         Group {
             if let nodes {
-                List(nodes) { node in
+                List(filtered(nodes)) { node in
                     row(node)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -84,6 +91,8 @@ struct FileBrowser: View {
             }
         }
         .background(Theme.background)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Filter this folder")
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.background, for: .navigationBar)

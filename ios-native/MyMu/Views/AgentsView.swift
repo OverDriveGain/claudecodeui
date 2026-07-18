@@ -6,12 +6,21 @@ import SwiftUI
 struct AgentsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: ProjectsStore
+    @State private var query = ""
+
+    private var filtered: [Project] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return store.agents }
+        return store.agents.filter { $0.displayName.localizedCaseInsensitiveContains(q) }
+    }
 
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
             content
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Search agents")
         .navigationTitle("Agents")
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -24,8 +33,10 @@ struct AgentsView: View {
             MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.agents.isEmpty {
             EmptyStateView(text: store.error ?? "No agents found.") { Task { await store.load(appState.api) } }
+        } else if filtered.isEmpty {
+            EmptyStateView(text: "No agents match “\(query)”.")
         } else {
-            List(store.agents) { agent in
+            List(filtered) { agent in
                 NavigationLink(value: Route.chat(ChatTarget(
                     sessionId: agent.remoteSessionId ?? agent.projectId.replacingOccurrences(of: "remote:", with: ""),
                     projectId: agent.projectId, isRemote: true, title: agent.displayName))) {

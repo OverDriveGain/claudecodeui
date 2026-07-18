@@ -5,12 +5,24 @@ import SwiftUI
 struct ProjectsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: ProjectsStore
+    @State private var query = ""
+
+    private var filtered: [Project] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return store.folders }
+        return store.folders.filter {
+            $0.displayName.localizedCaseInsensitiveContains(q)
+                || ($0.fullPath ?? $0.path ?? "").localizedCaseInsensitiveContains(q)
+        }
+    }
 
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
             content
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Search projects")
         .navigationTitle("Projects")
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -23,8 +35,10 @@ struct ProjectsView: View {
             MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.folders.isEmpty {
             EmptyStateView(text: store.error ?? "No projects yet.") { Task { await store.load(appState.api) } }
+        } else if filtered.isEmpty {
+            EmptyStateView(text: "No projects match “\(query)”.")
         } else {
-            List(store.folders) { p in
+            List(filtered) { p in
                 NavigationLink(value: Route.projectDetail(p)) { row(p) }
                     .listRowBackground(Color.clear)
                     .listRowSeparatorTint(Theme.border)

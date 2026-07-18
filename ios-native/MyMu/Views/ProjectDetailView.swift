@@ -5,9 +5,16 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: Project
     @EnvironmentObject var appState: AppState
+    @State private var query = ""
 
     private var sessions: [Session] {
         (project.sessions ?? []).sorted { $0.sortKey > $1.sortKey }
+    }
+
+    private var filtered: [Session] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return sessions }
+        return sessions.filter { $0.displayTitle.localizedCaseInsensitiveContains(q) }
     }
 
     private var newChatTarget: ChatTarget {
@@ -27,8 +34,10 @@ struct ProjectDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filtered.isEmpty {
+                EmptyStateView(text: "No conversations match “\(query)”.")
             } else {
-                List(sessions) { s in
+                List(filtered) { s in
                     NavigationLink(value: Route.chat(ChatTarget(
                         sessionId: s.id, projectId: project.projectId, isRemote: false,
                         title: s.displayTitle, projectPath: project.fullPath ?? project.path))) {
@@ -42,6 +51,8 @@ struct ProjectDetailView: View {
                 .background(Theme.background)
             }
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Search conversations")
         .navigationTitle(project.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.background, for: .navigationBar)
