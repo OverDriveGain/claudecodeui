@@ -137,7 +137,15 @@ struct ChatView: View {
             }
             .coordinateSpace(name: "chatScroll")
             .onAppear { viewportHeight = outer.size.height }
-            .onChange(of: outer.size.height) { viewportHeight = $0 }
+            .onChange(of: outer.size.height) { h in
+                viewportHeight = h
+                // Keyboard show/hide RESIZES the viewport (~300pt) while UIKit
+                // animates the inset — a single scrollTo mid-animation loses that
+                // race and the view settles over-scrolled: blank strip below the
+                // last message, "have to scroll up" (the post-send gap). Re-pin
+                // across the animation frames like the initial-load path does.
+                if followMode { settleToBottom(proxy) }
+            }
             .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             .onPreferenceChange(SentinelBottomKey.self) { v in
                 sentinelBottom = v
@@ -200,6 +208,11 @@ struct ChatView: View {
         guard hasPhantomGap else { return }
         gapRepair = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, hasPhantomGap else { return }
+            proxy.scrollTo("bottom", anchor: .bottom)
+            // One scrollTo can lose to an in-flight inset animation (keyboard) —
+            // confirm the pin took, repair once more if the gap survived.
+            try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled, hasPhantomGap else { return }
             proxy.scrollTo("bottom", anchor: .bottom)
         }
