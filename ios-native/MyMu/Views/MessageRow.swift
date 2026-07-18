@@ -4,13 +4,20 @@ import UIKit
 /// Renders one normalized chat message, Claude/ChatGPT-app style: assistant text
 /// is full-width with real markdown; user text is a right-aligned bubble. Long-press
 /// any message to copy.
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     let message: ChatMessage
     let projectId: String
     let token: String
     /// Visible action row (Copy) — only the newest assistant message gets one,
     /// like the Claude/ChatGPT apps; long-press covers every other message.
     var showActions = false
+
+    /// Used with `.equatable()` so a streaming token only re-renders the ONE row
+    /// whose message changed — re-rendering every visible row (each hosting a
+    /// UITextView) per token made long chats crawl.
+    static func == (l: MessageRow, r: MessageRow) -> Bool {
+        l.message == r.message && l.showActions == r.showActions && l.projectId == r.projectId
+    }
 
     var body: some View {
         // Text messages get NO row-level context menu: long-press there belongs to

@@ -181,6 +181,14 @@ final class RelayClient: ObservableObject {
         let type = obj["type"] as? String
         let kind = obj["kind"] as? String
 
+        // Any non-delta frame must observe the fully-applied stream so ordering
+        // holds (e.g. stream_end / tool_use arriving between coalesced flushes).
+        if kind != "stream_delta" {
+            chunkFlushTask?.cancel()
+            chunkFlushTask = nil
+            flushStreamChunk()
+        }
+
         if type == "session-status" {
             if let processing = obj["isProcessing"] as? Bool { isLoading = processing }
             if let status = obj["status"] as? [String: Any], let t = status["text"] as? String { statusText = t }
@@ -254,7 +262,29 @@ final class RelayClient: ObservableObject {
 
     // MARK: helpers
 
+    // Stream chunks arrive per-token; publishing `messages` on each one forced a
+    // full SwiftUI re-render per token — long replies made the whole chat crawl
+    // (O(n²): every token re-rendered the entire growing message). Coalesce to
+    // ~12 UI updates/second; `handle` flushes synchronously before any non-delta
+    // frame so ordering is preserved.
+    private var pendingChunk = ""
+    private var chunkFlushTask: Task<Void, Never>?
+
     private func appendStream(_ chunk: String) {
+        pendingChunk += chunk
+        guard chunkFlushTask == nil else { return }
+        chunkFlushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.chunkFlushTask = nil
+            self.flushStreamChunk()
+        }
+    }
+
+    private func flushStreamChunk() {
+        guard !pendingChunk.isEmpty else { return }
+        let chunk = pendingChunk
+        pendingChunk = ""
         if let sid = streamingId, let idx = messages.firstIndex(where: { $0.id == sid }) {
             messages[idx].content = (messages[idx].content ?? "") + chunk
         } else {

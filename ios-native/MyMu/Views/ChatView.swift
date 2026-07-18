@@ -95,6 +95,7 @@ struct ChatView: View {
                     ForEach(visibleMessages) { m in
                         MessageRow(message: m, projectId: projectId, token: appState.token ?? "",
                                    showActions: m.id == lastAssistantTextId)
+                            .equatable()
                             .id(m.id)
                     }
                     // Inline thinking indicator — last transcript row, centered like

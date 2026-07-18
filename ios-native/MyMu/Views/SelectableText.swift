@@ -11,6 +11,19 @@ struct SelectableText: UIViewRepresentable {
     let text: String
     var textColor: UIColor = UIColor(Theme.text)
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator { var lastText: String? }
+
+    /// Rendered-markdown cache shared across rows: LazyVStack derenders and
+    /// recreates rows while scrolling, and re-parsing every message's markdown on
+    /// each remount (plus on every SwiftUI update) was a main-thread hog in long
+    /// chats.
+    private static let renderCache: NSCache<NSString, NSAttributedString> = {
+        let c = NSCache<NSString, NSAttributedString>()
+        c.countLimit = 400
+        return c
+    }()
+
     func makeUIView(context: Context) -> UITextView {
         let tv = UITextView()
         tv.isEditable = false
@@ -26,7 +39,18 @@ struct SelectableText: UIViewRepresentable {
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
-        tv.attributedText = SelectableText.render(text, color: textColor)
+        // SwiftUI calls this on EVERY graph update of the row — skip unless the
+        // text actually changed, and reuse renders across row remounts.
+        guard context.coordinator.lastText != text else { return }
+        context.coordinator.lastText = text
+        let key = text as NSString
+        if let cached = SelectableText.renderCache.object(forKey: key) {
+            tv.attributedText = cached
+        } else {
+            let rendered = SelectableText.render(text, color: textColor)
+            SelectableText.renderCache.setObject(rendered, forKey: key)
+            tv.attributedText = rendered
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
