@@ -10,8 +10,26 @@ import { workspacePathFor } from '../bldr/workspace.js';
 import { seedWorkspace, MANIFEST_FILE } from '../bldr/seed.js';
 import { generateProposalPdf } from '../bldr/proposal.js';
 import { startGeneration, getJob, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
+import { loadEndpoints, saveEndpoints, endpointAvailability, PANE_IDS, PRESETS } from '../bldr/endpoints.js';
 
 const router = express.Router();
+
+// --- admin gate -----------------------------------------------------------
+// Admin = the first (owner) account, plus any usernames/emails listed in
+// ADMIN_USERS (comma-separated). Customers signing in via chat-login are never
+// admins unless explicitly listed.
+const ADMIN_USERS = (process.env.ADMIN_USERS || '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+export const isAdminUser = (user) =>
+  !!user && (user.id === 1 || ADMIN_USERS.includes(String(user.username || '').toLowerCase()));
+
+const requireAdmin = (req, res, next) => {
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: 'Admin only.' });
+  next();
+};
 
 const EXT_MIME = {
   '.svg': 'image/svg+xml',
@@ -130,11 +148,43 @@ router.post('/generate', express.json({ limit: '32kb' }), (req, res) => {
     const wp = workspaceOf(req);
     if (!fs.existsSync(path.join(wp, MANIFEST_FILE))) seedWorkspace(wp);
     const brief = typeof req.body?.brief === 'string' ? req.body.brief : '';
-    const job = startGeneration(wp, brief);
+    const panes = Array.isArray(req.body?.panes) && req.body.panes.length ? req.body.panes : undefined;
+    const job = startGeneration(wp, brief, panes);
     res.json({ ok: true, job });
   } catch (err) {
     console.error('[bldr] generate error:', err?.message || err);
     res.status(500).json({ error: 'Design generation failed to start.', code: 'GENERATE_FAILED' });
+  }
+});
+
+// --- admin: the pane→endpoint chain ---------------------------------------
+
+// Whether the signed-in user may see the admin page at all.
+router.get('/admin/me', (req, res) => {
+  res.json({ admin: isAdminUser(req.user) });
+});
+
+// The full chain: per-pane endpoint config + live availability + presets.
+router.get('/admin/endpoints', requireAdmin, (req, res) => {
+  const cfg = loadEndpoints();
+  const availability = Object.fromEntries(
+    PANE_IDS.map((id) => [id, endpointAvailability(cfg.endpoints[id])])
+  );
+  res.json({ ...cfg, availability, presets: PRESETS, panes: PANE_IDS });
+});
+
+// Change the chain. Body = { endpoints: { <pane>: <endpoint> } } (partial ok).
+// Takes effect on the next generation — no restart.
+router.put('/admin/endpoints', requireAdmin, express.json({ limit: '64kb' }), (req, res) => {
+  try {
+    const cfg = saveEndpoints(req.body || {});
+    const availability = Object.fromEntries(
+      PANE_IDS.map((id) => [id, endpointAvailability(cfg.endpoints[id])])
+    );
+    res.json({ ok: true, ...cfg, availability });
+  } catch (err) {
+    console.error('[bldr] admin endpoints save error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to save endpoints.' });
   }
 });
 

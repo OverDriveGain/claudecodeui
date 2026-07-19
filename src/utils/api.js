@@ -86,13 +86,24 @@ export const api = {
     // Route B: is the design agent (bti-bldr-gpt) reachable over A2A yet?
     generateStatus: () => authenticatedFetch('/api/bldr/generate/status'),
     // Kick off async per-pane generation from a brief (returns immediately).
-    generate: (brief) =>
+    // panes: optional subset (e.g. ['costs']) — used by the admin "Test" button.
+    generate: (brief, panes) =>
       authenticatedFetch('/api/bldr/generate', {
         method: 'POST',
-        body: JSON.stringify({ brief: brief || '' }),
+        body: JSON.stringify({ brief: brief || '', ...(panes?.length ? { panes } : {}) }),
       }),
     // Poll the in-flight generation job (per-pane state: pending/working/done/failed).
     generateJob: () => authenticatedFetch('/api/bldr/generate/job'),
+    // Admin: the pane→endpoint chain (who generates each pane).
+    admin: {
+      me: () => authenticatedFetch('/api/bldr/admin/me'),
+      endpoints: () => authenticatedFetch('/api/bldr/admin/endpoints'),
+      saveEndpoints: (endpoints) =>
+        authenticatedFetch('/api/bldr/admin/endpoints', {
+          method: 'PUT',
+          body: JSON.stringify({ endpoints }),
+        }),
+    },
   },
 
   // Protected endpoints

@@ -10,21 +10,23 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { a2aCall, hasGrant } from './a2a.js';
+import { a2aCall } from './a2a.js';
 import { MANIFEST_FILE } from './seed.js';
+import { loadEndpoints, endpointAvailability, PANE_IDS } from './endpoints.js';
 
 export const BLDR_GPT_PROVIDER = process.env.BLDR_GPT_PROVIDER || 'bti-bldr-gpt';
 
-// Every pane the agent produces, in order. Map/location is intentionally excluded.
-export const GENERATED_PANES = ['top_view', 'section', 'elevations', 'front_view', 'costs'];
-// SVG line-drawing panes (agent draws vector); front_view is a photoreal RENDER
-// via the generate_image exec skill; costs is JSON.
+// Every pane the chain produces, in order. Map/location is intentionally excluded.
+export const GENERATED_PANES = PANE_IDS;
+// SVG line-drawing panes (endpoint draws vector); front_view is a photoreal
+// RENDER (image endpoint); costs is JSON.
 const SVG_PANES = new Set(['top_view', 'section', 'elevations']);
 const RENDER_PANES = new Set(['front_view']);
 
-/** True if the app can currently reach the design agent over A2A. */
+/** True if at least one pane endpoint is currently callable. */
 export function canGenerate() {
-  return hasGrant(BLDR_GPT_PROVIDER, 'general_query');
+  const { endpoints } = loadEndpoints();
+  return GENERATED_PANES.some((id) => endpointAvailability(endpoints[id]).ok);
 }
 
 const briefLine = (brief) =>
@@ -96,16 +98,40 @@ function validCosts(c) {
   return c && Array.isArray(c.rows) && c.rows.every((r) => r && typeof r.item === 'string' && typeof r.cost === 'number');
 }
 
-// --- per-pane tasks -------------------------------------------------------
+// --- endpoint transport ---------------------------------------------------
 
 const CALL_TIMEOUT_MS = 280000; // each spawn session is slow; stay under nginx-free server-to-server budget
 
+/**
+ * Send one prompt through a configured endpoint and return the reply text.
+ * a2a → the granted fleet agent; openai → any OpenAI-compatible /chat/completions.
+ */
+async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS) {
+  if (ep.backend === 'a2a') {
+    return a2aCall({ provider: ep.provider, skill: ep.skill, mode: ep.mode, message, timeoutMs });
+  }
+  if (ep.backend === 'openai') {
+    const headers = { 'Content-Type': 'application/json' };
+    const key = ep.apiKeyEnv ? process.env[ep.apiKeyEnv] : null;
+    headers.Authorization = `Bearer ${key || 'none'}`; // LiteLLM on WG accepts any bearer
+    const res = await fetch(`${ep.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: ep.model, messages: [{ role: 'user', content: message }], max_tokens: 16000 }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`endpoint ${ep.baseUrl} HTTP ${res.status}`);
+    const body = await res.json();
+    return String(body?.choices?.[0]?.message?.content || '').trim();
+  }
+  throw new Error(`unknown backend '${ep.backend}'`);
+}
+
+// --- per-pane tasks -------------------------------------------------------
+
 /** Generate one image pane. Returns { id, file:{name,buffer}, source } or null. */
-async function genImagePane(id, brief) {
-  const reply = await a2aCall({
-    provider: BLDR_GPT_PROVIDER, skill: 'general_query', mode: 'spawn', message: IMAGE_PROMPTS[id](brief),
-    timeoutMs: CALL_TIMEOUT_MS,
-  });
+async function genImagePane(id, brief, ep) {
+  const reply = await callEndpoint(ep, IMAGE_PROMPTS[id](brief));
   const dataUrl = extractDataUrl(reply);
   if (!dataUrl) return null;
   const mime = dataUrl.slice(5, dataUrl.indexOf(';'));
@@ -116,32 +142,40 @@ async function genImagePane(id, brief) {
   return { id, file: { name: `${id}.${ext}`, buffer }, sourcePatch: { type: 'image', path: `${id}.${ext}` } };
 }
 
-/** Generate a photoreal RENDER pane via the generate_image exec skill.
- * The provider writes a PNG on box (bti-owned) and returns its absolute path,
- * which this app (same OS user) reads directly. Returns { id, file, source } or null. */
-async function genRenderPane(id, brief) {
-  const reply = await a2aCall({
-    provider: BLDR_GPT_PROVIDER,
-    skill: 'generate_image',
-    mode: 'exec',
-    params: { prompt: renderPrompt(brief), size: '1536x1024' },
-    timeoutMs: CALL_TIMEOUT_MS,
-  });
-  // The exec skill returns the absolute PNG path (possibly with surrounding text).
-  const m = String(reply || '').match(/\/\S+\.png/);
-  const filePath = m?.[0];
-  if (!filePath || !fs.existsSync(filePath)) return null;
-  const buffer = fs.readFileSync(filePath);
+/** Generate a photoreal RENDER pane. An a2a image endpoint (generate_image exec)
+ * writes a PNG on box (bti-owned) and returns its absolute path, which this app
+ * (same OS user) reads directly. Any other endpoint is asked for a data URL
+ * (vector fallback). Returns { id, file, source } or null. */
+async function genRenderPane(id, brief, ep) {
+  if (ep.backend === 'a2a' && ep.skill === 'generate_image') {
+    const reply = await a2aCall({
+      provider: ep.provider,
+      skill: ep.skill,
+      mode: ep.mode,
+      params: { prompt: renderPrompt(brief), size: '1536x1024' },
+      timeoutMs: CALL_TIMEOUT_MS,
+    });
+    // The exec skill returns the absolute PNG path (possibly with surrounding text).
+    const m = String(reply || '').match(/\/\S+\.png/);
+    const filePath = m?.[0];
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const buffer = fs.readFileSync(filePath);
+    if (!buffer.length) return null;
+    return { id, file: { name: `${id}.png`, buffer }, sourcePatch: { type: 'image', path: `${id}.png` } };
+  }
+  // Text-only endpoint: fall back to a drawn SVG front view.
+  const reply = await callEndpoint(ep, `${IMAGE_PROMPTS.elevations(brief).replace('ELEVATIONS pane', 'FRONT_VIEW pane (front facade)')}`);
+  const dataUrl = extractDataUrl(reply);
+  if (!dataUrl) return null;
+  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const buffer = Buffer.from(b64, 'base64');
   if (!buffer.length) return null;
-  return { id, file: { name: `${id}.png`, buffer }, sourcePatch: { type: 'image', path: `${id}.png` } };
+  return { id, file: { name: `${id}.svg`, buffer }, sourcePatch: { type: 'image', path: `${id}.svg` } };
 }
 
 /** Generate the costs pane. Returns { id:'costs', source } or null. */
-async function genCostsPane(brief, current) {
-  const reply = await a2aCall({
-    provider: BLDR_GPT_PROVIDER, skill: 'general_query', mode: 'spawn', message: costsPrompt(brief, current),
-    timeoutMs: CALL_TIMEOUT_MS,
-  });
+async function genCostsPane(brief, current, ep) {
+  const reply = await callEndpoint(ep, costsPrompt(brief, current));
   const data = extractJson(reply);
   if (!validCosts(data)) return null;
   const total = typeof data.total === 'number' ? data.total : data.rows.reduce((a, r) => a + (Number(r.cost) || 0), 0);
@@ -172,23 +206,34 @@ const jobs = new Map(); // workspacePath -> job
 export function getJob(workspacePath) {
   const j = jobs.get(workspacePath);
   if (!j) return null;
-  return { running: j.running, brief: j.brief, panes: j.panes, startedAt: j.startedAt, finishedAt: j.finishedAt };
+  return { running: j.running, brief: j.brief, panes: j.panes, endpoints: j.endpointLabels, startedAt: j.startedAt, finishedAt: j.finishedAt };
 }
+
+const describeEndpoint = (ep) =>
+  ep.label || (ep.backend === 'a2a' ? `${ep.provider}/${ep.skill}` : `${ep.model} @ ${ep.baseUrl}`);
 
 async function runJob(workspacePath, job, brief, wanted) {
   const manifest = JSON.parse(fs.readFileSync(path.join(workspacePath, MANIFEST_FILE), 'utf8'));
   const current = { costs: manifest.sources?.costs?.data || null };
+  const { endpoints } = loadEndpoints(); // snapshot the chain once per job
   let idx = 0;
   const worker = async () => {
     while (idx < wanted.length) {
       const id = wanted[idx++];
+      const ep = endpoints[id];
+      const avail = endpointAvailability(ep);
+      job.endpointLabels[id] = ep ? describeEndpoint(ep) : 'unconfigured';
+      if (!avail.ok) {
+        job.panes[id] = 'skipped';
+        continue;
+      }
       job.panes[id] = 'working';
       try {
         const r = RENDER_PANES.has(id)
-          ? await genRenderPane(id, brief)
+          ? await genRenderPane(id, brief, ep)
           : SVG_PANES.has(id)
-            ? await genImagePane(id, brief)
-            : await genCostsPane(brief, current);
+            ? await genImagePane(id, brief, ep)
+            : await genCostsPane(brief, current, ep);
         if (r) { applyPane(workspacePath, id, r); job.panes[id] = 'done'; }
         else job.panes[id] = 'failed';
       } catch (err) {
@@ -219,6 +264,7 @@ export function startGeneration(workspacePath, brief, panes = GENERATED_PANES) {
     startedAt: Date.now(),
     finishedAt: null,
     panes: Object.fromEntries(wanted.map((id) => [id, 'pending'])),
+    endpointLabels: {},
   };
   jobs.set(workspacePath, job);
   runJob(workspacePath, job, brief, wanted); // fire-and-forget
