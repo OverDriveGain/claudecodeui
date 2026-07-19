@@ -100,7 +100,9 @@ function validCosts(c) {
 
 // --- endpoint transport ---------------------------------------------------
 
-const CALL_TIMEOUT_MS = 280000; // each spawn session is slow; stay under nginx-free server-to-server budget
+// Direct WG server-to-server call (no proxy in between), so the budget can be
+// generous: GPT spawn sessions routinely take 4-6 min under load.
+const CALL_TIMEOUT_MS = 480000;
 
 /**
  * Send one prompt through a configured endpoint and return the reply text.
