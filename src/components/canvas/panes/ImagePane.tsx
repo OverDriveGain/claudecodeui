@@ -1,54 +1,99 @@
-import type { AssetRef } from '../types';
+import { useEffect, useState } from 'react';
+import { Maximize2, X } from 'lucide-react';
+import type { SourceValue } from '../types';
+import { api } from '../../../utils/api';
+import PaneFrame from './PaneFrame';
 
 interface ImagePaneProps {
   title: string;
-  asset?: AssetRef;
+  source?: SourceValue;
 }
 
 /**
- * Resolves the best browser-loadable src for an AssetRef.
- * V1 supports data_url and (http) url; `path` needs the asset endpoint (later),
- * so a path-only asset renders an unavailable state for now.
+ * Resolves the best browser-loadable src for an image source.
+ * Prefers a served `path` (with `?rev=` cache-bust) > data_url > url.
  */
-function resolveSrc(asset?: AssetRef): string | null {
-  if (!asset) return null;
-  if (asset.data_url) return asset.data_url;
-  if (asset.url) return asset.url;
+function resolveSrc(source?: SourceValue): string | null {
+  if (!source) return null;
+  // Defensive: never let a missing helper throw and blank the canvas.
+  if (source.path) return api?.bldr?.assetUrl?.(source.path, source.rev) ?? null;
+  if (source.data_url) return source.data_url;
+  if (source.url) return source.url;
   return null;
 }
 
-/**
- * Image pane — renders a top-view (or any image) AssetRef. V1: data_url / url.
- */
-export default function ImagePane({ title, asset }: ImagePaneProps) {
-  const src = resolveSrc(asset);
+/** Image pane — top view / section / elevations / front view. Double-click (or the
+ * expand button) opens a full-screen preview. The image sits on a uniform white
+ * mat with even padding so every pane reads consistently regardless of aspect. */
+export default function ImagePane({ title, source }: ImagePaneProps) {
+  const src = resolveSrc(source);
+  const alt = source?.alt || title;
+  const [preview, setPreview] = useState(false);
 
-  if (!src) {
-    const pathOnly = Boolean(asset?.path);
-    return (
-      <div className="flex h-full w-full items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 p-4">
-        <div className="text-center">
-          <div className="text-sm font-medium text-muted-foreground">{title}</div>
-          <div className="mt-1 text-xs text-muted-foreground/70">
-            {pathOnly ? 'Host path — asset endpoint not wired yet' : 'No content yet'}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Close the preview on Escape.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <div className="border-b border-border px-3 py-1.5 text-xs font-medium text-muted-foreground">
-        {title}
-      </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-2">
-        <img
-          src={src}
-          alt={asset?.alt || title}
-          className="max-h-full max-w-full object-contain"
-        />
-      </div>
-    </div>
+    <PaneFrame title={title} flush empty={!src}>
+      {src && (
+        <div
+          className="group absolute inset-0 flex items-center justify-center bg-white p-3"
+          onDoubleClick={() => setPreview(true)}
+          title="Double-click to preview"
+        >
+          <img
+            src={src}
+            alt={alt}
+            draggable={false}
+            className="max-h-full max-w-full select-none rounded object-contain cursor-zoom-in"
+          />
+          {/* expand affordance (discoverability for the double-click preview) */}
+          <button
+            type="button"
+            onClick={() => setPreview(true)}
+            aria-label="Preview"
+            className="absolute right-2 top-2 rounded-md bg-black/55 p-1.5 text-white opacity-0 transition-opacity hover:bg-black/75 group-hover:opacity-100"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* full-screen preview */}
+      {preview && src && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6"
+          onClick={() => setPreview(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${alt} preview`}
+        >
+          <img
+            src={src}
+            alt={alt}
+            className="max-h-full max-w-full object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            onClick={() => setPreview(false)}
+            aria-label="Close preview"
+            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">
+            {alt}
+          </div>
+        </div>
+      )}
+    </PaneFrame>
   );
 }

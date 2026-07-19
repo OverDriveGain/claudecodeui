@@ -530,7 +530,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
   // The update_canvas MCP tool drives the Canvas view, not the chat thread.
   // ToolRenderer special-cases it (CanvasTap) and returns null before this config
   // is consulted; this entry is belt-and-braces so it stays hidden everywhere.
-  'mcp__mymu_canvas__update_canvas': {
+  'mcp__bldr_canvas__update_canvas': {
     input: {
       type: 'hidden'
     },

@@ -544,7 +544,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const mcpServers = await loadMcpConfig(options.cwd);
     sdkOptions.mcpServers = {
       ...(mcpServers || {}),
-      mymu_canvas: createCanvasMcpServer(),
+      bldr_canvas: createCanvasMcpServer(),
     };
 
     // Handle images - save to temp files and modify prompt
@@ -580,6 +580,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // tools to a PreToolUse hook (runs before the mode check) if we need them
     // to work in those modes.
     sdkOptions.canUseTool = async (toolName, input, context) => {
+      // bldr's own in-process canvas tool is always safe — it only updates the
+      // user's panes. Never prompt for it, regardless of permission mode (so the
+      // customer never sees an approval dialog for update_canvas).
+      if (toolName === 'mcp__bldr_canvas__update_canvas') {
+        return { behavior: 'allow', updatedInput: input };
+      }
+
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {

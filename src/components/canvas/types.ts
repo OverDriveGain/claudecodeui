@@ -1,13 +1,15 @@
 /**
- * Project Canvas — shared types.
+ * bldr Canvas — shared types (data-source model).
  *
- * Mirrors the zod schema of the `update_canvas` MCP tool (server/canvas/canvas-mcp.js).
- * The Canvas is a fixed set of heterogeneous panes that mutate in place: each
- * `update_canvas` call provides only the panes it changes, and a latest-value-
- * per-pane reducer (useCanvasStore) keeps the newest value for each.
+ * Each project has a set of DATA SOURCES; each source has a TYPE that decides how
+ * its pane renders. `bldr.json` (served by /api/bldr/manifest) is the source of
+ * truth; the agent's `update_canvas` tool pushes live changes. A per-source `rev`
+ * bumps on every change so a pane refreshes in place (cache-bust) — no page reload.
  */
 
-/** A reference to a binary asset. Frontend prefers data_url > url > path. */
+export type SourceType = 'image' | 'cost-table' | 'map-cesium';
+
+/** A binary asset reference. Frontend prefers path (served) > data_url > url. */
 export interface AssetRef {
   data_url?: string;
   path?: string;
@@ -16,53 +18,59 @@ export interface AssetRef {
   alt?: string;
 }
 
-export interface CostsPane {
-  pdf?: AssetRef;
-  markdown?: string;
+export interface CostRow {
+  item: string;
+  qty?: number;
+  unit?: string;
+  cost: number;
 }
-
-export interface MapPane {
-  lat?: number;
-  lng?: number;
+export interface CostData {
+  name: string;
+  currency?: string;
+  rows: CostRow[];
+  total?: number;
+}
+export interface LocationData {
+  lat: number;
+  lng: number;
   zoom?: number;
   label?: string;
-  geojson?: unknown;
+  model?: unknown;
 }
 
-/** The raw payload of one update_canvas tool call. All fields optional. */
-export interface CanvasUpdate {
-  top_view?: AssetRef;
-  three_d?: AssetRef;
-  costs?: CostsPane;
-  free?: string;
-  map?: MapPane;
-  note?: string;
+/** One data source's current value. `path`/`data_url`/`url` for files, `data` for structured. */
+export interface SourceValue {
+  type: SourceType;
+  path?: string;
+  data_url?: string;
+  url?: string;
+  alt?: string;
+  name?: string;
+  data?: CostData | LocationData | unknown;
+  /** bumped on each change → cache-bust / re-render */
+  rev: number;
 }
 
-/** The five canvas panes. */
-export type CanvasPaneId = 'top_view' | 'three_d' | 'costs' | 'free' | 'map';
-
-export const CANVAS_PANE_IDS: CanvasPaneId[] = ['top_view', 'three_d', 'costs', 'free', 'map'];
-
-/** Per-pane value union — the latest value the reducer holds for each pane. */
-export interface CanvasPaneValues {
-  top_view?: AssetRef;
-  three_d?: AssetRef;
-  costs?: CostsPane;
-  free?: string;
-  map?: MapPane;
+/** The on-disk project manifest (bldr.json). */
+export interface BldrManifest {
+  name: string;
+  sources: Record<string, SourceValue>;
+  locks: string[][];
 }
 
 /**
- * The reduced canvas state for one conversation. `rev` is a per-pane revision
- * counter (bumped each time that pane receives a new value) so panes can detect
- * an in-place mutation and re-render / re-init heavy renderers (e.g. three.js).
+ * Raw payload of one update_canvas tool call: named source fields, each carrying
+ * a value WITHOUT a rev (the store assigns/bumps rev). All optional.
  */
-export interface CanvasState {
-  values: CanvasPaneValues;
-  rev: Record<CanvasPaneId, number>;
-  /** Last note string from any update, for a small status line. */
+export type CanvasUpdate = {
   note?: string;
-  /** Monotonic update counter across all panes. */
+  sources?: Record<string, Omit<SourceValue, 'rev'>>;
+} & Record<string, unknown>;
+
+/** Reduced canvas state for one project/conversation. */
+export interface CanvasState {
+  sources: Record<string, SourceValue>;
+  note?: string;
+  /** Monotonic update counter across all sources. */
   updates: number;
 }

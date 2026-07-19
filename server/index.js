@@ -70,6 +70,7 @@ import {
 } from './utils/url-detection.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
+import bldrRoutes from './routes/bldr.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -203,6 +204,9 @@ app.use('/api/auth', authRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
+
+// bldr project manifest + assets (protected, scoped to the user's workspace)
+app.use('/api/bldr', authenticateToken, bldrRoutes);
 
 // Git API Routes (protected)
 app.use('/api/git', authenticateToken, gitRoutes);

@@ -18,7 +18,7 @@ const basename = (p: string) => p.split('/').filter(Boolean).pop() || p;
  * Renders a `SendUserFile` delivery as real, downloadable file cards instead of
  * raw tool JSON. The agent uploads the blob to claude.ai (we never see those
  * bytes), but the delivered path is on the agent's host and lives under its cwd,
- * so MyMu streams it through the existing authenticated files/content endpoint
+ * so bldr streams it through the existing authenticated files/content endpoint
  * (resolveProjectRootById -> agent cwd -> byte stream). Download must always be
  * available — never gated behind a preview that may not render.
  */

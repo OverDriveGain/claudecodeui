@@ -4,10 +4,10 @@ import type { CanvasUpdate } from '../../canvas/types';
 import { canvasStore } from '../../../stores/useCanvasStore';
 
 /**
- * The MCP tool name as surfaced to the client (server name `mymu_canvas`,
+ * The MCP tool name as surfaced to the client (server name `bldr_canvas`,
  * tool `update_canvas`). MCP tools are namespaced `mcp__<server>__<tool>`.
  */
-export const CANVAS_TOOL_NAME = 'mcp__mymu_canvas__update_canvas';
+export const CANVAS_TOOL_NAME = 'mcp__bldr_canvas__update_canvas';
 
 interface CanvasUpdateTapProps {
   payload: unknown;
