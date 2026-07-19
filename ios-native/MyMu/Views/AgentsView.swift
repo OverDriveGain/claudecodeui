@@ -25,6 +25,19 @@ struct AgentsView: View {
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar { ToolbarItem(placement: .navigationBarTrailing) { ProfileMenu() } }
+        // Live running/connected dots: the projects fetch is a one-shot snapshot,
+        // so the list's spinner lagged reality (or never appeared). Poll the cheap
+        // agent-status endpoint every 5s while this tab is visible; the store only
+        // publishes on real changes. .task cancels on tab switch automatically.
+        .task {
+            guard !store.isDemo else { return }
+            while !Task.isCancelled {
+                if let st = try? await appState.api.agentStatus() {
+                    store.applyAgentStatus(st)
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
     }
 
     @ViewBuilder

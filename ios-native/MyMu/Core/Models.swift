@@ -26,8 +26,8 @@ struct Project: Codable, Identifiable, Equatable, Hashable {
     // Set only for virtual `remote:<id>` projects — a live `claude --remote-control` agent.
     let isRemoteAgent: Bool?
     let remoteSessionId: String?
-    let remoteConnected: Bool?
-    let remoteRunning: Bool?
+    var remoteConnected: Bool?
+    var remoteRunning: Bool?
 
     /// The one session this project's chat drives. For a remote agent that's the
     /// relay session; for a local project the caller picks from `sessions`.

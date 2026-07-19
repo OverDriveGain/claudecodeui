@@ -35,6 +35,25 @@ final class ProjectsStore: ObservableObject {
         loading = false
     }
 
+    /// Merge live agent running/connected flags into the loaded projects. Only
+    /// publishes when something actually changed, so the 5s poll doesn't cause
+    /// pointless list re-renders.
+    func applyAgentStatus(_ statuses: [APIClient.AgentStatusEntry]) {
+        guard !statuses.isEmpty else { return }
+        let byId = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+        var changed = false
+        var next = projects
+        for i in next.indices where next[i].isRemoteAgent == true {
+            guard let sid = next[i].remoteSessionId, let st = byId[sid] else { continue }
+            if next[i].remoteRunning != st.running || next[i].remoteConnected != st.connected {
+                next[i].remoteRunning = st.running
+                next[i].remoteConnected = st.connected
+                changed = true
+            }
+        }
+        if changed { projects = next }
+    }
+
     var agents: [Project] { projects.filter { $0.isRemoteAgent == true } }
     var folders: [Project] { projects.filter { $0.isRemoteAgent != true } }
 

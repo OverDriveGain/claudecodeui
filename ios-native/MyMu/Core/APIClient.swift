@@ -53,6 +53,16 @@ struct APIClient {
         return try JSONDecoder().decode(LoginResponse.self, from: data)
     }
 
+    struct AgentStatusEntry: Codable { let id: String; let running: Bool?; let connected: Bool? }
+    private struct AgentStatusResponse: Codable { let agents: [AgentStatusEntry] }
+
+    /// Lightweight live status for remote agents ({id, running, connected}) —
+    /// served from a short server cache, safe to poll every few seconds.
+    func agentStatus() async throws -> [AgentStatusEntry] {
+        let data = try await request("/api/projects/agent-status")
+        return try JSONDecoder().decode(AgentStatusResponse.self, from: data).agents
+    }
+
     func projects() async throws -> [Project] {
         let data = try await request("/api/projects")
         return try JSONDecoder().decode(ProjectsEnvelope.self, from: data).projects
