@@ -37,6 +37,9 @@ struct ChatView: View {
     @State private var viewportHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var gapRepair: Task<Void, Never>?
+    /// False until the opening transcript is pinned to the bottom — content is
+    /// hidden (loader shown) so the settling scroll is never visible.
+    @State private var revealed = false
     private let previewMessages: [ChatMessage]?
 
     init(sessionId: String, projectId: String, isRemote: Bool, title: String, token: String,
@@ -185,12 +188,30 @@ struct ChatView: View {
                 if followMode { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             // Initial jump after history load: lazy row heights settle over several
-            // frames, so re-pin the bottom a few times, non-animated.
+            // frames, so re-pin the bottom a few times, non-animated. The transcript
+            // stays INVISIBLE (opacity 0 + loader) while that happens — the user
+            // must never watch the view "scroll fast to the bottom"; it appears
+            // already sitting on the last message (the iMessage open behavior).
             .onChange(of: loadingHistory) { loading in
-                if !loading { settleToBottom(proxy) }
+                if !loading {
+                    settleToBottom(proxy)
+                    // Reveal on first bottom contact (sentinel appears) — see
+                    // .onChange(atBottom) — with a hard fallback so an odd layout
+                    // can never leave the chat permanently hidden.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { revealed = true }
+                }
+            }
+            .onChange(of: atBottom) { isAtBottom in
+                if isAtBottom && !loadingHistory { revealed = true }
+            }
+            .opacity(revealed ? 1 : 0)
+            .overlay {
+                if !revealed {
+                    MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
-                if !atBottom {
+                if !atBottom && revealed {
                     Button {
                         followMode = true
                         // NON-animated + settled: an animated long jump over the
