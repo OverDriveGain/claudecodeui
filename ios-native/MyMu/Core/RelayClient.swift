@@ -19,6 +19,8 @@ final class RelayClient: ObservableObject {
     /// Bumped on EVERY content mutation (new message, stream chunk, history swap).
     /// The view follows this — messages.count misses stream growth inside one message.
     @Published var revision = 0
+    /// Context-window fullness from the last history fetch (nil until known).
+    @Published var context: ContextUsage?
 
     private let token: String
     private(set) var sessionId: String
@@ -144,6 +146,7 @@ final class RelayClient: ObservableObject {
             guard let self else { return }
             if let h = try? await APIClient(token: self.token).history(sessionId: self.sessionId) {
                 if !self.isLoading { self.setHistory(h.messages) }
+                if let ctx = h.context { self.context = ctx }
             }
         }
     }

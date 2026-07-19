@@ -126,12 +126,20 @@ struct FileNode: Codable, Identifiable, Equatable {
     }
 }
 
+struct ContextUsage: Codable, Equatable {
+    let usedTokens: Int
+    let windowTokens: Int
+    /// 0…1 fullness of the agent's context window.
+    var fraction: Double { windowTokens > 0 ? min(1, Double(usedTokens) / Double(windowTokens)) : 0 }
+}
+
 struct HistoryResponse: Codable {
     let messages: [ChatMessage]
     let total: Int?
     let hasMore: Bool?
     let offset: Int?
     let limit: Int?
+    let context: ContextUsage?
 }
 
 // MARK: - AnyCodable — hold arbitrary JSON for tool payloads

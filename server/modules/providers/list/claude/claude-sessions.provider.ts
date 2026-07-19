@@ -490,6 +490,27 @@ function parseTaskNotification(content: string): TaskNotificationPayload | null 
   return null;
 }
 
+/**
+ * Context-window fullness from raw transcript entries: the LAST assistant entry
+ * carrying `message.usage` describes the most recent API call — its input +
+ * cache tokens (plus that turn's output) approximate what the next call will
+ * occupy. Window size comes from CONTEXT_WINDOW (same env the web UI uses).
+ */
+export function deriveContextUsage(raws: unknown[]): { usedTokens: number; windowTokens: number } | null {
+  for (let i = raws.length - 1; i >= 0; i--) {
+    const r = raws[i] as AnyRecord | null;
+    const u = (r?.message as AnyRecord | undefined)?.usage as AnyRecord | undefined;
+    if (u && typeof u.input_tokens === 'number') {
+      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      const usedTokens =
+        n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens) + n(u.output_tokens);
+      const windowTokens = Number.parseInt(process.env.CONTEXT_WINDOW || '', 10) || 200_000;
+      return { usedTokens, windowTokens };
+    }
+  }
+  return null;
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -956,7 +977,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         const total = reachedStart ? this.countConversationMessages(normalized) : 0;
         const hasMore = !reachedStart || start > 0;
 
-        return { messages, total, hasMore, offset: normalizedOffset, limit: normalizedLimit };
+        return {
+          messages, total, hasMore, offset: normalizedOffset, limit: normalizedLimit,
+          context: deriveContextUsage(rawTail) ?? undefined,
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[ClaudeProvider] Failed to load session tail ${sessionId}:`, message);
@@ -978,6 +1002,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const normalized = this.normalizeRawMessages(rawMessages, sessionId);
     const total = this.countConversationMessages(normalized);
 
-    return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+    return {
+      messages: normalized, total, hasMore: false, offset: 0, limit: null,
+      context: deriveContextUsage(rawMessages) ?? undefined,
+    };
   }
 }

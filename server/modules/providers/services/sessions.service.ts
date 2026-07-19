@@ -13,6 +13,7 @@ import { AppError } from '@/shared/utils.js';
 // Remote-control proxy — read-only history fetch for connected agent sessions.
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
+import { deriveContextUsage } from '@/modules/providers/list/claude/claude-sessions.provider.js';
 import { currentAgentAllow, isNameAllowedForUser } from '@/services/user-context.js';
 
 type ArchivedSessionListItem = {
@@ -140,13 +141,14 @@ export const sessionsService = {
         if (msg.kind !== 'tool_result') total += 1;
       }
 
+      const context = deriveContextUsage(events) ?? undefined;
       if (limit === null) {
-        return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+        return { messages: normalized, total, hasMore: false, offset: 0, limit: null, context };
       }
 
       const start = Math.max(0, totalNormalized - offset - limit);
       const end = Math.max(0, totalNormalized - offset);
-      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit };
+      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit, context };
     }
 
     const session = sessionsDb.getSessionById(sessionId);

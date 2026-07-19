@@ -70,10 +70,15 @@ struct ChatView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink {
-                    FilesView(projectId: projectId, token: appState.token ?? "", title: title)
-                } label: {
-                    Image(systemName: "folder").foregroundColor(Theme.primary)
+                HStack(spacing: 12) {
+                    if let ctx = relay.context {
+                        ContextMeter(usage: ctx)
+                    }
+                    NavigationLink {
+                        FilesView(projectId: projectId, token: appState.token ?? "", title: title)
+                    } label: {
+                        Image(systemName: "folder").foregroundColor(Theme.primary)
+                    }
                 }
             }
         }
@@ -329,6 +334,7 @@ struct ChatView: View {
             do {
                 let h = try await appState.api.history(sessionId: sid)
                 relay.setHistory(h.messages)
+                if let ctx = h.context { relay.context = ctx }
             } catch {
                 loadError = error.localizedDescription
             }
@@ -511,4 +517,34 @@ private struct ChatComposer: View {
     }
 
     private var sendButtonActive: Bool { relay.isLoading || canSend }
+}
+
+
+/// Tiny ring showing how full the agent's context window is (green → amber →
+/// red as it fills). Updated from history fetches: on open and at each turn end.
+struct ContextMeter: View {
+    let usage: ContextUsage
+
+    private var color: Color {
+        switch usage.fraction {
+        case ..<0.6: return Color(hex: "6BBF6B")
+        case ..<0.85: return .orange
+        default: return Theme.danger
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Theme.border, lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: usage.fraction)
+                .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(Int(usage.fraction * 100))")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundColor(Theme.mutedText)
+        }
+        .frame(width: 24, height: 24)
+        .accessibilityLabel("Context \(Int(usage.fraction * 100)) percent full")
+    }
 }

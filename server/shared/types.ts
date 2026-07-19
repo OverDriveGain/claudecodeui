@@ -264,6 +264,9 @@ export type FetchHistoryResult = {
   offset: number;
   limit: number | null;
   tokenUsage?: unknown;
+  /** Context-window fullness derived from the transcript's last usage-bearing
+   *  assistant message — lets clients show a "context X% full" meter. */
+  context?: { usedTokens: number; windowTokens: number };
 };
 
 // ---------------------------
