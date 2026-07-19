@@ -131,6 +131,20 @@ final class RelayClient: ObservableObject {
         isLoading = false
     }
 
+    /// Reconcile the working indicator with the server's live agent status — the
+    /// stream only flips isLoading when a frame ARRIVES, so opening a chat whose
+    /// agent is already mid-turn (quiet inside a long tool call) showed no loader
+    /// at all. Poll-safe: only ever turns the indicator ON; the stream's complete
+    /// (or the server watchdog) turns it off.
+    func syncRunningState(_ api: APIClient) async {
+        guard isRemote else { return }
+        if let st = try? await api.agentStatus(),
+           let mine = st.first(where: { $0.id == sessionId }),
+           mine.running == true, !isLoading {
+            isLoading = true
+        }
+    }
+
     // MARK: History
 
     func setHistory(_ history: [ChatMessage]) {

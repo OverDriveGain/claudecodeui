@@ -86,6 +86,15 @@ struct ChatView: View {
             }
         }
         .task { await start() }
+        // Agent already working when the chat opens (or a turn starts silently):
+        // check the live status endpoint now and every 10s as a backstop.
+        .task {
+            guard isRemote else { return }
+            while !Task.isCancelled {
+                await relay.syncRunningState(appState.api)
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+            }
+        }
         .onDisappear { relay.disconnect() }
     }
 
