@@ -219,12 +219,6 @@ struct ChatView: View {
             .overlay(alignment: .bottom) {
                 if relay.isLoading && !loadingHistory && revealed {
                     MyMuLoader()
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(Theme.surface.opacity(0.94))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
                         .padding(.bottom, 8)
                         .transition(.opacity)
                         .allowsHitTesting(false)
