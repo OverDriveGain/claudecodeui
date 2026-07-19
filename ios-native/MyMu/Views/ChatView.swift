@@ -545,4 +545,3 @@ struct ContextMeter: View {
             .accessibilityLabel("\(usage.usedTokens) context tokens used")
     }
 }
-}
