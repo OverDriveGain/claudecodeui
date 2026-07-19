@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
@@ -25,6 +26,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const canvas = useCanvasState(conversationId);
   const [proposalState, setProposalState] = useState<'idle' | 'working' | 'error'>('idle');
   const [genEnabled, setGenEnabled] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [genState, setGenState] = useState<'idle' | 'working' | 'error'>('idle');
   const [genProgress, setGenProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [brief, setBrief] = useState('');
@@ -128,6 +130,15 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         /* leave disabled */
       }
     })();
+    (async () => {
+      try {
+        const res = await api.bldr.admin.me();
+        const data = res.ok ? await res.json() : null;
+        if (!cancelled) setIsAdmin(Boolean(data?.admin));
+      } catch {
+        /* not admin */
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -190,6 +201,15 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
             </div>
           )}
         </div>
+        {isAdmin && (
+          <Link
+            to="/admin"
+            title="Pane endpoints (admin)"
+            className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
+          >
+            ⚙ Admin
+          </Link>
+        )}
         <button
           type="button"
           onClick={handleProceed}

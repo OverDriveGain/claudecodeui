@@ -149,13 +149,13 @@ export default function ChatMessagesPane({
            Just a minimal prompt inviting the user to start. */
         <div className="flex h-full items-center justify-center px-4">
           <div className="max-w-md text-center">
+            {/* Fixed copy on purpose — the providerSelection i18n keys belong to the
+                upstream provider picker and say "Choose Your AI Assistant". */}
             <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-              {t('providerSelection.title', { defaultValue: 'Start your project' })}
+              Start your project
             </h2>
             <p className="mt-1 text-[13px] text-muted-foreground">
-              {t('providerSelection.description', {
-                defaultValue: 'Describe what you want to build and the assistant will help.',
-              })}
+              Describe what you want to build and the assistant will help.
             </p>
           </div>
         </div>
