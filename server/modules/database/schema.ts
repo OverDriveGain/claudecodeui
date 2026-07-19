@@ -111,6 +111,20 @@ CREATE TABLE IF NOT EXISTS app_config (
 );
 `;
 
+// BTI: passwordless email-magic-token login. A one-time code is emailed to the
+// user and pasted into the chat; we store only its hash + an expiry. Rows are
+// consumed (single-use) on successful verification.
+export const LOGIN_TOKENS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS login_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    consumed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -150,4 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 ${LAST_SCANNED_AT_SQL}
 
 ${APP_CONFIG_TABLE_SCHEMA_SQL}
+
+${LOGIN_TOKENS_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_login_tokens_email ON login_tokens(email);
 `;

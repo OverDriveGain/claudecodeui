@@ -23,8 +23,11 @@ const initialState: LoginFormState = {
  */
 export default function LoginForm() {
   const { t } = useTranslation('auth');
-  const { login } = useAuth();
+  const { login, register } = useAuth();
 
+  // BTI: this screen does double duty — sign in OR create a new account — so a
+  // returning customer logs in and a new one registers, both without leaving it.
+  const [isRegister, setIsRegister] = useState(false);
   const [formState, setFormState] = useState<LoginFormState>(initialState);
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -45,20 +48,23 @@ export default function LoginForm() {
       }
 
       setIsSubmitting(true);
-      const result = await login(formState.username.trim(), formState.password);
+      const result = isRegister
+        ? await register(formState.username.trim(), formState.password)
+        : await login(formState.username.trim(), formState.password);
       if (!result.success) {
         setErrorMessage(result.error);
       }
       setIsSubmitting(false);
     },
-    [formState.password, formState.username, login, t],
+    [formState.password, formState.username, isRegister, login, register, t],
   );
 
   return (
     <AuthScreenLayout
       title={t('login.title')}
       description={t('login.description')}
-      footerText="Enter your credentials to access MyMu"
+      logo={<img src="/logo-256.png" alt="BLDR" className="h-16 w-16 rounded-xl" />}
+      footerText="Sign in or create an account to access BLDR"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField
@@ -79,7 +85,7 @@ export default function LoginForm() {
           placeholder={t('login.placeholders.password')}
           isDisabled={isSubmitting}
           type="password"
-          autoComplete="current-password"
+          autoComplete={isRegister ? 'new-password' : 'current-password'}
         />
 
         <AuthErrorAlert errorMessage={errorMessage} />
@@ -89,7 +95,24 @@ export default function LoginForm() {
           disabled={isSubmitting}
           className="w-full rounded-md bg-blue-600 px-4 py-2 font-medium text-white transition-colors duration-200 hover:bg-blue-700 disabled:bg-blue-400"
         >
-          {isSubmitting ? t('login.loading') : t('login.submit')}
+          {isSubmitting
+            ? t('login.loading')
+            : isRegister
+              ? t('setup.submit', { defaultValue: 'Create account' })
+              : t('login.submit')}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsRegister((prev) => !prev);
+            setErrorMessage('');
+          }}
+          className="w-full text-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {isRegister
+            ? t('login.haveAccount', { defaultValue: 'Already have an account? Sign in' })
+            : t('login.needAccount', { defaultValue: 'Need an account? Create one' })}
         </button>
       </form>
     </AuthScreenLayout>

@@ -82,10 +82,10 @@ export default function SetupForm() {
 
   return (
     <AuthScreenLayout
-      title="Welcome to MyMu"
+      title="Welcome to BLDR"
       description="Set up your account to get started"
       footerText="This is a single-user system. Only one account can be created."
-      logo={<img src="/logo-256.png" alt="MyMu" className="h-16 w-16 rounded-xl" />}
+      logo={<img src="/logo-256.png" alt="BLDR" className="h-16 w-16 rounded-xl" />}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField

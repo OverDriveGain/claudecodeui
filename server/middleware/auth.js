@@ -45,6 +45,15 @@ const authenticateToken = async (req, res, next) => {
     token = req.query.token;
   }
 
+  // BTI: also accept the httpOnly cookie set by the email-magic-code login,
+  // so a browser session works without the client attaching a header.
+  if (!token && req.headers.cookie) {
+    const match = req.headers.cookie.match(/(?:^|;\s*)bldr_token=([^;]+)/);
+    if (match) {
+      token = decodeURIComponent(match[1]);
+    }
+  }
+
   if (!token) {
     return res.status(401).json({ error: 'Access denied. No token provided.' });
   }

@@ -45,8 +45,54 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
+    // BTI passwordless email-token login (driven from the chat gate).
+    // NB: no `credentials: 'include'` — same-origin requests already send/store
+    // cookies under the default 'same-origin' mode, and 'include' against the
+    // server's wildcard CORS (`Allow-Origin: *`, no Allow-Credentials) makes the
+    // browser reject the response ("Network error") before our code sees it.
+    requestToken: (email) => fetch('/api/auth/request-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    }),
+    tokenLogin: (token) => fetch('/api/auth/token-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }),
     user: () => authenticatedFetch('/api/auth/user'),
     logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
+  },
+
+  // bldr project manifest + assets. assetUrl is used directly in <img>/<iframe>
+  // src (authed via the same-origin bldr_token cookie); rev busts the cache.
+  bldr: {
+    manifest: () => authenticatedFetch('/api/bldr/manifest'),
+    // <img>/<iframe> can't send an Authorization header, and the cookie may not
+    // survive the proxy chain — so carry the JWT as a query token (the asset
+    // endpoint accepts ?token=). rev busts the cache when an asset is rewritten.
+    assetUrl: (assetPath, rev) => {
+      const token = localStorage.getItem('auth-token');
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+      return `/api/bldr/asset?path=${encodeURIComponent(assetPath)}&rev=${rev ?? 0}${tokenParam}`;
+    },
+    // "Proceed with the project" — the BTI proposal PDF for the current design.
+    // A plain navigable URL (carries the JWT as ?token=) so an <a download> works.
+    proposalUrl: () => {
+      const token = localStorage.getItem('auth-token');
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+      return `/api/bldr/proposal.pdf${tokenParam}`;
+    },
+    // Route B: is the design agent (bti-bldr-gpt) reachable over A2A yet?
+    generateStatus: () => authenticatedFetch('/api/bldr/generate/status'),
+    // Kick off async per-pane generation from a brief (returns immediately).
+    generate: (brief) =>
+      authenticatedFetch('/api/bldr/generate', {
+        method: 'POST',
+        body: JSON.stringify({ brief: brief || '' }),
+      }),
+    // Poll the in-flight generation job (per-pane state: pending/working/done/failed).
+    generateJob: () => authenticatedFetch('/api/bldr/generate/job'),
   },
 
   // Protected endpoints

@@ -180,6 +180,47 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [checkOnboardingStatus, setSession],
   );
 
+  // BTI: enter email → a durable login token is emailed.
+  const requestToken = useCallback<AuthContextValue['requestToken']>(async (email) => {
+    try {
+      setError(null);
+      const response = await api.auth.requestToken(email);
+      const payload = await parseJsonSafely<{ success?: boolean; delivered?: boolean; devToken?: string; error?: string }>(response);
+      if (!response.ok || !payload?.success) {
+        const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
+        setError(message);
+        return { success: false, error: message };
+      }
+      return { success: true, delivered: Boolean(payload.delivered), devToken: payload.devToken };
+    } catch (caughtError) {
+      console.error('requestToken error:', caughtError);
+      setError(AUTH_ERROR_MESSAGES.networkError);
+      return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+    }
+  }, []);
+
+  // BTI: paste a login token → establish the session.
+  const loginWithToken = useCallback<AuthContextValue['loginWithToken']>(async (token) => {
+    try {
+      setError(null);
+      const response = await api.auth.tokenLogin(token);
+      const payload = await parseJsonSafely<AuthSessionPayload>(response);
+      if (!response.ok || !payload?.token || !payload.user) {
+        const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
+        setError(message);
+        return { success: false, error: message };
+      }
+      setSession(payload.user, payload.token);
+      setNeedsSetup(false);
+      await checkOnboardingStatus();
+      return { success: true };
+    } catch (caughtError) {
+      console.error('loginWithToken error:', caughtError);
+      setError(AUTH_ERROR_MESSAGES.networkError);
+      return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+    }
+  }, [checkOnboardingStatus, setSession]);
+
   const logout = useCallback(() => {
     const tokenToInvalidate = token;
     clearSession();
@@ -201,6 +242,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       error,
       login,
       register,
+      requestToken,
+      loginWithToken,
       logout,
       refreshOnboardingStatus,
     }),
@@ -213,6 +256,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       needsSetup,
       refreshOnboardingStatus,
       register,
+      requestToken,
+      loginWithToken,
       token,
       user,
     ],

@@ -66,6 +66,31 @@ export const userDb = {
       .get(username) as UserRow | undefined;
   },
 
+  /**
+   * BTI: passwordless email login. Finds the user whose username is this email,
+   * creating one on first sight. The password column is unused for magic-token
+   * accounts, so we store a random throwaway hash to satisfy NOT NULL.
+   * `randomPasswordHash` is supplied by the caller to avoid importing crypto here.
+   */
+  getOrCreateByEmail(email: string, randomPasswordHash: string): UserPublicRow {
+    const db = getConnection();
+    const existing = db
+      .prepare('SELECT id, username, created_at, last_login FROM users WHERE username = ? AND is_active = 1')
+      .get(email) as UserPublicRow | undefined;
+    if (existing) {
+      return existing;
+    }
+    const result = db
+      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
+      .run(email, randomPasswordHash);
+    return {
+      id: Number(result.lastInsertRowid),
+      username: email,
+      created_at: new Date().toISOString(),
+      last_login: null,
+    };
+  },
+
   /** Updates the last_login timestamp. Non-fatal — logs but does not throw. */
   updateLastLogin(userId: number): void {
     try {

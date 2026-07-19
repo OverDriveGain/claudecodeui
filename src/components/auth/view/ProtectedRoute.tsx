@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { IS_PLATFORM } from '../../../constants/config';
+import { CHAT_LOGIN, IS_PLATFORM } from '../../../constants/config';
 import { useAuth } from '../context/AuthContext';
 import Onboarding from '../../onboarding/view/Onboarding';
 import AuthLoadingScreen from './AuthLoadingScreen';
+import ChatLoginExperience from './ChatLoginExperience';
 import LoginForm from './LoginForm';
 import SetupForm from './SetupForm';
 
@@ -15,6 +16,15 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (isLoading) {
     return <AuthLoadingScreen />;
+  }
+
+  // BTI chat-login owns its whole branch: logged-out → sign in through the chat;
+  // signed-in → straight into the app (no Setup/Onboarding screens for customers).
+  if (CHAT_LOGIN) {
+    if (!user) {
+      return <ChatLoginExperience />;
+    }
+    return <>{children}</>;
   }
 
   if (IS_PLATFORM) {

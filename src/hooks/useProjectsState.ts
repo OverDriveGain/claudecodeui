@@ -3,7 +3,8 @@ import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '../utils/api';
 import { sessionActivityStore } from '../stores/useSessionActivityStore';
-import { IS_PLATFORM, DEFAULT_PROJECT_FOR_EMPTY_SHELL } from '../constants/config';
+import { CHAT_LOGIN, IS_PLATFORM, DEFAULT_PROJECT_FOR_EMPTY_SHELL } from '../constants/config';
+import { useAuth } from '../components/auth/context/AuthContext';
 import type {
   AppSocketMessage,
   AppTab,
@@ -248,6 +249,9 @@ export function useProjectsState({
   isMobile,
   activeSessions,
 }: UseProjectsStateArgs) {
+  const { user } = useAuth();
+  const workspacePath = typeof user?.workspacePath === 'string' ? user.workspacePath : null;
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
@@ -330,7 +334,9 @@ export function useProjectsState({
   // Hydrates TaskMaster details for the given `projectId`. The project
   // identifier comes directly from the DB-driven /api/projects response.
   const hydrateProjectTaskMaster = useCallback(async (projectId: string) => {
-    if (!projectId) {
+    // 'user-workspace' is the CHAT_LOGIN sentinel project — it has no DB row,
+    // so TaskMaster endpoints would just 404 (console noise on every login).
+    if (!projectId || projectId === 'user-workspace') {
       return;
     }
 
@@ -431,16 +437,25 @@ export function useProjectsState({
   }, [hydrateProjectTaskMaster, selectedProject?.projectId]);
 
   // Auto-select a project so the user lands straight in (no sidebar/picker).
-  // BTI single-window app: in platform mode always use one dedicated workspace
-  // project; otherwise keep the upstream "only one project" behaviour.
+  // BTI single-window app: in platform mode use one dedicated workspace project;
+  // in CHAT_LOGIN mode use the signed-in user's OWN workspace (so they land in
+  // their panes+conversation, never the "choose your project" screen); otherwise
+  // keep the upstream "only one project" behaviour.
   useEffect(() => {
     if (selectedProject || sessionId) return;
     if (IS_PLATFORM) {
       setSelectedProject(DEFAULT_PROJECT_FOR_EMPTY_SHELL as unknown as Project);
+    } else if (CHAT_LOGIN && workspacePath) {
+      setSelectedProject({
+        projectId: 'user-workspace',
+        displayName: 'My workspace',
+        fullPath: workspacePath,
+        path: workspacePath,
+      } as unknown as Project);
     } else if (!isLoadingProjects && projects.length === 1) {
       setSelectedProject(projects[0]);
     }
-  }, [isLoadingProjects, projects, selectedProject, sessionId]);
+  }, [isLoadingProjects, projects, selectedProject, sessionId, workspacePath]);
 
   useEffect(() => {
     if (!latestMessage) {

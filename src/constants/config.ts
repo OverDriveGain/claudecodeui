@@ -5,6 +5,15 @@
 export const IS_PLATFORM = import.meta.env.VITE_IS_PLATFORM === 'true';
 
 /**
+ * BTI Chat-Login mode.
+ * When true, an unauthenticated visitor is dropped straight into the app shell
+ * (empty panes + chat) and signs in *through the chat* via an email magic-code,
+ * instead of seeing the Setup/Login screens. Requires real auth on the server
+ * (i.e. platform mode OFF) so each verified user maps to their own session.
+ */
+export const CHAT_LOGIN = import.meta.env.VITE_CHAT_LOGIN === 'true';
+
+/**
  * For empty shell instances where no project is provided,
  * we use a default project object to ensure the shell can still function.
  * This prevents errors related to missing project data.
