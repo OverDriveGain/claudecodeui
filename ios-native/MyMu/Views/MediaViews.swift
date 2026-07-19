@@ -19,19 +19,26 @@ struct DeliveredMediaView: View {
         if let url {
             switch ext {
             case "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "avif":
+                // CONSTANT height, placeholder and loaded alike. The old
+                // placeholder (120pt) grew to the loaded size (≤320pt) seconds
+                // after the transcript pinned its bottom — every image load
+                // reflowed the list and re-opened the blank strip when opening
+                // an agent conversation. A row's height must NEVER change after
+                // first layout.
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let img):
                         img.resizable().scaledToFit()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     case .failure:
                         fallback(url)
                     case .empty:
-                        ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+                        ProgressView().frame(maxWidth: .infinity)
                     @unknown default:
                         fallback(url)
                     }
                 }
-                .frame(maxHeight: 320)
+                .frame(height: 240, alignment: .leading)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             case "mp4", "mov", "m4v", "webm", "ogv":
                 VideoBubble(url: url)
