@@ -520,31 +520,29 @@ private struct ChatComposer: View {
 }
 
 
-/// Tiny ring showing how full the agent's context window is (green → amber →
-/// red as it fills). Updated from history fetches: on open and at each turn end.
+/// Consumed context tokens for the open conversation, as a raw count ("265k").
+/// A percentage needs a correctly configured window size to be truthful — the
+/// raw number is always right. Updated on open and at each turn end.
 struct ContextMeter: View {
     let usage: ContextUsage
 
-    private var color: Color {
-        switch usage.fraction {
-        case ..<0.6: return Color(hex: "6BBF6B")
-        case ..<0.85: return .orange
-        default: return Theme.danger
-        }
+    private var label: String {
+        let n = usage.usedTokens
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return "\(Int((Double(n) / 1_000).rounded()))k" }
+        return "\(n)"
     }
 
     var body: some View {
-        ZStack {
-            Circle().stroke(Theme.border, lineWidth: 3)
-            Circle()
-                .trim(from: 0, to: usage.fraction)
-                .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            Text("\(Int(usage.fraction * 100))")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundColor(Theme.mutedText)
-        }
-        .frame(width: 24, height: 24)
-        .accessibilityLabel("Context \(Int(usage.fraction * 100)) percent full")
+        Text(label)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundColor(Theme.mutedText)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Theme.surface)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
+            .accessibilityLabel("\(usage.usedTokens) context tokens used")
     }
+}
 }
