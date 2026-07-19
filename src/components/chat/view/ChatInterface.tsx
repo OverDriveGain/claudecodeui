@@ -226,7 +226,7 @@ function ChatInterface({
   // so both surfaces read one source of truth and can't disagree. Cleared on turn end
   // and when the viewed session changes / the view unmounts.
   useEffect(() => {
-    const activeSessionId = currentSessionId || selectedSession?.id || '';
+    const activeSessionId = selectedSession?.id || currentSessionId || '';
     if (!activeSessionId) return;
     sessionActivityStore.setLocalRunning(activeSessionId, isLoading);
     return () => sessionActivityStore.setLocalRunning(activeSessionId, false);
@@ -241,7 +241,7 @@ function ChatInterface({
   useEffect(() => {
     if (!selectedProject?.isRemoteAgent) return;
     const agentSessionId =
-      selectedProject.remoteSessionId || currentSessionId || selectedSession?.id;
+      selectedProject.remoteSessionId || selectedSession?.id || currentSessionId;
     if (!agentSessionId) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     sendMessage({ type: 'rc-subscribe', sessionId: agentSessionId });
@@ -333,7 +333,7 @@ function ChatInterface({
   // Pending permission/question requests are kept for ALL sessions in state (so
   // switching agents and coming back doesn't lose an unanswered question). Show only
   // the currently-viewed session's here; a request with no sessionId is legacy/global.
-  const viewSessionId = currentSessionId || selectedSession?.id || null;
+  const viewSessionId = selectedSession?.id || currentSessionId || null;
   const visiblePermissionRequests = useMemo(
     () => pendingPermissionRequests.filter((r) => !r.sessionId || r.sessionId === viewSessionId),
     [pendingPermissionRequests, viewSessionId],
@@ -504,7 +504,7 @@ function ChatInterface({
         providerModelCacheCatalog={providerModelCacheCatalog}
         providerModelsRefreshing={providerModelsRefreshing}
         onHardRefreshProviderModels={hardRefreshProviderModels}
-        currentSessionId={currentSessionId || selectedSession?.id || null}
+        currentSessionId={selectedSession?.id || currentSessionId || null}
         onSelectProviderModel={selectProviderModel}
       />
     </PermissionContext.Provider>
