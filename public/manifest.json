@@ -1,7 +1,7 @@
 {
-  "name": "MyMu",
-  "short_name": "MyMu",
-  "description": "MyMu — see and drive your Claude Code agents",
+  "name": "BLDR",
+  "short_name": "BLDR",
+  "description": "BLDR — design your 3D-printed building",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1f1f1e",

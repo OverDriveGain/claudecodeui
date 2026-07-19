@@ -1,31 +1,24 @@
 import { useSyncExternalStore } from 'react';
 
-import type {
-  CanvasState,
-  CanvasUpdate,
-  CanvasPaneId,
-} from '../components/canvas/types';
-import { CANVAS_PANE_IDS } from '../components/canvas/types';
+import type { CanvasState, CanvasUpdate, BldrManifest, SourceValue } from '../components/canvas/types';
+import { SOURCE_IDS, SOURCE_TYPE_BY_ID } from '../components/canvas/dataSources';
 
 /**
- * Project Canvas store.
+ * bldr Canvas store.
  *
- * Holds one reduced CanvasState per conversation (keyed by the conversation id —
- * in MyMu that's `selectedProject.projectId`, which is the DB project id for
- * local sessions and `remote:<id>` for relay agents). The store is fed by the
- * `update_canvas` MCP tool: ToolRenderer taps each tool_use frame and calls
- * `canvasStore.applyUpdate(conversationId, payload)`.
+ * One CanvasState per conversation/project (keyed by `selectedProject.projectId`).
+ * Two inputs, one shape:
+ *  - `applyManifest` seeds from the on-disk bldr.json (so panes render on load and
+ *    survive refresh).
+ *  - `applyUpdate` merges a live `update_canvas` tool payload (the agent changing a
+ *    source). Each touched source bumps its own `rev` → the pane refreshes in place
+ *    (cache-bust), nothing else re-renders.
  *
- * Reducer = latest-value-per-pane: an update only touches the panes it names;
- * each touched pane bumps its own `rev` so heavy renderers (three.js) can detect
- * an in-place mutation. Implemented as a tiny external store (no zustand in this
- * project) consumed via useSyncExternalStore, exactly like useSessionActivityStore.
+ * Tiny external store (no zustand here) read via useSyncExternalStore.
  */
 
 function emptyState(): CanvasState {
-  const rev = {} as Record<CanvasPaneId, number>;
-  for (const id of CANVAS_PANE_IDS) rev[id] = 0;
-  return { values: {}, rev, updates: 0 };
+  return { sources: {}, updates: 0 };
 }
 
 const states = new Map<string, CanvasState>();
@@ -35,58 +28,71 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
-/**
- * Apply one update_canvas payload to a conversation's canvas, returning a NEW
- * CanvasState object (so useSyncExternalStore snapshots are referentially stable
- * when nothing changed). Only the panes present in `update` are touched.
- */
+// Mockup phase: the image panes are real BTI proposal drawings seeded from the
+// manifest. LIVE agent updates must never replace them (only costs/location move),
+// so we drop them from any update_canvas payload. The manifest path is unaffected.
+const READONLY_LIVE_PANES = new Set(['top_view', 'section', 'elevations', 'front_view']);
+
+/** Pull the per-source values out of an update payload (named fields OR a sources map). */
+function collectSources(update: CanvasUpdate): Record<string, Omit<SourceValue, 'rev'>> {
+  const out: Record<string, Omit<SourceValue, 'rev'>> = {};
+  if (update.sources && typeof update.sources === 'object') {
+    for (const [id, v] of Object.entries(update.sources)) {
+      if (v && typeof v === 'object' && !READONLY_LIVE_PANES.has(id)) out[id] = v as Omit<SourceValue, 'rev'>;
+    }
+  }
+  for (const id of SOURCE_IDS) {
+    if (READONLY_LIVE_PANES.has(id)) continue;
+    const v = (update as Record<string, unknown>)[id];
+    if (v && typeof v === 'object') out[id] = v as Omit<SourceValue, 'rev'>;
+  }
+  return out;
+}
+
 function reduce(prev: CanvasState, update: CanvasUpdate): CanvasState {
-  const next: CanvasState = {
-    values: { ...prev.values },
-    rev: { ...prev.rev },
-    note: prev.note,
-    updates: prev.updates,
+  const incoming = collectSources(update);
+  const ids = Object.keys(incoming);
+  if (ids.length === 0 && typeof update.note !== 'string') return prev;
+
+  const nextSources = { ...prev.sources };
+  for (const id of ids) {
+    const value = incoming[id];
+    const prevRev = prev.sources[id]?.rev ?? 0;
+    const type = value.type || prev.sources[id]?.type || SOURCE_TYPE_BY_ID[id] || 'image';
+    nextSources[id] = { ...value, type, rev: prevRev + 1 } as SourceValue;
+  }
+
+  return {
+    sources: nextSources,
+    note: typeof update.note === 'string' ? update.note : prev.note,
+    updates: prev.updates + 1,
   };
-
-  let changed = false;
-
-  if (update.top_view) {
-    next.values.top_view = update.top_view;
-    next.rev.top_view += 1;
-    changed = true;
-  }
-  if (update.three_d) {
-    next.values.three_d = update.three_d;
-    next.rev.three_d += 1;
-    changed = true;
-  }
-  if (update.costs) {
-    next.values.costs = update.costs;
-    next.rev.costs += 1;
-    changed = true;
-  }
-  if (typeof update.free === 'string') {
-    next.values.free = update.free;
-    next.rev.free += 1;
-    changed = true;
-  }
-  if (update.map) {
-    next.values.map = update.map;
-    next.rev.map += 1;
-    changed = true;
-  }
-
-  if (typeof update.note === 'string') {
-    next.note = update.note;
-    changed = true;
-  }
-
-  if (!changed) return prev;
-  next.updates = prev.updates + 1;
-  return next;
 }
 
 export const canvasStore = {
+  /** Seed/replace a conversation's canvas from the on-disk manifest. */
+  applyManifest(conversationId: string, manifest: BldrManifest): void {
+    if (!conversationId || !manifest || typeof manifest !== 'object') return;
+    const sources: Record<string, SourceValue> = {};
+    for (const [id, v] of Object.entries(manifest.sources || {})) {
+      sources[id] = {
+        ...(v as SourceValue),
+        type: (v as SourceValue).type || SOURCE_TYPE_BY_ID[id] || 'image',
+        rev: (v as SourceValue).rev ?? 1,
+      };
+    }
+    const prev = states.get(conversationId);
+    // Don't clobber live updates already applied for unchanged sources: only seed
+    // if we have nothing, or merge manifest as the baseline.
+    const next: CanvasState = {
+      sources: { ...sources, ...(prev?.sources ?? {}) },
+      note: prev?.note,
+      updates: (prev?.updates ?? 0) + 1,
+    };
+    states.set(conversationId, next);
+    emit();
+  },
+
   applyUpdate(conversationId: string, update: CanvasUpdate): void {
     if (!conversationId) return;
     const prev = states.get(conversationId) || emptyState();
@@ -113,8 +119,7 @@ const EMPTY = emptyState();
 
 /**
  * Subscribe a component to one conversation's canvas state. Returns a stable
- * snapshot (the shared EMPTY object until the first update) so the component
- * re-renders only when that conversation's canvas actually changes.
+ * snapshot (the shared EMPTY object until the first update).
  */
 export function useCanvasState(conversationId: string | undefined): CanvasState {
   return useSyncExternalStore(

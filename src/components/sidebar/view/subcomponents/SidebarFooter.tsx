@@ -84,7 +84,7 @@ export default function SidebarFooter({
       {/* Desktop version line */}
       {!IS_PLATFORM && (
         <div className="hidden px-3 py-2 text-center md:block">
-          <span className="text-[10px] text-muted-foreground/40">MyMu v{currentVersion}</span>
+          <span className="text-[10px] text-muted-foreground/40">bldr v{currentVersion}</span>
         </div>
       )}
 

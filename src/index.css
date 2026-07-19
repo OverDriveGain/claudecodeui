@@ -21,17 +21,17 @@
   }
 }
 
-/* MyMu brand loader — a soft opacity wave across the letters (subtle, no scale swell).
+/* bldr brand loader — a soft opacity wave across the letters (subtle, no scale swell).
    Each letter fades from nearly-hidden up to full brand brightness, in sequence. */
-@keyframes mymu-letter-pulse {
+@keyframes bldr-letter-pulse {
   0%, 60%, 100% { opacity: 0.1; }
   25% { opacity: 1; }
 }
-.mymu-loader {
+.bldr-loader {
   display: inline-flex;
   align-items: baseline;
-  /* Mixed-case wordmark "MyMu" — NOT Koulen (which is uppercase-only and would
-     render it as "MYMU"). Use the app's sans so the lowercase y/u show. */
+  /* Mixed-case wordmark "bldr" — NOT Koulen (which is uppercase-only and would
+     render it as "BLDR"). Use the app's sans so the lowercase y/u show. */
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-weight: 600;
   text-transform: none;
@@ -39,14 +39,14 @@
   line-height: 1;
   color: hsl(var(--primary));
 }
-.mymu-loader span {
+.bldr-loader span {
   display: inline-block;
-  animation: mymu-letter-pulse 1.6s ease-in-out infinite;
+  animation: bldr-letter-pulse 1.6s ease-in-out infinite;
 }
-.mymu-loader span:nth-child(1) { animation-delay: 0s; }
-.mymu-loader span:nth-child(2) { animation-delay: 0.16s; }
-.mymu-loader span:nth-child(3) { animation-delay: 0.32s; }
-.mymu-loader span:nth-child(4) { animation-delay: 0.48s; }
+.bldr-loader span:nth-child(1) { animation-delay: 0s; }
+.bldr-loader span:nth-child(2) { animation-delay: 0.16s; }
+.bldr-loader span:nth-child(3) { animation-delay: 0.32s; }
+.bldr-loader span:nth-child(4) { animation-delay: 0.48s; }
 
 @layer base {
   :root {
@@ -113,7 +113,7 @@
   }
 
   .dark {
-    /* MyMu neutral dark scale — pure grayscale (0% saturation), anchored on the
+    /* bldr neutral dark scale — pure grayscale (0% saturation), anchored on the
        chat background = #222222 (the M icon's bg, the darkest surface). Every
        surface above it steps lighter on the same neutral axis. No blue tint.
        Only --primary/--ring (brand purple) and --destructive (error red) carry hue. */

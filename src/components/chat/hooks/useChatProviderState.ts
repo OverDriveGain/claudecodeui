@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
+import { CHAT_LOGIN } from '../../../constants/config';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type {
   ProjectSession,
@@ -10,7 +11,11 @@ import type {
 } from '../../../types/app';
 
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
-  claude: 'opus',
+  // Customer (chat-login) sessions have NO model chooser, so they always use this
+  // fallback. They only call MCP tools with variables + write to canvas panes/data
+  // (no system-building), so Haiku 4.5 — fastest, cheapest ($1/$5 per Mtok) — fits.
+  // Devs/interactive users still pick a stronger model via the chooser (persisted).
+  claude: 'haiku',
   cursor: 'gpt-5.3-codex',
   codex: 'gpt-5.4',
   gemini: 'gemini-3.1-pro-preview',
@@ -55,7 +60,11 @@ type ChangeActiveModelApiResponse = {
 };
 
 export function useChatProviderState({ selectedSession, selectedProject }: UseChatProviderStateArgs) {
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
+  // BTI: customer (chat-login) sessions run non-interactively — the agent acts in
+  // the user's sandboxed workspace without permission prompts (incl. update_canvas).
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(
+    CHAT_LOGIN ? 'bypassPermissions' : 'default',
+  );
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   const [provider, setProvider] = useState<LLMProvider>(() => {
     return (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
@@ -263,6 +272,13 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
 
   useEffect(() => {
     if (!selectedSession?.id) {
+      return;
+    }
+
+    // BTI: customer (chat-login) sessions are always non-interactive — force
+    // bypass regardless of any per-session saved mode, so no approval prompts.
+    if (CHAT_LOGIN) {
+      setPermissionMode('bypassPermissions');
       return;
     }
 

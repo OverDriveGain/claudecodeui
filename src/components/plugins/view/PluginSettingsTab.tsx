@@ -75,7 +75,7 @@ const UNOFFICIAL_PLUGIN_RECOMMENDATIONS: PluginRecommendation[] = [
   },
   {
     id: 'prism',
-    translationKey: 'prismMyMu',
+    translationKey: 'prismbldr',
     repoUrl: PRISM_CLOUDCLI_PLUGIN_URL,
     installedNames: ['prism'],
     icon: Activity,

@@ -12,7 +12,6 @@ import type {
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 
 import MessageComponent from './MessageComponent';
-import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 
 interface ChatMessagesPaneProps {
   scrollContainerRef: RefObject<HTMLDivElement>;
@@ -155,29 +154,20 @@ export default function ChatMessagesPane({
           </div>
         </div>
       ) : chatMessages.length === 0 ? (
-        <ProviderSelectionEmptyState
-          selectedSession={selectedSession}
-          currentSessionId={currentSessionId}
-          provider={provider}
-          setProvider={setProvider}
-          textareaRef={textareaRef}
-          claudeModel={claudeModel}
-          setClaudeModel={setClaudeModel}
-          cursorModel={cursorModel}
-          setCursorModel={setCursorModel}
-          codexModel={codexModel}
-          setCodexModel={setCodexModel}
-          geminiModel={geminiModel}
-          setGeminiModel={setGeminiModel}
-          opencodeModel={opencodeModel}
-          setOpenCodeModel={setOpenCodeModel}
-          providerModelCatalog={providerModelCatalog}
-          providerModelsLoading={providerModelsLoading}
-          tasksEnabled={tasksEnabled}
-          isTaskMasterInstalled={isTaskMasterInstalled}
-          onShowAllTasks={onShowAllTasks}
-          setInput={setInput}
-        />
+        /* BTI: customer-facing single conversation — no provider/model chooser.
+           Just a minimal prompt inviting the user to start. */
+        <div className="flex h-full items-center justify-center px-4">
+          <div className="max-w-md text-center">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+              {t('providerSelection.title', { defaultValue: 'Start your project' })}
+            </h2>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              {t('providerSelection.description', {
+                defaultValue: 'Describe what you want to build and the assistant will help.',
+              })}
+            </p>
+          </div>
+        </div>
       ) : (
         <div className="mx-auto w-full max-w-4xl space-y-3 px-1 sm:space-y-4 sm:px-2">
           {/* Loading indicator for older messages (hide when load-all is active) */}

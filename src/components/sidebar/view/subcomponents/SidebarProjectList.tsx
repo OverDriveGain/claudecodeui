@@ -104,7 +104,7 @@ export default function SidebarProjectList({
   );
 
   useEffect(() => {
-    let baseTitle = 'MyMu';
+    let baseTitle = 'bldr';
     const displayName = selectedProject?.displayName?.trim();
     if (displayName) {
       baseTitle = `${displayName} - ${baseTitle}`;

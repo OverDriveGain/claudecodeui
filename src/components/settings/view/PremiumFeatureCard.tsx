@@ -14,7 +14,7 @@ export default function PremiumFeatureCard({
   icon,
   title,
   description,
-  ctaText = 'Available with MyMu Pro',
+  ctaText = 'Available with bldr Pro',
 }: PremiumFeatureCardProps) {
   return (
     <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 p-5">

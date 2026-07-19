@@ -129,7 +129,9 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
 
   const refreshCurrentProjectTaskMaster = useCallback(
     async (projectId: string) => {
-      if (!projectId || !user || !token) {
+      // 'user-workspace' is the CHAT_LOGIN sentinel project — no DB row, so
+      // TaskMaster endpoints 404. Skip instead of logging an error per login.
+      if (!projectId || projectId === 'user-workspace' || !user || !token) {
         return;
       }
 

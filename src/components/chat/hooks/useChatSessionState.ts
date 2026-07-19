@@ -2,12 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MutableRefObject } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { CHAT_LOGIN } from '../../../constants/config';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, Provider } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 
 import { normalizedToChatMessages } from './useChatMessages';
+import { CANVAS_TOOL_NAME } from '../tools/CanvasTap';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
@@ -697,8 +699,20 @@ export function useChatSessionState({
   }, [selectedProject, selectedSession?.id, selectedSession?.__provider]);
 
   const visibleMessages = useMemo(() => {
-    if (chatMessages.length <= visibleMessageCount) return chatMessages;
-    return chatMessages.slice(-visibleMessageCount);
+    // BTI customer mode: only show the conversation itself — thinking, tool
+    // calls, and system notices are agent internals. The update_canvas tool
+    // message must stay: its render IS the tap that feeds the canvas store
+    // (ToolRenderer → CanvasUpdateTap), and it draws nothing in-thread.
+    const messages = CHAT_LOGIN
+      ? chatMessages.filter(
+          (m) =>
+            !m.isThinking &&
+            !m.isSystemNotice &&
+            (!m.isToolUse || m.toolName === CANVAS_TOOL_NAME),
+        )
+      : chatMessages;
+    if (messages.length <= visibleMessageCount) return messages;
+    return messages.slice(-visibleMessageCount);
   }, [chatMessages, visibleMessageCount]);
 
   useEffect(() => {
