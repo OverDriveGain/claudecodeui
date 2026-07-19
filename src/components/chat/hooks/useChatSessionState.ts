@@ -315,6 +315,18 @@ export function useChatSessionState({
     return scrollHeight - scrollTop - clientHeight < 50;
   }, []);
 
+  // True while any inline <video>/<audio> in the transcript is actively playing.
+  // A new streamed message must NOT yank the view to the bottom mid-playback: that
+  // scrolls the player off-screen (and on iOS drops inline playback) — reads to the
+  // user as the video "closing itself". Mature chat UIs pause auto-scroll while media
+  // plays; we do the same and let it resume once the user pauses/finishes.
+  const isMediaPlaying = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return false;
+    const media = Array.from(container.querySelectorAll('video, audio')) as HTMLMediaElement[];
+    return media.some((m) => !m.paused && !m.ended && m.currentTime > 0);
+  }, []);
+
   const loadOlderMessages = useCallback(
     async (container: HTMLDivElement) => {
       if (!container || isLoadingMoreRef.current || isLoadingMoreMessages) return false;
@@ -349,11 +361,23 @@ export function useChatSessionState({
     [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
   );
 
+  // Synchronous mirror of "the user has scrolled away from the bottom". The
+  // auto-scroll effect schedules scrollToBottom() on a short delay; while an
+  // agent streams fast there is almost always a scroll queued, so a user who
+  // scrolls up gets yanked back down when that stale timer fires. The delayed
+  // scroll re-reads THIS ref at fire time (React state would be stale in the
+  // closure) and aborts if the user has since scrolled up.
+  const isUserScrolledUpRef = useRef(false);
+
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
+    // A content-growth reflow does not emit a scroll event (it moves the
+    // bottom, not scrollTop), so this only fires on real user/programmatic
+    // scrolls — making it a faithful read of the user's intent.
     const nearBottom = isNearBottom();
+    isUserScrolledUpRef.current = !nearBottom;
     setIsUserScrolledUp(!nearBottom);
 
     if (!allMessagesLoadedRef.current) {
@@ -387,6 +411,7 @@ export function useChatSessionState({
     pendingScrollRestoreRef.current = null;
     lastMessageCountRef.current = 0;
     setIsUserScrolledUp(false);
+    isUserScrolledUpRef.current = false;
   }, [selectedProject?.projectId, selectedSession?.id]);
 
   // Initial scroll to bottom — robust to lazy content reflow.
@@ -740,7 +765,14 @@ export function useChatSessionState({
       const hasSelection =
         typeof window !== 'undefined' &&
         (window.getSelection?.()?.toString().trim().length ?? 0) > 0;
-      if (grew && !isUserScrolledUp && !hasSelection) setTimeout(() => scrollToBottom(), 50);
+      // Re-check intent at fire time via the ref: during fast streaming a scroll
+      // is almost always queued, and a user who scrolls up in that window would
+      // otherwise be dragged back to the bottom when this timer fires.
+      if (grew && !isUserScrolledUp && !hasSelection && !isMediaPlaying()) {
+        setTimeout(() => {
+          if (!isUserScrolledUpRef.current && !isMediaPlaying()) scrollToBottom();
+        }, 50);
+      }
       return;
     }
 
@@ -750,13 +782,15 @@ export function useChatSessionState({
     const newHeight = container.scrollHeight;
     const heightDiff = newHeight - prevHeight;
     if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom, isMediaPlaying]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
     container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
   }, [handleScroll]);
 
   useEffect(() => {

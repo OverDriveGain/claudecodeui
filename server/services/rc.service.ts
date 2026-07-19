@@ -7,7 +7,15 @@
 // capture policy, and the `remote:<sessionId>` virtual-project id helpers.
 
 // rc-client.js is plain ESM (allowJs build) — imported as untyped.
-import { isRemoteControlConfigured, listAgents, getSessionCwd } from '@/remote-control/rc-client.js';
+import {
+  isRemoteControlConfigured,
+  listAgents,
+  getSessionCwd,
+  hasMultipleAccounts,
+  getAccountErrors,
+} from '@/remote-control/rc-client.js';
+import { currentAgentAllow } from '@/services/user-context.js';
+import { resolveLocalSessionCwd } from '@/services/local-sessions.js';
 
 // Paging the whole fleet is heavier than a single request. The roster itself
 // changes slowly, but worker_status (the running dot) needs to feel live, and the
@@ -26,6 +34,8 @@ export type RemoteAgent = {
   repo?: string | null; // stable identity across restarts (git repo)
   lastEventAt?: string; // recency — what the claude.ai "Recents" view orders by
   createdAt?: string;
+  account?: string; // owning claude.ai account label — set only when >1 account
+  // is configured (RC_ACCOUNTS), so single-account deployments stay unchanged.
 };
 
 /** Drop the leading slash a slash-command launch leaves on a session title. */
@@ -87,7 +97,28 @@ function captureAllows(title: string): boolean {
   return true;
 }
 
-let agentCache: { at: number; value: RemoteAgent[] } | null = null;
+/**
+ * Narrow the (already deployment-filtered) agent list to what the CURRENT user is
+ * allowed to see — their per-user `agent_allow` patterns (carried via the request
+ * context). null/empty = unrestricted (admin). Applied on every read, so it gates
+ * the list AND — because isAgentCaptureAllowed derives from this list — drive,
+ * subscribe, history, and file access for that user too. Matches the cleaned
+ * title (what the list already exposes).
+ */
+function filterByUser(agents: RemoteAgent[]): RemoteAgent[] {
+  const allow = currentAgentAllow();
+  if (!allow || allow.length === 0) return agents;
+  const res = allow.map(globToRegExp);
+  return agents.filter((a) => res.some((re) => re.test(a.title)));
+}
+
+// `value` is the collapsed one-leaf-per-agent list the GUI shows; `sessions` is the
+// UNCOLLAPSED capture-filtered list (every session of every visible agent, cleaned
+// titles). The visibility gate checks `sessions`: an agent restart rotates its leaf
+// to a new session id, and a conversation/files view still open on the OLD id must
+// keep working (files browse, history, drive) — the policy is per-agent, not
+// per-session. Gating on the collapsed list silently 404'd/black-holed those views.
+let agentCache: { at: number; value: RemoteAgent[]; sessions: RemoteAgent[] } | null = null;
 
 /**
  * List the operator's agents — every `claude --remote-control` session, online and
@@ -98,9 +129,12 @@ let agentCache: { at: number; value: RemoteAgent[] } | null = null;
 export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAgent[]> {
   if (!remoteControlEnabled()) return [];
   const now = Date.now();
-  if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return agentCache.value;
+  if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return filterByUser(agentCache.value);
   try {
     const raw = await listAgents();
+    // Only expose the account label when the deployment actually runs >1 account —
+    // keeps single-account deployments visually and behaviourally identical.
+    const multi = hasMultipleAccounts();
     type Mapped = RemoteAgent & { active: boolean };
     const mapped: Mapped[] = (Array.isArray(raw) ? raw : [])
       .map((s: Record<string, unknown>) => ({
@@ -112,6 +146,7 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         repo: s.repo ? String(s.repo) : null,
         lastEventAt: s.lastEventAt ? String(s.lastEventAt) : undefined,
         createdAt: s.createdAt ? String(s.createdAt) : undefined,
+        account: multi && s.account ? String(s.account) : undefined,
       }))
       // Capture policy matches the agent NAME, so test the cleaned title — a
       // slash-launched session ("/environment") must still match the "environment"
@@ -144,10 +179,14 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
       .sort((a, b) =>
         String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
       );
-    agentCache = { at: now, value };
-    return value;
+    agentCache = {
+      at: now,
+      value,
+      sessions: mapped.map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title })),
+    };
+    return filterByUser(value);
   } catch {
-    return agentCache?.value ?? [];
+    return filterByUser(agentCache?.value ?? []);
   }
 }
 
@@ -156,8 +195,13 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
  * history so the policy can't be bypassed by guessing a cse_ id from the browser.
  */
 export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean> {
-  const agents = await listRemoteAgents();
-  return agents.some((a) => a.id === sessionId);
+  const agents = await listRemoteAgents(); // refreshes the cache (TTL-guarded)
+  if (agents.some((a) => a.id === sessionId)) return true;
+  // Not the current leaf — allow any OTHER session of a visible agent too (same
+  // capture + per-user title filters). An agent restart rotates the leaf id; views
+  // still open on the previous session must keep browsing/driving it.
+  const sessions = agentCache?.sessions ?? [];
+  return filterByUser(sessions).some((a) => a.id === sessionId);
 }
 
 /**
@@ -167,9 +211,32 @@ export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean>
  */
 export async function getRemoteAgentCwd(sessionId: string): Promise<string | null> {
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return null;
+  // Prefer claude's own per-host session registry (~/.claude/sessions/*.json): it
+  // holds the real cwd for a bridge session, which the relay reports as empty. This
+  // resolves any agent running on THIS host with no relay round-trip. Cross-host
+  // agents miss here and fall through to the relay (and, later, the peer mesh).
+  const localCwd = resolveLocalSessionCwd(sessionId);
+  if (localCwd) return localCwd;
   try {
     return (await getSessionCwd(sessionId)) || null;
   } catch {
     return null;
+  }
+}
+
+export type AccountError = { label: string; status: number; message: string };
+
+/**
+ * Per-account roster-fetch errors from the last agent-list fanout — e.g. an expired
+ * token on one login. Empty when every account is healthy (and always empty for a
+ * single-account deployment, which throws-then-serves-stale instead). Lets the UI
+ * warn "account X failed" without hiding the accounts that DID load.
+ */
+export function listAccountErrors(): AccountError[] {
+  if (!hasMultipleAccounts()) return [];
+  try {
+    return (getAccountErrors() as AccountError[]) ?? [];
+  } catch {
+    return [];
   }
 }

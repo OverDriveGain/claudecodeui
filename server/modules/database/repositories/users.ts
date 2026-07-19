@@ -18,9 +18,10 @@ type UserRow = {
   git_name: string | null;
   git_email: string | null;
   has_completed_onboarding: number;
+  agent_allow: string | null;
 };
 
-type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'created_at' | 'last_login'>;
+type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow'>;
 
 type UserGitConfig = {
   git_name: string | null;
@@ -47,11 +48,11 @@ export const userDb = {
   },
 
   /** Inserts a new user and returns the created ID + username. */
-  createUser(username: string, passwordHash: string): CreateUserResult {
+  createUser(username: string, passwordHash: string, agentAllow: string | null = null): CreateUserResult {
     const db = getConnection();
     const result = db
-      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-      .run(username, passwordHash);
+      .prepare('INSERT INTO users (username, password_hash, agent_allow) VALUES (?, ?, ?)')
+      .run(username, passwordHash, agentAllow);
     return { id: result.lastInsertRowid, username };
   },
 
@@ -109,7 +110,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -119,7 +120,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

@@ -642,8 +642,14 @@ export function useChatComposerState({
         }
       }
 
+      // Authoritative source of "which conversation am I typing into" is the
+      // selected-session prop, which updates synchronously on switch. `currentSessionId`
+      // is local state that lags by one effect cycle, so preferring it here routed a
+      // message typed in the just-opened conversation to the previously-active one.
+      // Fall back to `currentSessionId` only for the new/in-flight session case where
+      // no session is selected yet (session_created populated currentSessionId).
       const effectiveSessionId =
-        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
+        selectedSession?.id || currentSessionId || sessionStorage.getItem('cursorSessionId');
 
       const userMessage: ChatMessage = {
         type: 'user',

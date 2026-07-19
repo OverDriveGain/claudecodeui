@@ -43,6 +43,8 @@ export type MainContentProps = {
   sendMessage: (message: unknown) => void;
   latestMessage: unknown;
   isMobile: boolean;
+  // Agent-view share-token session: chat + files only, no sidebar hamburger.
+  agentViewMode?: boolean;
   onMenuClick: () => void;
   isLoading: boolean;
   onInputFocusChange: (focused: boolean) => void;
@@ -64,6 +66,7 @@ export type MainContentHeaderProps = {
   selectedSession: ProjectSession | null;
   shouldShowTasksTab: boolean;
   isMobile: boolean;
+  agentViewMode?: boolean;
   onMenuClick: () => void;
 };
 

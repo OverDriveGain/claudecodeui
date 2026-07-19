@@ -161,6 +161,9 @@ export default tseslint.config(
             "server/shared/utils.{js,ts}",
             "server/shared/frontmatter.ts",
             "server/shared/claude-cli-path.ts",
+            "server/services/user-context.{js,ts}", // per-request user context (agent visibility) — a cross-cutting runtime helper
+            "server/services/local-sessions.{js,ts}", // per-host live-session registry lookup (relay session → cwd) — cross-cutting runtime helper
+            "server/services/federation.{js,ts}", // cross-host CCUI peer file federation (config + peer discovery + proxy client)
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

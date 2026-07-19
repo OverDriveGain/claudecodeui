@@ -17,6 +17,24 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const readStoredToken = (): string | null => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
 
+// Token-in-URL sign-in: opening the app with ?token=… (e.g. an agent-view share
+// link) adopts that token as the session and strips it from the address bar so
+// it isn't kept in the visible URL or accidentally re-shared via copy-paste.
+const adoptUrlToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const urlToken = url.searchParams.get('token');
+    if (!urlToken) return null;
+    localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, urlToken);
+    url.searchParams.delete('token');
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    return urlToken;
+  } catch {
+    return null;
+  }
+};
+
 const persistToken = (token: string) => {
   localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
 };
@@ -36,7 +54,7 @@ export function useAuth(): AuthContextValue {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(() => readStoredToken());
+  const [token, setToken] = useState<string | null>(() => adoptUrlToken() ?? readStoredToken());
   const [isLoading, setIsLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
@@ -106,7 +124,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       setUser(userPayload.user);
-      await checkOnboardingStatus();
+      // Agent-view bearers aren't DB users — onboarding doesn't apply to them.
+      if (userPayload.user.agentView) {
+        setHasCompletedOnboarding(true);
+      } else {
+        await checkOnboardingStatus();
+      }
     } catch (caughtError) {
       console.error('[Auth] Auth status check failed:', caughtError);
       setError(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
@@ -241,6 +264,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       hasCompletedOnboarding,
       error,
       login,
+      loginWithToken,
       register,
       requestToken,
       loginWithToken,
@@ -252,6 +276,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       hasCompletedOnboarding,
       isLoading,
       login,
+      loginWithToken,
       logout,
       needsSetup,
       refreshOnboardingStatus,

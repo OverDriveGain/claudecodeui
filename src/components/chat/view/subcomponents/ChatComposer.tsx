@@ -331,15 +331,10 @@ export default function ChatComposer({
               onScroll={(event) => onTextareaScrollSync(event.target as HTMLTextAreaElement)}
               onFocus={() => {
                 onInputFocusChange?.(true);
-                // iOS: when the on-screen keyboard animates up it can sit OVER the
-                // composer, so tapping to type shows a blank area ("I open to write
-                // and see nothing"). Once the keyboard has settled, nudge the
-                // textarea into view. Touch-only so desktop focus is untouched.
-                if (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches) {
-                  setTimeout(() => {
-                    textareaRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                  }, 350);
-                }
+                // NOTE: do NOT scrollIntoView here. On iOS an animated scroll fired
+                // right after focus dismisses the on-screen keyboard mid-open. The
+                // app container is pinned to the visual viewport (AppContent), so
+                // the composer already sits above the keyboard without any nudge.
               }}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}

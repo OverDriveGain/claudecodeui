@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
+
 import { userDb, appConfigDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { runWithUserContext } from '../services/user-context.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -29,7 +31,8 @@ const authenticateToken = async (req, res, next) => {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
       req.user = user;
-      return next();
+      // Carry the user's per-agent visibility for the rest of the request.
+      return runWithUserContext(user.agent_allow, next);
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -61,6 +64,20 @@ const authenticateToken = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
 
+    // Agent-view token: a share token bound to ONE agent name, not a DB user.
+    // The bearer gets exactly that agent's view — the standard per-user scoping
+    // (agent_allow) enforces it across list/history/files/drive, so nothing else
+    // is reachable. No DB row backs it; identity is the signed claim itself.
+    if (typeof decoded.agentView === 'string' && decoded.agentView.length > 0) {
+      req.user = {
+        id: 'agent-view',
+        username: `agent-view:${decoded.agentView}`,
+        agentView: decoded.agentView,
+        agent_allow: decoded.agentView,
+      };
+      return runWithUserContext(decoded.agentView, next);
+    }
+
     // Verify user still exists and is active
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
@@ -78,7 +95,8 @@ const authenticateToken = async (req, res, next) => {
     }
 
     req.user = user;
-    next();
+    // Carry the user's per-agent visibility for the rest of the request.
+    return runWithUserContext(user.agent_allow, next);
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
@@ -104,7 +122,7 @@ const authenticateWebSocket = (token) => {
     try {
       const user = userDb.getFirstUser();
       if (user) {
-        return { id: user.id, userId: user.id, username: user.username };
+        return { id: user.id, userId: user.id, username: user.username, agent_allow: user.agent_allow };
       }
       return null;
     } catch (error) {
@@ -120,12 +138,21 @@ const authenticateWebSocket = (token) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // Agent-view share token — same scoped identity as the REST path above.
+    if (typeof decoded.agentView === 'string' && decoded.agentView.length > 0) {
+      return {
+        userId: 'agent-view',
+        username: `agent-view:${decoded.agentView}`,
+        agentView: decoded.agentView,
+        agent_allow: decoded.agentView,
+      };
+    }
     // Verify user actually exists in database (matches REST authenticateToken behavior)
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
       return null;
     }
-    return { userId: user.id, username: user.username };
+    return { userId: user.id, username: user.username, agent_allow: user.agent_allow };
   } catch (error) {
     console.error('WebSocket token verification error:', error);
     return null;

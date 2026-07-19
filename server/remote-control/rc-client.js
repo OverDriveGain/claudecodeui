@@ -44,11 +44,73 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // Anthropic's beta tag for the remote-control session/event API.
 const BETA_CCR = 'ccr-byoc-2025-07-29';
 
-// sessionId -> { upstream: WebSocket, ws: clientWriter, replayBuffer }
+// sendMessage resilience: total passes over the account list, and the backoff
+// base between passes (pass n waits n * base ms). Worst case adds ~2.2s before
+// the user sees a delivery error — cheap insurance against transient relay 401s.
+const RC_SEND_MAX_PASSES = Math.max(1, Number.parseInt(process.env.RC_SEND_MAX_PASSES || '', 10) || 3);
+const RC_SEND_RETRY_BASE_MS = Math.max(100, Number.parseInt(process.env.RC_SEND_RETRY_BASE_MS || '', 10) || 750);
+
+// sessionId -> { upstream: WebSocket, ws: clientWriter, replayBuffer, normalize,
+//                retries, closedByUs, pingTimer, reconnectTimer, alive }
 const activeRemoteSessions = new Map();
 // Max frames retained per session for reconnect replay (~one turn's worth). The
 // buffer is cleared at each turn end, so this only caps a single very long turn.
 const RC_REPLAY_BUFFER_MAX = 400;
+// Upstream keepalive + reconnect tuning. claude.ai/code's own client pings every
+// 30s and retries transient closes; without both, a long-lived quiet subscription
+// dies silently (idle timeout / NAT drop) and the GUI stops receiving until a
+// manual refresh — the exact "message only appears after refresh" failure.
+const RC_PING_INTERVAL_MS = 30 * 1000;
+const RC_RECONNECT_BASE_MS = 1000;
+const RC_RECONNECT_CAP_MS = 30 * 1000;
+const RC_RECONNECT_MAX_RETRIES = 8;
+// Cap the frames emitted from the missed-events top-up after a reconnect.
+const RC_TOPUP_EMIT_MAX = 200;
+// Stall watchdog. The upstream subscription can go silently stale: the socket keeps
+// answering transport pings (so the heartbeat sees it alive) while the relay stops
+// forwarding session events — observed in production as "messages stop mid-turn and
+// the loader never clears, until a manual refresh" with ZERO close/error events all
+// day. The heartbeat cannot catch this, so while a turn looks active but the socket
+// has been quiet, cross-check the relay's EVENTS API over HTTP: emit what the socket
+// missed (the client upserts by id, so duplicates collapse), finalize the turn when a
+// flushed `result` shows up, and recycle the demonstrably-stale socket.
+const RC_STALL_CHECK_MS = Math.max(2000, Number.parseInt(process.env.RC_STALL_CHECK_MS || '', 10) || 10 * 1000);
+const RC_STALL_QUIET_MS = Math.max(5000, Number.parseInt(process.env.RC_STALL_QUIET_MS || '', 10) || 20 * 1000);
+// Cap of remembered live-delivered event uuids per session (staleness discriminator:
+// a topped-up event we already streamed is NOT evidence the socket missed anything).
+const RC_SEEN_UUIDS_MAX = 2000;
+// Raw ws OPEN state (ws library constant) — used to prune dead subscriber writers.
+const WS_OPEN_RAW = 1;
+
+/**
+ * All live subscriber writers for a session entry. The GUI can watch one agent from
+ * SEVERAL connections at once (phone + desktop, two tabs, the native app) — each
+ * subscribes with its own writer. The old model kept only the LATEST writer, so
+ * every re-subscribe STOLE the stream from the other viewers: the losing view froze
+ * mid-turn with a stuck loader until its own refresh stole the stream back (the
+ * exact "messages stop + loading forever until refresh" bug). Fan out to every
+ * writer instead; dead ones (closed sockets) are pruned on each use.
+ */
+function liveWriters(entry) {
+  if (!entry) return [];
+  if (!entry.writers) entry.writers = new Set();
+  if (entry.ws) entry.writers.add(entry.ws);
+  for (const w of entry.writers) {
+    const raw = w && w.ws;
+    if (raw && typeof raw.readyState === 'number' && raw.readyState !== WS_OPEN_RAW) {
+      entry.writers.delete(w);
+    }
+  }
+  return [...entry.writers];
+}
+
+/** Send one frame to every live subscriber of the entry (writer races swallowed). */
+function fanOut(entry, frame) {
+  for (const w of liveWriters(entry)) {
+    try { w.send(frame); } catch { /* writer race — pruned on the next emit */ }
+  }
+}
+
 // requestId -> { sessionId } so a permission answer routes to the right upstream WS.
 const pendingRemotePermissions = new Map();
 // rawRequestId -> timestamp of when we answered it. After answering, the agent takes
@@ -89,9 +151,193 @@ export function getRemoteAuth() {
   return { token, orgUuid };
 }
 
-/** Build request headers for the Anthropic API. */
-function headers({ beta, org, client } = {}) {
+// ── Multi-account credential registry ──────────────────────────────────────────
+// A deployment can drive agents from MORE THAN ONE claude.ai login at once. Set
+// RC_ACCOUNTS to a JSON array; every relay call is routed to the credential that owns
+// the session in question. Backward compatible: with RC_ACCOUNTS unset (or
+// empty/invalid) the registry collapses to a single "default" account sourced exactly
+// as before — RC_OAUTH_TOKEN/RC_ORG_UUID env, else the ~/.claude dotfiles.
+//
+// Each entry supplies BOTH a token and an org uuid, as literals OR as dotfile paths:
+//   label|name                              display/routing label (optional)
+//   token|accessToken                       literal OAuth token
+//   orgUuid|org_uuid|organizationUuid        literal org uuid
+//   credentialsPath|credentials_path         path to a .credentials.json
+//                                            (.claudeAiOauth.accessToken)
+//   claudeJsonPath|claude_json_path          path to a .claude.json
+//                                            (.oauthAccount.organizationUuid)
+// Paths WIN on freshness: they are read per-call, so an account's `claude` CLI
+// rewriting its dotfile after an OAuth refresh is picked up automatically — literal
+// tokens are a snapshot that expires. Fields can be mixed (literal org + path token).
+// An entry is kept only if it can yield both a token and an org uuid from some source.
+
+function expandHome(p) {
+  return typeof p === 'string' && p.startsWith('~')
+    ? path.join(os.homedir(), p.slice(1))
+    : p;
+}
+function readJsonFile(p) {
+  return JSON.parse(readFileSync(expandHome(p), 'utf8'));
+}
+
+// Parse RC_ACCOUNTS into unresolved SPECS (label + literal creds and/or dotfile paths).
+function parseAccountSpecs() {
+  const raw = process.env.RC_ACCOUNTS;
+  if (!raw || !raw.trim()) return null;
+  let arr;
+  try {
+    arr = JSON.parse(raw);
+  } catch {
+    console.error('[rc] RC_ACCOUNTS is not valid JSON — ignoring, using single-account fallback');
+    return null;
+  }
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  const seen = new Set();
+  const specs = [];
+  arr.forEach((a, i) => {
+    if (!a || typeof a !== 'object') return;
+    const label = String(a.label || a.name || `account${i + 1}`).trim() || `account${i + 1}`;
+    if (seen.has(label)) return;
+    const spec = {
+      label,
+      token: a.token || a.accessToken || null,
+      orgUuid: a.orgUuid || a.org_uuid || a.organizationUuid || null,
+      credentialsPath: a.credentialsPath || a.credentials_path || null,
+      claudeJsonPath: a.claudeJsonPath || a.claude_json_path || null,
+    };
+    // Need a source for BOTH fields (literal or path), else the entry is unusable.
+    if ((!spec.token && !spec.credentialsPath) || (!spec.orgUuid && !spec.claudeJsonPath)) return;
+    seen.add(label);
+    specs.push(spec);
+  });
+  return specs.length ? specs : null;
+}
+
+// Last successfully-resolved {token, orgUuid} per label — a transient dotfile read
+// failure (mid-rewrite, mount blip) falls back to this instead of dropping the account.
+const lastGoodAccount = new Map();
+// Labels that couldn't be resolved at all (never good) — surfaced via getAccountErrors.
+const accountResolveErrors = new Map();
+
+// Resolve one spec to {label, token, orgUuid}, reading any paths FRESH (per-call →
+// picks up a refreshed/rewritten dotfile). Falls back to last-known-good on a read
+// failure; returns null (and records an error) only if it never resolved.
+function resolveSpec(spec) {
+  let token = spec.token;
+  let orgUuid = spec.orgUuid;
+  let readErr = null;
+  if (!token && spec.credentialsPath) {
+    try { token = readJsonFile(spec.credentialsPath)?.claudeAiOauth?.accessToken || null; }
+    catch (e) { readErr = e; }
+  }
+  if (!orgUuid && spec.claudeJsonPath) {
+    try { orgUuid = readJsonFile(spec.claudeJsonPath)?.oauthAccount?.organizationUuid || null; }
+    catch (e) { readErr = e; }
+  }
+  if (token && orgUuid) {
+    const acct = { label: spec.label, token: String(token), orgUuid: String(orgUuid) };
+    lastGoodAccount.set(spec.label, acct);
+    accountResolveErrors.delete(spec.label);
+    return acct;
+  }
+  const prev = lastGoodAccount.get(spec.label);
+  if (prev) return prev; // transient — reuse last-known-good, no error
+  accountResolveErrors.set(spec.label, {
+    status: 0,
+    message: `could not read credentials (${readErr?.message || 'missing token or org uuid'})`,
+  });
+  return null;
+}
+
+// How many accounts are CONFIGURED (specs), regardless of whether each resolves right
+// now — so the multi-account UI/error surfacing stays on even if one account is
+// temporarily unreadable (its failure is reported rather than silently collapsing to
+// single-account).
+function configuredAccountCount() {
+  const specs = parseAccountSpecs();
+  return specs ? specs.length : 1;
+}
+
+// The active credential set. RC_ACCOUNTS wins (specs resolved per-call); otherwise a
+// single "default" account. If every configured account fails to resolve AND none has
+// a last-known-good value, fall through to the default so a boot-time path glitch
+// doesn't leave the proxy fully dark.
+export function getAccounts() {
+  const specs = parseAccountSpecs();
+  if (specs) {
+    const resolved = specs.map(resolveSpec).filter(Boolean);
+    if (resolved.length) return resolved;
+  }
   const { token, orgUuid } = getRemoteAuth();
+  return [{ label: 'default', token, orgUuid }];
+}
+
+export function hasMultipleAccounts() {
+  return configuredAccountCount() > 1;
+}
+
+function accountByLabel(label) {
+  return getAccounts().find((a) => a.label === label) || null;
+}
+
+// sessionId (BOTH cse_/session_ forms) -> owning account label. Populated whenever a
+// roster is fetched (listAgents) and whenever a relay call proves which credential a
+// session answers to. This is the authoritative routing table.
+const sessionAccountMap = new Map();
+function rememberAccountForSession(sessionId, label) {
+  if (!sessionId || !label) return;
+  sessionAccountMap.set(toCseId(sessionId), label);
+  sessionAccountMap.set(toSessionId(sessionId), label);
+}
+function knownAccountForSession(sessionId) {
+  const label =
+    sessionAccountMap.get(sessionId) ||
+    sessionAccountMap.get(toCseId(sessionId)) ||
+    sessionAccountMap.get(toSessionId(sessionId));
+  return label ? accountByLabel(label) : null;
+}
+
+// Resolve which credential owns a session. Fast path for a single-account
+// deployment (the only account). Otherwise consult the routing table; on a COLD miss
+// (an id requested before any roster fetch populated the map) refresh the roster once
+// — a fanout that repopulates the map — then re-check. Returns null only when the id
+// is unknown to every account, in which case read callers try each credential in turn
+// rather than 403 the request.
+async function resolveAccountForSession(sessionId) {
+  const accounts = getAccounts();
+  if (accounts.length <= 1) return accounts[0] || null;
+  const known = knownAccountForSession(sessionId);
+  if (known) return known;
+  try { await listAgents(); } catch { /* degrade — try-all order below */ }
+  return knownAccountForSession(sessionId);
+}
+
+// Credential try-order for a read: the resolved owner first, then the rest (so a
+// cold/unknown session still resolves by probing each account). Single-account
+// deployments get exactly one entry — unchanged behaviour.
+async function accountTryOrder(sessionId) {
+  const accounts = getAccounts();
+  if (accounts.length <= 1) return accounts;
+  const primary = await resolveAccountForSession(sessionId);
+  if (!primary) return accounts;
+  return [primary, ...accounts.filter((a) => a.label !== primary.label)];
+}
+
+// Per-account roster-fetch errors from the last listAgents fanout, so the UI can
+// surface "account X failed" without breaking the rest of the list.
+let lastListErrors = new Map();
+// Combine credential-resolve failures (unreadable dotfile path, never good) with
+// roster-fetch failures (expired token → 401). A roster error wins if a label has both.
+export function getAccountErrors() {
+  const out = new Map();
+  for (const [label, e] of accountResolveErrors) out.set(label, e);
+  for (const [label, e] of lastListErrors) out.set(label, e);
+  return [...out.entries()].map(([label, e]) => ({ label, ...e }));
+}
+
+/** Build request headers for the Anthropic API, authed as `account` (or the default). */
+function headers(account, { beta, org, client } = {}) {
+  const { token, orgUuid } = account || getRemoteAuth();
   const h = {
     Authorization: `Bearer ${token}`,
     'anthropic-version': ANTHROPIC_VERSION,
@@ -116,10 +362,9 @@ function toSessionId(sessionId) {
   return sessionId.startsWith('cse_') ? `session_${sessionId.slice('cse_'.length)}` : sessionId;
 }
 
-/** True when a usable OAuth token + org uuid are present (else the proxy is off). */
+/** True when at least one account has a usable OAuth token + org uuid (else off). */
 export function isRemoteControlConfigured() {
-  const { token, orgUuid } = getRemoteAuth();
-  return Boolean(token && orgUuid);
+  return getAccounts().some((a) => a.token && a.orgUuid);
 }
 
 /**
@@ -146,28 +391,9 @@ function isWorkerRunning(s) {
   return Number.isFinite(last) && Date.now() - last < RUNNING_MAX_IDLE_MS;
 }
 
-export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
-  // /v1/code/sessions is paginated (default 20, ordered most-recent-first) with a
-  // `cursor`/`next_cursor` scheme. Reading only page 1 hid every agent that wasn't
-  // recently active (e.g. an idle but connected agent), which is why one had to be
-  // "talked to" to surface. Page through so the WHOLE fleet is returned.
-  const rows = [];
-  let cursor = null;
-  for (let i = 0; i < maxPages; i++) {
-    const url = `${BASE}/v1/code/sessions?limit=${pageSize}`
-      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
-    const r = await fetch(url, { headers: headers() });
-    if (!r.ok) {
-      if (i === 0) throw new Error(`listAgents ${r.status}: ${(await r.text()).slice(0, 200)}`);
-      break; // partial fetch — return what we have rather than failing the list
-    }
-    const j = await r.json();
-    const batch = j.data || [];
-    rows.push(...batch);
-    cursor = j.next_cursor;
-    if (!cursor || batch.length === 0) break;
-  }
-  return rows.map((s) => ({
+// Shape one raw relay session row into the app's agent record.
+function mapAgentRow(s) {
+  return {
     id: s.id,
     title: (s.title || '').split('\n')[0].trim(),
     connected: s.connection_status === 'connected',
@@ -195,7 +421,65 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
     // Recency — the same signal the claude.ai "Recents" view orders by.
     lastEventAt: s.last_event_at || s.created_at || '',
     createdAt: s.created_at,
-  }));
+  };
+}
+
+// Page ONE account's whole session list. Never throws — returns { rows, error } so a
+// fanout can degrade gracefully (one expired token doesn't blank the whole roster).
+async function listAgentsForAccount(account, { pageSize, maxPages }) {
+  const rows = [];
+  let cursor = null;
+  for (let i = 0; i < maxPages; i++) {
+    const url = `${BASE}/v1/code/sessions?limit=${pageSize}`
+      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+    let r;
+    try {
+      r = await fetch(url, { headers: headers(account) });
+    } catch (err) {
+      return { rows, error: { status: 0, message: err?.message || 'network error' } };
+    }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      // Partial page-through already yielded rows — keep them, note the error.
+      return { rows, error: { status: r.status, message: body.slice(0, 200) } };
+    }
+    const j = await r.json();
+    const batch = j.data || [];
+    rows.push(...batch);
+    cursor = j.next_cursor;
+    if (!cursor || batch.length === 0) break;
+  }
+  return { rows, error: null };
+}
+
+// /v1/code/sessions is paginated (default 20, most-recent-first) with a
+// `cursor`/`next_cursor` scheme; page through so the WHOLE fleet returns. With
+// multiple accounts, fan out across all of them concurrently, tag each session with
+// its owning account label, and populate the sessionId->account routing table so the
+// drive/history/subscribe paths know which credential to use.
+export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
+  const accounts = getAccounts();
+  const settled = await Promise.all(
+    accounts.map((acc) => listAgentsForAccount(acc, { pageSize, maxPages })),
+  );
+  const errors = new Map();
+  const out = [];
+  settled.forEach((res, i) => {
+    const acc = accounts[i];
+    if (res.error) errors.set(acc.label, res.error);
+    for (const s of res.rows) {
+      rememberAccountForSession(s.id, acc.label);
+      out.push({ ...mapAgentRow(s), account: acc.label });
+    }
+  });
+  lastListErrors = errors;
+  // Every account failed AND produced nothing → throw so the caller (rc.service)
+  // serves its last-good cache, exactly as the single-account path did before.
+  if (out.length === 0 && errors.size === accounts.length && accounts.length > 0) {
+    const first = [...errors.values()][0];
+    throw new Error(`listAgents: all ${accounts.length} account(s) failed (e.g. ${first.status}: ${first.message})`);
+  }
+  return out;
 }
 
 /**
@@ -213,22 +497,34 @@ export async function listAgents({ pageSize = 200, maxPages = 8 } = {}) {
  * Returns `{ events, lastId }` where `lastId` is the cursor to resume from next.
  */
 export async function getSessionEvents(sessionId, { after = null, limit = 1000, maxPages = 1000 } = {}) {
-  const all = [];
-  let cursor = after;
-  let lastId = after;
-  for (let i = 0; i < maxPages; i++) {
-    const url = `${BASE}/v1/sessions/${sessionId}/events?limit=${limit}`
-      + (cursor ? `&after_id=${encodeURIComponent(cursor)}` : '');
-    const r = await fetch(url, { headers: headers({ beta: BETA_CCR, org: true }) });
-    if (!r.ok) break;
-    const j = await r.json();
-    const batch = Array.isArray(j.data) ? j.data : [];
-    all.push(...batch);
-    if (j.last_id) lastId = j.last_id;
-    if (!j.has_more || !batch.length || !j.last_id) break;
-    cursor = j.last_id;
+  // Try the owning account first; on a cold/unknown session, probe each credential in
+  // turn (a foreign session 404s under the wrong token) rather than failing outright.
+  const order = await accountTryOrder(sessionId);
+  for (const account of order) {
+    const all = [];
+    let cursor = after;
+    let lastId = after;
+    let anyOk = false;
+    for (let i = 0; i < maxPages; i++) {
+      const url = `${BASE}/v1/sessions/${sessionId}/events?limit=${limit}`
+        + (cursor ? `&after_id=${encodeURIComponent(cursor)}` : '');
+      const r = await fetch(url, { headers: headers(account, { beta: BETA_CCR, org: true }) });
+      if (!r.ok) break;
+      anyOk = true;
+      const j = await r.json();
+      const batch = Array.isArray(j.data) ? j.data : [];
+      all.push(...batch);
+      if (j.last_id) lastId = j.last_id;
+      if (!j.has_more || !batch.length || !j.last_id) break;
+      cursor = j.last_id;
+    }
+    if (anyOk) {
+      rememberAccountForSession(sessionId, account.label);
+      return { events: all, lastId };
+    }
+    // This account rejected the session (wrong owner / expired) — try the next.
   }
-  return { events: all, lastId };
+  return { events: [], lastId: after };
 }
 
 // sessionId -> { events: rawEvent[], lastId: cursor, fetchedAt: ms }. Turns the
@@ -388,20 +684,25 @@ const sessionCwdCache = new Map();
 export async function getSessionCwd(sessionId) {
   if (!sessionId) return null;
   if (sessionCwdCache.has(sessionId)) return sessionCwdCache.get(sessionId);
-  try {
-    const url = `${BASE}/v1/sessions/${toSessionId(sessionId)}`;
-    const r = await fetch(url, { headers: headers({ beta: BETA_CCR, org: true }) });
-    if (!r.ok) return null;
-    const j = await r.json();
-    const cwd =
-      (j && j.session_context && typeof j.session_context.cwd === 'string' && j.session_context.cwd) ||
-      (j && j.response_shape && j.response_shape.session_context && j.response_shape.session_context.cwd) ||
-      null;
-    if (cwd) sessionCwdCache.set(sessionId, cwd);
-    return cwd || null;
-  } catch {
-    return null;
+  const order = await accountTryOrder(sessionId);
+  for (const account of order) {
+    try {
+      const url = `${BASE}/v1/sessions/${toSessionId(sessionId)}`;
+      const r = await fetch(url, { headers: headers(account, { beta: BETA_CCR, org: true }) });
+      if (!r.ok) continue; // wrong account / expired — try the next
+      rememberAccountForSession(sessionId, account.label);
+      const j = await r.json();
+      const cwd =
+        (j && j.session_context && typeof j.session_context.cwd === 'string' && j.session_context.cwd) ||
+        (j && j.response_shape && j.response_shape.session_context && j.response_shape.session_context.cwd) ||
+        null;
+      if (cwd) sessionCwdCache.set(sessionId, cwd);
+      return cwd || null;
+    } catch {
+      // try the next account
+    }
   }
+  return null;
 }
 
 // ───────────────────────────── DRIVE SIDE ──────────────────────────────────
@@ -426,27 +727,46 @@ export async function sendMessage(sessionId, content) {
     },
   };
   const url = `${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`;
-  let r;
-  try {
-    r = await fetch(url, {
-      method: 'POST',
-      headers: headers({ beta: BETA_CCR, org: true, client: true }),
-      body: JSON.stringify({ events: [event] }),
-    });
-  } catch (err) {
-    console.error('[rc] sendMessage fetch threw', { sessionId, url, error: err?.message });
-    return { ok: false, status: 0, notActive: false };
+  const order = await accountTryOrder(sessionId);
+  let last = { ok: false, status: 0, notActive: false };
+  // The relay intermittently 401s tokens it accepts seconds later, and a starved
+  // host can throw transient network errors — so retry the whole account list a
+  // few times with backoff before surfacing an error to the user. A 409 "not
+  // active" is definitive and returns immediately; everything else is worth
+  // another pass.
+  for (let pass = 0; pass < RC_SEND_MAX_PASSES; pass++) {
+    if (pass > 0) await new Promise((res) => setTimeout(res, RC_SEND_RETRY_BASE_MS * pass));
+    for (const account of order) {
+      let r;
+      try {
+        r = await fetch(url, {
+          method: 'POST',
+          headers: headers(account, { beta: BETA_CCR, org: true, client: true }),
+          body: JSON.stringify({ events: [event] }),
+        });
+      } catch (err) {
+        console.error('[rc] sendMessage fetch threw', { sessionId, url, account: account.label, pass, error: err?.message });
+        last = { ok: false, status: 0, notActive: false };
+        continue;
+      }
+      if (r.ok) {
+        rememberAccountForSession(sessionId, account.label);
+        return { ok: true, status: r.status, notActive: false };
+      }
+      let body = '';
+      try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
+      // 409 "not active" comes from the OWNING account (the session exists but is
+      // archived) — a definitive answer; don't shop it to other accounts or retry.
+      const notActive = r.status === 409 && /not active/i.test(body);
+      if (notActive) {
+        rememberAccountForSession(sessionId, account.label);
+        return { ok: false, status: r.status, notActive: true };
+      }
+      console.error('[rc] sendMessage failed', { sessionId, url, account: account.label, pass, status: r.status, body });
+      last = { ok: false, status: r.status, notActive: false };
+    }
   }
-  if (!r.ok) {
-    let body = '';
-    try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
-    console.error('[rc] sendMessage failed', { sessionId, url, status: r.status, body });
-    // 409 "not active": the session is archived/disconnected and can't receive a
-    // message — surface that clearly instead of a generic failure.
-    const notActive = r.status === 409 && /not active/i.test(body);
-    return { ok: false, status: r.status, notActive };
-  }
-  return { ok: true, status: r.status, notActive: false };
+  return last;
 }
 
 /**
@@ -467,6 +787,10 @@ export async function attachSession(sessionId, ws, normalize) {
   const existing = activeRemoteSessions.get(sessionId);
   if (existing) {
     existing.ws = ws;
+    // ADD this writer to the subscriber set (don't replace): other open views of the
+    // same agent keep receiving the stream. liveWriters() prunes closed ones.
+    if (!existing.writers) existing.writers = new Set();
+    existing.writers.add(ws);
     if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
     // Reconnect recovery. The browser↔server WS drops on a tab/window switch (and
     // mobile backgrounding); while it's down, every frame the upstream relay sends
@@ -485,35 +809,232 @@ export async function attachSession(sessionId, ws, normalize) {
     }
     return existing;
   }
-  const { token, orgUuid } = getRemoteAuth();
-  const url = `${WS_BASE}/v1/sessions/ws/${sessionId}/subscribe?organization_uuid=${orgUuid}`;
-  const upstream = new WebSocket(url, {
-    headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
-  });
   // replayBuffer holds the meaningful frames of (roughly) the current turn so a
   // reconnecting client can recover what it missed while its WS was down — see the
   // rebind branch above. Capped so an idle long-lived session can't grow unbounded.
-  const entry = { upstream, ws, replayBuffer: [] };
+  // `normalize` is retained so the upstream can be silently reopened (reconnect)
+  // with the same wiring after a transient relay-side close.
+  const entry = {
+    upstream: null,
+    ws,
+    replayBuffer: [],
+    normalize,
+    retries: 0,
+    closedByUs: false,
+    pingTimer: null,
+    reconnectTimer: null,
+    alive: true,
+    // Stall-watchdog state: is a turn in flight, when the upstream last spoke, the
+    // uuids it delivered (to tell truly-missed events from cache-lag duplicates).
+    turnOpen: false,
+    lastUpstreamAt: 0,
+    stallTimer: null,
+    stallSyncInFlight: false,
+    seenEventUuids: new Set(),
+    // Every live subscriber (multiple GUI views of the same agent) — see liveWriters.
+    writers: new Set([ws]),
+  };
   activeRemoteSessions.set(sessionId, entry);
 
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
 
+  await openRemoteUpstream(sessionId, entry);
+  return entry;
+}
+
+/**
+ * After a reconnect, bridge the gap: events that flushed to the relay's events API
+ * while the upstream was down are pulled (cursor top-up) and emitted through the
+ * normal normalizer. The client's id-keyed event log upserts idempotently, so
+ * frames it already saw collapse and only the missed ones surface. Mid-turn frames
+ * that never flushed are unrecoverable by design (the relay replays nothing); the
+ * replay buffer + next turn's stream cover the visible continuity.
+ */
+async function emitMissedEventsAfterReconnect(sessionId, entry, preDropCount) {
+  try {
+    const all = await getSessionEventsCached(sessionId);
+    const missed = all.slice(Math.max(0, preDropCount));
+    if (missed.length === 0) return;
+    emitRawEvents(sessionId, entry, missed);
+  } catch { /* the next manual refresh / history fetch covers it */ }
+}
+
+/**
+ * Emit a slice of RAW relay events to the current writer through the normalizer —
+ * the shared tail of both gap-recovery paths (post-reconnect top-up and the stall
+ * watchdog). The normalizer produces NOTHING for a raw `result` event (the live
+ * socket path translates it separately), so a turn that ENDED inside the recovered
+ * gap must be finalized here too: without the explicit `complete`, the GUI's loader
+ * spun forever even though every message had been delivered.
+ */
+function emitRawEvents(sessionId, entry, rawEvents) {
+  const target = activeRemoteSessions.get(sessionId) || entry;
+  let emitted = 0;
+  for (const raw of rawEvents) {
+    if (emitted >= RC_TOPUP_EMIT_MAX) break;
+    // Same subagent-sidechain filter as the live + history paths.
+    if (raw && typeof raw === 'object' && raw.parent_tool_use_id) continue;
+    let frames = [];
+    try { frames = entry.normalize ? entry.normalize(raw, sessionId) : []; } catch { continue; }
+    for (const frame of frames) {
+      target.replayBuffer.push(frame);
+      if (target.replayBuffer.length > RC_REPLAY_BUFFER_MAX) target.replayBuffer.shift();
+      fanOut(target, frame);
+      emitted += 1;
+    }
+  }
+  if (rawEvents.some((e) => e?.type === 'result')) {
+    target.turnOpen = false;
+    target.replayBuffer = [];
+    const frame = createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' });
+    target.replayBuffer.push(frame);
+    fanOut(target, frame);
+  }
+}
+
+/**
+ * Stall recovery: a turn is open but the upstream socket has been silent past the
+ * quiet threshold. Pull the events API (HTTP — independent of the socket, and with
+ * the account-fallback auth path), emit anything the socket demonstrably missed,
+ * finalize the turn if its `result` flushed, and recycle the stale socket so live
+ * streaming resumes. Cheap when healthy: one cursor-based GET returning nothing.
+ */
+async function syncStalledUpstream(sessionId, entry) {
+  if (entry.stallSyncInFlight) return;
+  entry.stallSyncInFlight = true;
+  try {
+    const before = (await getSessionEventsCached(sessionId, { topUp: false })).length;
+    const all = await getSessionEventsCached(sessionId);
+    // Only events appended by THIS top-up are candidates, and only those the live
+    // socket did NOT deliver count as missed — the cache always lags the live stream
+    // (live frames never touch it), so without the seen-uuid filter a healthy but
+    // quiet socket (agent inside a long tool call) would be recycled mid-turn.
+    const missed = all
+      .slice(Math.max(0, before))
+      .filter((e) => !(e && e.uuid && entry.seenEventUuids.has(e.uuid)));
+    if (missed.length === 0) return;
+    console.log('[rc] stalled upstream: recovering missed events via events API', {
+      sessionId,
+      missed: missed.length,
+      quietMs: Date.now() - (entry.lastUpstreamAt || 0),
+    });
+    emitRawEvents(sessionId, entry, missed);
+    // The socket failed to stream events the relay had — it's stale. Terminate to
+    // fire 'close' → the transparent reconnect path resubscribes with fresh auth.
+    try { entry.upstream?.terminate(); } catch { /* already dead */ }
+  } catch { /* relay unreachable — the next watchdog tick retries */ }
+  finally { entry.stallSyncInFlight = false; }
+}
+
+/** Schedule a reconnect attempt for a transiently-closed upstream (single-flight). */
+function scheduleRemoteReconnect(sessionId, entry) {
+  if (entry.reconnectTimer || entry.closedByUs) return;
+  if (entry.retries >= RC_RECONNECT_MAX_RETRIES) {
+    // Give up: drop the subscription and tell the GUI the stream ended so the
+    // loader clears. Reopening the conversation (or the client's periodic
+    // re-subscribe) starts a fresh attach.
+    activeRemoteSessions.delete(sessionId);
+    fanOut(entry, createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
+    return;
+  }
+  const delay = Math.min(RC_RECONNECT_CAP_MS, RC_RECONNECT_BASE_MS * 2 ** entry.retries);
+  entry.retries += 1;
+  entry.reconnectTimer = setTimeout(async () => {
+    entry.reconnectTimer = null;
+    if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) return;
+    // Snapshot the flushed-event count BEFORE reconnecting (disk only, no relay
+    // call) so we know which events to top-up-emit once the stream is back.
+    let preDropCount = 0;
+    try { preDropCount = (await getSessionEventsCached(sessionId, { topUp: false })).length; } catch { /* 0 → capped emit */ }
+    try {
+      await openRemoteUpstream(sessionId, entry);
+      entry.retries = 0;
+      console.log('[rc] upstream reconnected', { sessionId });
+      await emitMissedEventsAfterReconnect(sessionId, entry, preDropCount);
+      // A question/permission asked during the gap would otherwise be invisible.
+      const out = activeRemoteSessions.get(sessionId)?.ws || entry.ws;
+      try { await emitOutstandingPermission(sessionId, out); } catch { /* non-fatal */ }
+    } catch {
+      scheduleRemoteReconnect(sessionId, entry);
+    }
+  }, delay);
+}
+
+/**
+ * Open (or reopen) the upstream relay subscription for `entry` and wire all
+ * handlers. Resolves when the socket is open; rejects on a failed dial. Shared by
+ * the initial attach and the transparent reconnect path.
+ */
+async function openRemoteUpstream(sessionId, entry) {
+  // Subscribe as the account that owns this session (falls back to the sole/first
+  // account for a single-account deployment or a still-unresolved cold id).
+  const account = (await resolveAccountForSession(sessionId)) || getAccounts()[0] || {};
+  const { token, orgUuid } = account;
+  entry.accountLabel = account.label;
+  const url = `${WS_BASE}/v1/sessions/ws/${sessionId}/subscribe?organization_uuid=${orgUuid}`;
+  const upstream = new WebSocket(url, {
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
+  });
+  entry.upstream = upstream;
+
+  // Keepalive + dead-socket detection (standard ws heartbeat): a silently-dead
+  // TCP connection emits nothing — without pinging, the stream just stops and the
+  // GUI never learns. If a pong doesn't come back within one interval, terminate;
+  // that fires 'close' and the reconnect path below restores the stream.
+  entry.alive = true;
+  upstream.on('pong', () => { entry.alive = true; });
+  entry.pingTimer = setInterval(() => {
+    if (upstream.readyState !== WebSocket.OPEN) return;
+    if (!entry.alive) {
+      try { upstream.terminate(); } catch { /* already dead */ }
+      return;
+    }
+    entry.alive = false;
+    try { upstream.ping(); } catch { /* close handler takes over */ }
+  }, RC_PING_INTERVAL_MS);
+
+  // Stall watchdog (see syncStalledUpstream). Runs for the ENTRY, not the socket:
+  // deliberately NOT cleared in the transient-close handler, so while the reconnect
+  // loop is still dialing, events keep reaching the GUI over HTTP. Self-cancels once
+  // the entry is detached/superseded; idle sessions (turnOpen=false) cost nothing.
+  if (entry.stallTimer) clearInterval(entry.stallTimer);
+  entry.stallTimer = setInterval(() => {
+    if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) {
+      clearInterval(entry.stallTimer);
+      entry.stallTimer = null;
+      return;
+    }
+    if (!entry.turnOpen) return;
+    if (Date.now() - (entry.lastUpstreamAt || 0) < RC_STALL_QUIET_MS) return;
+    void syncStalledUpstream(sessionId, entry);
+  }, RC_STALL_CHECK_MS);
+
   upstream.on('message', (data) => {
     let m;
     try { m = JSON.parse(data.toString()); } catch { return; }
-    // Always write to the CURRENT writer (rebound on reconnect), never the one
-    // captured when this upstream first opened.
-    const e0 = activeRemoteSessions.get(sessionId);
-    const out = e0?.ws || ws;
-    // emit = send to the live writer AND retain in the per-session replay buffer so
-    // a reconnecting client recovers it. Transient per-token thinking frames are
-    // sent but NOT buffered (one is enough; the client re-derives the indicator).
-    const emit = (frame) => {
-      if (e0) {
-        e0.replayBuffer.push(frame);
-        if (e0.replayBuffer.length > RC_REPLAY_BUFFER_MAX) e0.replayBuffer.shift();
+    // Feed the stall watchdog: the socket is demonstrably delivering. Remember the
+    // event uuid so a later events-API top-up can tell "the socket missed this" from
+    // "the cache is just behind the live stream". `result` closes the turn; an ack
+    // frame opens nothing; everything else means the agent is mid-turn.
+    entry.lastUpstreamAt = Date.now();
+    if (m.uuid) {
+      entry.seenEventUuids.add(m.uuid);
+      if (entry.seenEventUuids.size > RC_SEEN_UUIDS_MAX) {
+        entry.seenEventUuids.delete(entry.seenEventUuids.values().next().value);
       }
-      out.send(frame);
+    }
+    if (m.type === 'result') entry.turnOpen = false;
+    else if (m.type !== 'control_response') entry.turnOpen = true;
+    // Always write to the CURRENT subscriber set (rebound/extended on reconnect),
+    // never just the writer captured when this upstream first opened.
+    const e0 = activeRemoteSessions.get(sessionId) || entry;
+    // emit = send to EVERY live subscriber AND retain in the per-session replay
+    // buffer so a reconnecting client recovers it. Transient per-token thinking
+    // frames are sent but NOT buffered (the client re-derives the indicator).
+    const emit = (frame) => {
+      e0.replayBuffer.push(frame);
+      if (e0.replayBuffer.length > RC_REPLAY_BUFFER_MAX) e0.replayBuffer.shift();
+      fanOut(e0, frame);
     };
 
     // Live "thinking" progress. claude.ai/code shows a working indicator driven by
@@ -522,7 +1043,7 @@ export async function attachSession(sessionId, ws, normalize) {
     // live — gated to the viewed session on the client, and cleared by `result`
     // below. These frames are live-only; history never sees them.
     if (m.type === 'system' && m.subtype === 'thinking_tokens') {
-      out.send({ type: 'session-status', sessionId, isProcessing: true });
+      fanOut(e0, { type: 'session-status', sessionId, isProcessing: true });
       return;
     }
 
@@ -549,11 +1070,20 @@ export async function attachSession(sessionId, ws, normalize) {
     }
     if (m.type === 'control_response') return; // ack frame — nothing to render
 
+    // Subagent-internal event: the relay streams a Task subagent's OWN messages
+    // (its prompt, thinking, tool calls, result) inline, each tagged with the
+    // parent Task's tool_use_id. Locally these live in a separate agent-*.jsonl
+    // and are folded under the Task tool — never shown as top-level conversation.
+    // Emitting them here made the subagent's prompt look like a user message and
+    // its thoughts appear unsolicited. Drop them; the parent Task tool_use + its
+    // result (both un-parented) still render the container.
+    if (m.parent_tool_use_id) return;
+
     // Everything else is a Claude Agent SDK message — normalize via the injected
     // provider normalizer (kept out of this engine so it stays provider-agnostic).
-    if (normalize) {
+    if (entry.normalize) {
       try {
-        const normalized = normalize(m, sessionId) || [];
+        const normalized = entry.normalize(m, sessionId) || [];
         for (const frame of normalized) emit(frame);
       } catch (err) {
         emit(createNormalizedMessage({ kind: 'error', content: `rc normalize: ${err.message}`, sessionId, provider: 'claude' }));
@@ -569,30 +1099,43 @@ export async function attachSession(sessionId, ws, normalize) {
     // after the agent had stopped. Keeping it off is what keeps the loader in sync.
     if (m.type === 'result') {
       const e = activeRemoteSessions.get(sessionId);
-      emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
-      // Turn finished → the relay's events API now has it, so a reconnect from here
-      // recovers via the normal history refetch. Drop the buffer so it only ever
-      // holds the CURRENT turn (keeps replay small and relevant).
+      // Clear the buffer BEFORE emitting so the `complete` frame itself lands in the
+      // fresh buffer: a client whose WS was down at turn end still learns the turn is
+      // over when it rebinds (its missed content comes from the history refetch).
+      // Clearing after the emit threw the turn-end signal away with the old turn's
+      // frames — a rebound client then sat on a stuck "working" loader forever.
       if (e) e.replayBuffer = [];
+      emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
     }
   });
 
   upstream.on('close', (code) => {
-    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
-    activeRemoteSessions.delete(sessionId);
-    // 4003 = unauthorized (permanent). Anything else: the worker/session ended.
-    out.send(createNormalizedMessage({ kind: 'complete', exitCode: code === 4003 ? 1 : 0, sessionId, provider: 'claude' }));
+    if (entry.pingTimer) { clearInterval(entry.pingTimer); entry.pingTimer = null; }
+    // Deliberate detach (or a superseded entry) — no signal, no reconnect.
+    if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) return;
+    if (code === 4003) {
+      // Unauthorized: permanent. Tell the GUI the stream ended and drop the entry.
+      activeRemoteSessions.delete(sessionId);
+      fanOut(entry, createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId, provider: 'claude' }));
+      return;
+    }
+    // Transient close (idle timeout, relay blip, dead TCP detected by the
+    // heartbeat): keep the entry (writer + replay buffer stay bound) and reopen in
+    // the background. No `complete` is sent — a mid-turn close would otherwise
+    // wrongly clear the working indicator that the reconnected stream continues.
+    console.log('[rc] upstream closed, scheduling reconnect', { sessionId, code });
+    scheduleRemoteReconnect(sessionId, entry);
   });
   upstream.on('error', (err) => {
-    const out = activeRemoteSessions.get(sessionId)?.ws || ws;
-    out.send(createNormalizedMessage({ kind: 'error', content: `rc ws: ${err.message}`, sessionId, provider: 'claude' }));
+    // Logged, not surfaced: with auto-reconnect a transient socket error is an
+    // implementation detail — an error bubble in the chat would be noise.
+    console.error('[rc] upstream ws error', { sessionId, error: err.message });
   });
 
   await new Promise((resolve, reject) => {
     upstream.once('open', resolve);
     upstream.once('error', reject);
   });
-  return entry;
 }
 
 /**
@@ -751,6 +1294,16 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
   if (hasContent) {
     const sent = await sendMessage(sessionId, content);
+    if (sent.ok) {
+      // Open the turn for the stall watchdog: if the subscribe socket is dead from
+      // the start, NOTHING ever streams — the watchdog is then the only path that
+      // gets the reply (and the turn-end) to the GUI without a manual refresh.
+      const e = activeRemoteSessions.get(sessionId);
+      if (e) {
+        e.turnOpen = true;
+        e.lastUpstreamAt = Math.max(e.lastUpstreamAt || 0, Date.now());
+      }
+    }
     if (!sent.ok) {
       const reason = sent.notActive
         ? 'This agent is offline — its session is archived or disconnected and can’t receive messages. Start/reconnect the agent, then try again.'
@@ -793,7 +1346,7 @@ export function resolveRemotePermission(requestId, decision) {
 /** Stop the current turn: send an interrupt control_request up the WS. */
 export function abortRemoteSession(sessionId) {
   const entry = activeRemoteSessions.get(sessionId);
-  if (!entry || entry.upstream.readyState !== WebSocket.OPEN) return false;
+  if (!entry || entry.upstream?.readyState !== WebSocket.OPEN) return false;
   entry.upstream.send(JSON.stringify({
     type: 'control_request',
     request_id: crypto.randomUUID(),
@@ -806,7 +1359,12 @@ export function abortRemoteSession(sessionId) {
 export function detachSession(sessionId) {
   const entry = activeRemoteSessions.get(sessionId);
   if (!entry) return false;
-  try { entry.upstream.close(); } catch { /* noop */ }
+  // Deliberate close: suppress the reconnect path and stop the timers.
+  entry.closedByUs = true;
+  if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+  if (entry.pingTimer) { clearInterval(entry.pingTimer); entry.pingTimer = null; }
+  if (entry.stallTimer) { clearInterval(entry.stallTimer); entry.stallTimer = null; }
+  try { entry.upstream?.close(); } catch { /* noop */ }
   activeRemoteSessions.delete(sessionId);
   return true;
 }

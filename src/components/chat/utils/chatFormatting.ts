@@ -46,6 +46,18 @@ export function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Canonical assistant-text transform. Applied identically to hydrated (server
+ * backfill), live-streamed (stream_delta), and finalized messages so that a
+ * message renders the SAME whether it arrives live or after a page refresh.
+ * Keep every assistant-text render path routed through this one function —
+ * any divergence here reintroduces the "renders wrong until refresh" bug.
+ */
+export function normalizeAssistantText(content: string) {
+  if (!content) return content;
+  return formatUsageLimitText(unescapeWithMathProtection(decodeHtmlEntities(content)));
+}
+
 export function formatUsageLimitText(text: string) {
   try {
     if (typeof text !== 'string') return text;

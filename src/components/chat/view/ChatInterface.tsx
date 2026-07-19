@@ -11,7 +11,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
-import { useIsSessionRunning } from '../../../stores/useSessionActivityStore';
+import { useIsSessionRunning, sessionActivityStore } from '../../../stores/useSessionActivityStore';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -220,6 +220,18 @@ function ChatInterface({
   const openSessionRunning = useIsSessionRunning(currentSessionId || selectedSession?.id || '');
   const externalRunning = openSessionRunning && !isLoading;
 
+  // Publish this open view's live running state into the shared activity store so the
+  // sidebar's "working" dot tracks the chat loader exactly, instead of waiting on the
+  // laggy transcript file-watcher. The store merges this with the server-inferred set,
+  // so both surfaces read one source of truth and can't disagree. Cleared on turn end
+  // and when the viewed session changes / the view unmounts.
+  useEffect(() => {
+    const activeSessionId = selectedSession?.id || currentSessionId || '';
+    if (!activeSessionId) return;
+    sessionActivityStore.setLocalRunning(activeSessionId, isLoading);
+    return () => sessionActivityStore.setLocalRunning(activeSessionId, false);
+  }, [currentSessionId, selectedSession?.id, isLoading]);
+
   // Subscribe-on-open: when viewing a remote-control agent, open a read-only LIVE
   // subscription so its stream mirrors into the GUI exactly like claude.ai/code —
   // messages typed in the agent's terminal, thinking progress, and output appear
@@ -229,10 +241,21 @@ function ChatInterface({
   useEffect(() => {
     if (!selectedProject?.isRemoteAgent) return;
     const agentSessionId =
-      selectedProject.remoteSessionId || currentSessionId || selectedSession?.id;
+      selectedProject.remoteSessionId || selectedSession?.id || currentSessionId;
     if (!agentSessionId) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     sendMessage({ type: 'rc-subscribe', sessionId: agentSessionId });
+    // Belt-and-braces liveness: re-assert the subscription periodically while this
+    // conversation is open. The server attach is idempotent (rebind + replay), so a
+    // healthy stream is a no-op — but if the server-side upstream gave up (relay
+    // outage exhausting its reconnect retries), this restores the live mirror
+    // without the user having to refresh or reopen the conversation.
+    const keepalive = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        sendMessage({ type: 'rc-subscribe', sessionId: agentSessionId });
+      }
+    }, 45_000);
+    return () => clearInterval(keepalive);
   }, [
     ws,
     selectedProject?.isRemoteAgent,
@@ -263,6 +286,7 @@ function ChatInterface({
     selectedSession,
     currentSessionId,
     setCurrentSessionId,
+    isLoading,
     setIsLoading,
     setCanAbortSession,
     setClaudeStatus,
@@ -309,7 +333,7 @@ function ChatInterface({
   // Pending permission/question requests are kept for ALL sessions in state (so
   // switching agents and coming back doesn't lose an unanswered question). Show only
   // the currently-viewed session's here; a request with no sessionId is legacy/global.
-  const viewSessionId = currentSessionId || selectedSession?.id || null;
+  const viewSessionId = selectedSession?.id || currentSessionId || null;
   const visiblePermissionRequests = useMemo(
     () => pendingPermissionRequests.filter((r) => !r.sessionId || r.sessionId === viewSessionId),
     [pendingPermissionRequests, viewSessionId],
@@ -480,7 +504,7 @@ function ChatInterface({
         providerModelCacheCatalog={providerModelCacheCatalog}
         providerModelsRefreshing={providerModelsRefreshing}
         onHardRefreshProviderModels={hardRefreshProviderModels}
-        currentSessionId={currentSessionId || selectedSession?.id || null}
+        currentSessionId={selectedSession?.id || currentSessionId || null}
         onSelectProviderModel={selectProviderModel}
       />
     </PermissionContext.Provider>

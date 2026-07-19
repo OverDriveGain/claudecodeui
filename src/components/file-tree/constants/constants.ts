@@ -32,3 +32,14 @@ export const VIDEO_FILE_EXTENSIONS = new Set([
   'm4v',
   'ogv',
 ]);
+
+export const AUDIO_FILE_EXTENSIONS = new Set([
+  'mp3',
+  'wav',
+  'ogg',
+  'oga',
+  'm4a',
+  'aac',
+  'flac',
+  'opus',
+]);

@@ -11,6 +11,7 @@ import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
+import AccountTab from '../view/tabs/AccountTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
 import type { SettingsProps } from '../types/types';
@@ -154,6 +155,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'api' && <CredentialsSettingsTab />}
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
+
+              {activeTab === 'account' && <AccountTab />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>

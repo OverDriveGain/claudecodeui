@@ -6,11 +6,15 @@ import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
+import SidebarSessionItem from './SidebarSessionItem';
 
 export type SidebarProjectListProps = {
-  // Which list this instance renders: conversations/projects (default) or the
-  // remote-control agents. Agents live in their own top-level tab.
-  listKind?: 'projects' | 'agents';
+  // Which list this instance renders:
+  //  - 'projects'      → folder-grouped projects with nested sessions
+  //  - 'conversations' → a flat, most-recent-first list of every session (like
+  //                      claude.ai/code's Recents)
+  //  - 'agents'        → the remote-control agents (their own top-level tab)
+  listKind?: 'projects' | 'conversations' | 'agents';
   projects: Project[];
   filteredProjects: Project[];
   selectedProject: Project | null;
@@ -176,6 +180,63 @@ export default function SidebarProjectList({
   }
 
   const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
+
+  // Conversations tab: a single flat list of every session across all (non-agent)
+  // projects, most-recently-used first — the same shape claude.ai/code shows in its
+  // Recents panel, instead of a tree of collapsed project folders.
+  if (listKind === 'conversations') {
+    const sessionTime = (session: SessionWithProvider): number => {
+      const raw =
+        (session.updated_at as string) ||
+        (session.lastActivity as string) ||
+        (session.createdAt as string) ||
+        (session.created_at as string) ||
+        '';
+      const t = new Date(raw).getTime();
+      return Number.isNaN(t) ? 0 : t;
+    };
+
+    const rows = conversationProjects
+      .flatMap((project) =>
+        getProjectSessions(project).map((session) => ({ project, session })),
+      )
+      .sort((a, b) => sessionTime(b.session) - sessionTime(a.session));
+
+    if (!showProjects) {
+      return <div className="pb-safe-area-inset-bottom md:space-y-1">{state}</div>;
+    }
+
+    return (
+      <div className="pb-safe-area-inset-bottom md:space-y-1">
+        {rows.length > 0 ? (
+          rows.map(({ project, session }) => (
+            <SidebarSessionItem
+              key={`${project.projectId}:${session.id}`}
+              project={project}
+              session={session}
+              selectedSession={selectedSession}
+              currentTime={currentTime}
+              editingSession={editingSession}
+              editingSessionName={editingSessionName}
+              onEditingSessionNameChange={onEditingSessionNameChange}
+              onStartEditingSession={onStartEditingSession}
+              onCancelEditingSession={onCancelEditingSession}
+              onSaveEditingSession={onSaveEditingSession}
+              onProjectSelect={onProjectSelect}
+              onSessionSelect={onSessionSelect}
+              onDeleteSession={onDeleteSession}
+              t={t}
+            />
+          ))
+        ) : (
+          <div className="px-4 py-12 text-center text-sm text-muted-foreground md:py-8">
+            {t('sidebar.noConversations', { defaultValue: 'No conversations yet.' })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="pb-safe-area-inset-bottom md:space-y-1">
       {!showProjects ? state : conversationProjects.map(renderItem)}

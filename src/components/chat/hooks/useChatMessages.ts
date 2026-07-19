@@ -5,7 +5,7 @@
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, SubagentChildTool } from '../types/types';
-import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
+import { decodeHtmlEntities, unescapeWithMathProtection, normalizeAssistantText } from '../utils/chatFormatting';
 
 function formatToolResultContent(content: unknown): string {
   const text = typeof content === 'string' ? content : JSON.stringify(content);
@@ -78,12 +78,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             });
           }
         } else {
-          let text = decodeHtmlEntities(content);
-          text = unescapeWithMathProtection(text);
-          text = formatUsageLimitText(text);
           converted.push({
             type: 'assistant',
-            content: text,
+            content: normalizeAssistantText(content),
             timestamp: msg.timestamp,
             ...sharedMetadata,
           });
@@ -196,9 +193,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       case 'stream_delta':
         if (msg.content) {
+          // Route live-streamed text through the SAME transform as hydrated
+          // `text` messages so a streaming reply renders identically to how it
+          // will look after finalize / page refresh (no live-vs-refresh flip).
           converted.push({
             type: 'assistant',
-            content: msg.content,
+            content: normalizeAssistantText(msg.content),
             timestamp: msg.timestamp,
             isStreaming: true,
             ...sharedMetadata,

@@ -32,6 +32,13 @@ export type AnyRecord = Record<string, any>;
 export type RealtimeClientConnection = {
   readyState: number;
   send(data: string): void;
+  /**
+   * The connected user's per-agent visibility (parsed `agent_allow` patterns), set
+   * at connection time. null/absent = unrestricted. Lets broadcaster services scope
+   * a realtime push (e.g. projects_updated) to each client the same way an HTTP
+   * request is scoped, instead of leaking the full list to every socket.
+   */
+  agentAllow?: string[] | null;
 };
 
 /**
@@ -257,6 +264,9 @@ export type FetchHistoryResult = {
   offset: number;
   limit: number | null;
   tokenUsage?: unknown;
+  /** Context-window fullness derived from the transcript's last usage-bearing
+   *  assistant message — lets clients show a "context X% full" meter. */
+  context?: { usedTokens: number; windowTokens: number };
 };
 
 // ---------------------------

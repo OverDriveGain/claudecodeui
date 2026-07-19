@@ -6,8 +6,10 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import { spawn } from 'child_process';
+import { Readable } from 'node:stream';
 
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import mime from 'mime-types';
 import Database from 'better-sqlite3';
@@ -86,6 +88,15 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd, isAgentCaptureAllowed } from './services/rc.service.js';
+import { currentAgentAllow, isNameAllowedForUser } from './services/user-context.js';
+import { resolveLocalSession } from './services/local-sessions.js';
+import {
+    inboundFederationEnabled,
+    outboundFederationEnabled,
+    federationToken,
+    resolveSessionPeer,
+    peerFetch,
+} from './services/federation.js';
 import { getSessionEventsCached } from './remote-control/rc-client.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -106,7 +117,14 @@ async function resolveProjectRootById(projectId) {
     if (isRemoteProjectId(projectId)) {
         return await getRemoteAgentCwd(sessionIdFromProjectId(projectId));
     }
-    return await projectsDb.getProjectPathById(projectId);
+    const projectPath = await projectsDb.getProjectPathById(projectId);
+    // Agent-restricted users (agent_allow set) may browse only the local project
+    // that matches their agent name — the same scope the conversations list shows —
+    // not arbitrary host projects.
+    if (projectPath && currentAgentAllow()?.length && !isNameAllowedForUser(path.basename(projectPath))) {
+        return null;
+    }
+    return projectPath;
 }
 const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
 const MAX_FILE_UPLOAD_SIZE_MB = 200;
@@ -173,6 +191,14 @@ const wss = createWebSocketServer(server, {
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
+// Gzip all compressible responses (JSON/text/html). Critical for big payloads
+// like deep file trees (3.2MB JSON → ~256KB): the hosts sit behind slow or
+// saturated uplinks (box while an agent renders, berlin home upload), and edge
+// nginx only compresses ITS hop — the app→nginx leg shipped plain multi-MB JSON
+// and took 20-45s ("loading files… nothing loads"). Binary types (video, images,
+// octet-stream) are skipped by the middleware's compressible check, so Range
+// requests and media streaming are unaffected.
+app.use(compression());
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
     limit: '50mb',
@@ -470,6 +496,350 @@ app.post('/api/create-folder', authenticateToken, async (req, res) => {
     }
 });
 
+// ============================================================================
+// CROSS-HOST FILE FEDERATION
+// ----------------------------------------------------------------------------
+// An agent shown in the Agents view may run on a DIFFERENT host than this CCUI
+// instance. Its files live on that host's disk, so we can't read them locally.
+// Each CCUI instance therefore exposes token-authed, cwd-jailed, READ-ONLY
+// endpoints that serve files for the agents running on ITS OWN host (resolved
+// via ~/.claude/sessions). When a user browses a remote agent this instance
+// can't resolve locally, the file routes forward the request to the peer that
+// owns the session (see the proxy fallbacks below).
+//
+// Auth is host-to-host (shared CCUI_FEDERATION_TOKEN), NOT per-user: the CALLING
+// instance enforces per-user visibility (isAgentCaptureAllowed) BEFORE it
+// proxies, so a restricted user can never reach an out-of-scope agent's files.
+// ============================================================================
+
+/** Gate the federation endpoints on the shared host-to-host token. */
+function requireFederationToken(req, res, next) {
+    const expected = federationToken();
+    if (!expected || !inboundFederationEnabled()) {
+        return res.status(404).json({ error: 'Federation not enabled' });
+    }
+    const auth = req.headers['authorization'] || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    if (token !== expected) {
+        return res.status(401).json({ error: 'Invalid federation token' });
+    }
+    next();
+}
+
+/**
+ * Stream a resolved file to the response with correct mime type and HTTP Range
+ * support (video/audio seeking). Shared by the user-facing byte route and the
+ * federation peer endpoint. `resolved` must already be jail-checked.
+ */
+async function serveFileBytes(req, res, resolved) {
+    try {
+        await fsPromises.access(resolved);
+    } catch {
+        return res.status(404).json({ error: 'File not found' });
+    }
+
+    const mimeType = mime.lookup(resolved) || 'application/octet-stream';
+    res.setHeader('Content-Type', mimeType);
+
+    const stat = await fsPromises.stat(resolved);
+    const fileSize = stat.size;
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    const range = req.headers.range;
+    if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+        if (!match) {
+            res.setHeader('Content-Range', `bytes */${fileSize}`);
+            return res.status(416).end();
+        }
+        let start = match[1] === '' ? null : parseInt(match[1], 10);
+        let end = match[2] === '' ? null : parseInt(match[2], 10);
+        // Suffix range ("bytes=-500" => last 500 bytes).
+        if (start === null) {
+            start = Math.max(0, fileSize - (end ?? 0));
+            end = fileSize - 1;
+        } else if (end === null || end >= fileSize) {
+            end = fileSize - 1;
+        }
+        if (start > end || start >= fileSize) {
+            res.setHeader('Content-Range', `bytes */${fileSize}`);
+            return res.status(416).end();
+        }
+
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        res.setHeader('Content-Length', end - start + 1);
+        const rangeStream = fs.createReadStream(resolved, { start, end });
+        rangeStream.pipe(res);
+        rangeStream.on('error', (error) => {
+            console.error('Error streaming file range:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Error reading file' });
+            }
+        });
+        return;
+    }
+
+    // No range: stream the whole file.
+    res.setHeader('Content-Length', fileSize);
+    const fileStream = fs.createReadStream(resolved);
+    fileStream.pipe(res);
+    fileStream.on('error', (error) => {
+        console.error('Error streaming file:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Error reading file' });
+        }
+    });
+}
+
+/**
+ * The set of absolute paths a session ever delivered via SendUserFile — the
+ * authorization allowlist for the delivered-file endpoints. Derived from the
+ * session's append-only relay history. SendUserFile accepts paths RELATIVE to
+ * the agent's cwd, so `agentCwd` anchors those; without it a relative delivery
+ * used to resolve against the SERVER's cwd and 404 ("file no longer on disk").
+ */
+function deriveDeliveredPaths(events, agentCwd) {
+    const resolveOne = (p) => (path.isAbsolute(p) ? path.resolve(p) : (agentCwd ? path.resolve(agentCwd, p) : path.resolve(p)));
+    const delivered = new Set();
+    for (const e of events || []) {
+        const content = e?.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const c of content) {
+            if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
+                for (const f of c.input.files) if (typeof f === 'string') delivered.add(resolveOne(f));
+            }
+        }
+    }
+    return delivered;
+}
+
+/** The directory the agent works in — anchors relative delivered paths. */
+async function sessionCwdForDelivery(sessionId) {
+    const local = resolveLocalSession(sessionId);
+    if (local?.cwd) return local.cwd;
+    try { return await getRemoteAgentCwd(sessionId); } catch { return null; }
+}
+
+/**
+ * Resolve a requested delivered path (absolute OR agent-cwd-relative) and check
+ * it against the session's SendUserFile allowlist. Serves from the warm
+ * in-memory event cache first (topUp:false — NO relay round-trip), because a
+ * playing <video> fires many HTTP Range requests and re-hitting the relay on each
+ * one stalls playback. On a miss we refresh once (topUp:true) to catch a
+ * just-delivered file newer than the cached prefix.
+ */
+async function resolveDeliveredPath(sessionId, requestedPath) {
+    const cwd = await sessionCwdForDelivery(sessionId);
+    const resolved = path.isAbsolute(requestedPath)
+        ? path.resolve(requestedPath)
+        : (cwd ? path.resolve(cwd, requestedPath) : path.resolve(requestedPath));
+    const warm = await getSessionEventsCached(sessionId, { topUp: false }).catch(() => []);
+    if (deriveDeliveredPaths(warm, cwd).has(resolved)) return { delivered: true, resolved };
+    const fresh = await getSessionEventsCached(sessionId, { topUp: true }).catch(() => []);
+    return { delivered: deriveDeliveredPaths(fresh, cwd).has(resolved), resolved };
+}
+
+// ── Peer-serving endpoints (this host answers for its OWN local sessions) ────
+
+// Ownership probe: does THIS host run the session? Returns its cwd/name/status.
+app.get('/api/federation/resolve', requireFederationToken, (req, res) => {
+    const session = typeof req.query.session === 'string' ? req.query.session : '';
+    const local = resolveLocalSession(session);
+    if (!local) {
+        return res.status(404).json({ error: 'Session not on this host' });
+    }
+    res.json({ cwd: local.cwd, name: local.name ?? null, status: local.status ?? null });
+});
+
+// File tree for a locally-owned session (cwd-jailed by getFileTree's root).
+app.get('/api/federation/files', requireFederationToken, async (req, res) => {
+    try {
+        const session = typeof req.query.session === 'string' ? req.query.session : '';
+        const local = resolveLocalSession(session);
+        if (!local) {
+            return res.status(404).json({ error: 'Session not on this host' });
+        }
+        // Same lazy-loading contract as the main files route (depth bound + jailed
+        // subtree re-root) — the calling host forwards the browser's params.
+        const depthRaw = Number.parseInt(String(req.query.depth ?? ''), 10);
+        const treeDepth = Number.isFinite(depthRaw) ? Math.min(Math.max(depthRaw, 1), 10) : 10;
+        const subPath = typeof req.query.path === 'string' ? req.query.path : '';
+        let treeRoot = local.cwd;
+        if (subPath) {
+            const validation = validatePathInProject(local.cwd, subPath);
+            if (!validation.valid) {
+                return res.status(403).json({ error: validation.error });
+            }
+            treeRoot = validation.resolved;
+        }
+        try {
+            await fsPromises.access(treeRoot);
+        } catch {
+            return res.status(404).json({ error: `Project path not found: ${treeRoot}` });
+        }
+        const files = await getFileTree(treeRoot, treeDepth, 0, true);
+        // Multi-MB tree JSON is gzipped by the app-wide compression middleware
+        // (the caller sends Accept-Encoding: gzip) — essential over slow mesh links.
+        res.json(files);
+    } catch (error) {
+        console.error('[ERROR] Federation file tree error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Text file read for a locally-owned session, cwd-jailed.
+app.get('/api/federation/file', requireFederationToken, async (req, res) => {
+    try {
+        const session = typeof req.query.session === 'string' ? req.query.session : '';
+        const filePath = typeof req.query.filePath === 'string' ? req.query.filePath : '';
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        const local = resolveLocalSession(session);
+        if (!local) {
+            return res.status(404).json({ error: 'Session not on this host' });
+        }
+        const validation = validatePathInProject(local.cwd, filePath);
+        if (!validation.valid) {
+            return res.status(403).json({ error: validation.error });
+        }
+        const content = await fsPromises.readFile(validation.resolved, 'utf8');
+        res.json({ content, path: validation.resolved });
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        if (error.code === 'EACCES') {
+            return res.status(403).json({ error: 'Permission denied' });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Raw bytes (with Range) for a locally-owned session, cwd-jailed.
+app.get('/api/federation/files/content', requireFederationToken, async (req, res) => {
+    try {
+        const session = typeof req.query.session === 'string' ? req.query.session : '';
+        const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        const local = resolveLocalSession(session);
+        if (!local) {
+            return res.status(404).json({ error: 'Session not on this host' });
+        }
+        const validation = validatePathInProject(local.cwd, filePath);
+        if (!validation.valid) {
+            return res.status(403).json({ error: validation.error });
+        }
+        await serveFileBytes(req, res, validation.resolved);
+    } catch (error) {
+        console.error('Error serving federated binary file:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+});
+
+// Delivered file (SendUserFile) for a locally-owned session. Unlike the cwd-jailed
+// endpoints, a delivered path may sit anywhere on disk — so the gate is the agent's
+// OWN act of delivering it: this host re-derives the allowlist from the session's
+// relay events and serves only paths that appear in a SendUserFile tool_use.
+app.get('/api/federation/delivered-file', requireFederationToken, async (req, res) => {
+    try {
+        const session = typeof req.query.session === 'string' ? req.query.session : '';
+        const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        if (!resolveLocalSession(session)) {
+            return res.status(404).json({ error: 'Session not on this host' });
+        }
+        const { delivered, resolved } = await resolveDeliveredPath(session, filePath);
+        if (!delivered) {
+            return res.status(403).json({ error: 'This file was not delivered by the agent' });
+        }
+        try {
+            await fsPromises.access(resolved);
+        } catch {
+            return res.status(404).json({ error: 'File no longer on disk' });
+        }
+        res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
+        await serveFileBytes(req, res, resolved);
+    } catch (error) {
+        console.error('Error serving federated delivered file:', error);
+        if (!res.headersSent) res.status(500).json({ error: error.message });
+    }
+});
+
+// ── Proxy fallbacks (this host FORWARDS to the peer that owns the session) ───
+
+/**
+ * True if the given remote projectId should be federated: it's a remote agent,
+ * the current user may see it, and outbound federation is configured. Callers
+ * use this AFTER a local cwd resolution miss.
+ */
+async function shouldFederateRemote(projectId) {
+    if (!isRemoteProjectId(projectId) || !outboundFederationEnabled()) return false;
+    const sessionId = sessionIdFromProjectId(projectId);
+    // Per-user visibility gate: never proxy for an agent this user can't see.
+    return await isAgentCaptureAllowed(sessionId);
+}
+
+/** Forward a JSON/text federation request to the owning peer; relay the response. */
+async function federateJsonResponse(res, sessionId, peerPathAndQuery) {
+    const peer = await resolveSessionPeer(sessionId);
+    if (!peer) return false;
+    try {
+        const upstream = await peerFetch(peer, peerPathAndQuery, {
+            // 60s: a big file tree over a saturated mesh link needs headroom even
+            // gzipped (the box uplink drops to ~140KB/s while an agent renders).
+            signal: AbortSignal.timeout(60000),
+            headers: { 'Accept-Encoding': 'gzip' },
+        });
+        const body = await upstream.text();
+        res.status(upstream.status);
+        const contentType = upstream.headers.get('content-type');
+        if (contentType) res.setHeader('Content-Type', contentType);
+        res.send(body);
+    } catch (error) {
+        if (!res.headersSent) {
+            res.status(502).json({ error: `Peer file request failed: ${error.message}` });
+        }
+    }
+    return true;
+}
+
+/** Forward a byte/range federation request to the owning peer; stream the response. */
+async function federateBytesResponse(req, res, sessionId, peerPathAndQuery) {
+    const peer = await resolveSessionPeer(sessionId);
+    if (!peer) return false;
+    try {
+        const headers = {};
+        if (req.headers.range) headers.Range = req.headers.range;
+        const upstream = await peerFetch(peer, peerPathAndQuery, {
+            headers,
+            signal: AbortSignal.timeout(60000),
+        });
+        res.status(upstream.status);
+        for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+            const v = upstream.headers.get(h);
+            if (v) res.setHeader(h, v);
+        }
+        if (upstream.body) {
+            Readable.fromWeb(upstream.body).pipe(res);
+        } else {
+            res.end();
+        }
+    } catch (error) {
+        if (!res.headersSent) {
+            res.status(502).json({ error: `Peer file stream failed: ${error.message}` });
+        }
+    }
+    return true;
+}
+
 // Read file content endpoint
 app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => {
     try {
@@ -486,6 +856,16 @@ app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
         // caller passes the DB-assigned `projectId`, not a folder name.
         const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
+            // Cross-host agent: forward the read to the peer that owns the session.
+            if (await shouldFederateRemote(projectId)) {
+                const sid = sessionIdFromProjectId(projectId);
+                const forwarded = await federateJsonResponse(
+                    res,
+                    sid,
+                    `/api/federation/file?session=${encodeURIComponent(sid)}&filePath=${encodeURIComponent(filePath)}`,
+                );
+                if (forwarded) return;
+            }
             return res.status(404).json({ error: 'Project not found' });
         }
 
@@ -527,6 +907,17 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
         // Projects are now addressed by DB `projectId`, resolved to their path here.
         const projectRoot = await resolveProjectRootById(projectId);
         if (!projectRoot) {
+            // Cross-host agent: stream the bytes from the peer that owns the session.
+            if (await shouldFederateRemote(projectId)) {
+                const sid = sessionIdFromProjectId(projectId);
+                const forwarded = await federateBytesResponse(
+                    req,
+                    res,
+                    sid,
+                    `/api/federation/files/content?session=${encodeURIComponent(sid)}&path=${encodeURIComponent(filePath)}`,
+                );
+                if (forwarded) return;
+            }
             return res.status(404).json({ error: 'Project not found' });
         }
 
@@ -540,71 +931,10 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
             return res.status(403).json({ error: 'Path must be under project root' });
         }
 
-        // Check if file exists
-        try {
-            await fsPromises.access(resolved);
-        } catch (error) {
-            return res.status(404).json({ error: 'File not found' });
-        }
-
-        // Get file extension and set appropriate content type
-        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
-        res.setHeader('Content-Type', mimeType);
-
-        // Advertise range support so <video>/<audio> can stream and seek.
-        const stat = await fsPromises.stat(resolved);
-        const fileSize = stat.size;
-        res.setHeader('Accept-Ranges', 'bytes');
-
-        // Honor HTTP Range requests (partial content) — required for video
-        // scrubbing without downloading the whole file first.
-        const range = req.headers.range;
-        if (range) {
-            const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-            if (!match) {
-                res.setHeader('Content-Range', `bytes */${fileSize}`);
-                return res.status(416).end();
-            }
-            let start = match[1] === '' ? null : parseInt(match[1], 10);
-            let end = match[2] === '' ? null : parseInt(match[2], 10);
-            // Suffix range ("bytes=-500" => last 500 bytes).
-            if (start === null) {
-                start = Math.max(0, fileSize - (end ?? 0));
-                end = fileSize - 1;
-            } else if (end === null || end >= fileSize) {
-                end = fileSize - 1;
-            }
-            if (start > end || start >= fileSize) {
-                res.setHeader('Content-Range', `bytes */${fileSize}`);
-                return res.status(416).end();
-            }
-
-            res.status(206);
-            res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
-            res.setHeader('Content-Length', end - start + 1);
-            const rangeStream = fs.createReadStream(resolved, { start, end });
-            rangeStream.pipe(res);
-            rangeStream.on('error', (error) => {
-                console.error('Error streaming file range:', error);
-                if (!res.headersSent) {
-                    res.status(500).json({ error: 'Error reading file' });
-                }
-            });
-            return;
-        }
-
-        // No range: stream the whole file.
-        res.setHeader('Content-Length', fileSize);
-        const fileStream = fs.createReadStream(resolved);
-        fileStream.pipe(res);
-
-        fileStream.on('error', (error) => {
-            console.error('Error streaming file:', error);
-            if (!res.headersSent) {
-                res.status(500).json({ error: 'Error reading file' });
-            }
-        });
-
+        // Byte-serving (mime, HTTP Range, streaming) is shared with the
+        // cross-host federation peer endpoint via serveFileBytes. `resolved` is
+        // already jail-checked above.
+        await serveFileBytes(req, res, resolved);
     } catch (error) {
         console.error('Error serving binary file:', error);
         if (!res.headersSent) {
@@ -639,37 +969,45 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
         }
 
         // Allowlist = every path this session ever delivered via SendUserFile.
-        const events = await getSessionEventsCached(sessionId).catch(() => []);
-        const delivered = new Set();
-        for (const e of events || []) {
-            const content = e?.message?.content;
-            if (!Array.isArray(content)) continue;
-            for (const c of content) {
-                if (c?.type === 'tool_use' && c?.name === 'SendUserFile' && Array.isArray(c?.input?.files)) {
-                    for (const f of c.input.files) if (typeof f === 'string') delivered.add(path.resolve(f));
-                }
+        // On the host that OWNS the agent this is derivable (it can read the
+        // session's relay events); a different host may not, and that's fine — a
+        // cross-host request is authorized on the owning peer instead (below).
+        // resolveDeliveredPath serves from the warm cache first so a playing
+        // video's Range requests don't each hit the relay, and anchors relative
+        // paths at the agent's cwd.
+        const { delivered: isDelivered, resolved } = await resolveDeliveredPath(sessionId, filePath);
+
+        // Serve locally when this host both authorized it (in the allowlist) and
+        // holds the bytes on disk — the same-host case.
+        if (isDelivered) {
+            let onDisk = true;
+            try { await fsPromises.access(resolved); } catch { onDisk = false; }
+            if (onDisk) {
+                // Inline, mime-typed, Range-capable stream (shared with files/content)
+                // so images render and audio/video seek without a manual download.
+                res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
+                await serveFileBytes(req, res, resolved);
+                return;
             }
         }
-        const resolved = path.resolve(filePath);
-        if (!delivered.has(resolved)) {
-            return res.status(403).json({ error: 'This file was not delivered by the agent' });
+
+        // Not served locally (cross-host agent, or this host can't authorize/hold
+        // it): forward to the peer that owns the session. The peer re-derives the
+        // SendUserFile allowlist from its own relay events and streams the bytes,
+        // so authorization always happens on the host that actually delivered it.
+        if (await shouldFederateRemote(projectId)) {
+            const forwarded = await federateBytesResponse(
+                req,
+                res,
+                sessionId,
+                `/api/federation/delivered-file?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`,
+            );
+            if (forwarded) return;
         }
 
-        try {
-            await fsPromises.access(resolved);
-        } catch {
-            return res.status(404).json({ error: 'File no longer on disk' });
-        }
-        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
-        const stat = await fsPromises.stat(resolved);
-        res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Length', stat.size);
-        res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
-        const stream = fs.createReadStream(resolved);
-        stream.pipe(res);
-        stream.on('error', (error) => {
-            console.error('Error streaming delivered file:', error);
-            if (!res.headersSent) res.status(500).json({ error: 'Error reading file' });
+        // No peer owns it: it was either never delivered or is gone from disk.
+        return res.status(isDelivered ? 404 : 403).json({
+            error: isDelivered ? 'File no longer on disk' : 'This file was not delivered by the agent',
         });
     } catch (error) {
         console.error('Error serving delivered file:', error);
@@ -735,19 +1073,47 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
 
         // Resolve the project's absolute path through the DB (projectId is the
         // primary key of the `projects` table after the identifier migration).
+        // Lazy-loading contract: ?depth= bounds the walk (directories at the cutoff
+        // come back `truncated: true`), ?path= re-roots the walk at a subdirectory
+        // (jailed to the project root) so the client expands truncated dirs on
+        // demand instead of paying for the whole tree up front.
+        const depthRaw = Number.parseInt(String(req.query.depth ?? ''), 10);
+        const treeDepth = Number.isFinite(depthRaw) ? Math.min(Math.max(depthRaw, 1), 10) : 10;
+        const subPath = typeof req.query.path === 'string' ? req.query.path : '';
+
         const actualPath = await resolveProjectRootById(req.params.projectId);
         if (!actualPath) {
+            // Cross-host agent: fetch the tree from the peer that owns the session.
+            if (await shouldFederateRemote(req.params.projectId)) {
+                const sid = sessionIdFromProjectId(req.params.projectId);
+                const forwarded = await federateJsonResponse(
+                    res,
+                    sid,
+                    `/api/federation/files?session=${encodeURIComponent(sid)}`
+                        + `&depth=${treeDepth}${subPath ? `&path=${encodeURIComponent(subPath)}` : ''}`,
+                );
+                if (forwarded) return;
+            }
             return res.status(404).json({ error: 'Project not found' });
+        }
+
+        let treeRoot = actualPath;
+        if (subPath) {
+            const validation = validatePathInProject(actualPath, subPath);
+            if (!validation.valid) {
+                return res.status(403).json({ error: validation.error });
+            }
+            treeRoot = validation.resolved;
         }
 
         // Check if path exists
         try {
-            await fsPromises.access(actualPath);
+            await fsPromises.access(treeRoot);
         } catch (e) {
-            return res.status(404).json({ error: `Project path not found: ${actualPath}` });
+            return res.status(404).json({ error: `Project path not found: ${treeRoot}` });
         }
 
-        const files = await getFileTree(actualPath, 10, 0, true);
+        const files = await getFileTree(treeRoot, treeDepth, 0, true);
         res.json(files);
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);
@@ -1691,7 +2057,15 @@ function release() {
     activeFsOperations = Math.max(0, activeFsOperations - 1);
 }
 
-async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true) {
+async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true, dirDev = null) {
+    // Device id of the directory being listed — used to detect mount boundaries.
+    // Network mounts (rclone/NFS/SMB) inside a project make the eager walk crawl
+    // or hang (each readdir is a network round-trip, EIO storms on server errors),
+    // so the walk never descends across a filesystem boundary: the mount shows as
+    // a truncated directory and its contents load on demand when opened.
+    if (dirDev === null) {
+        try { dirDev = (await fsPromises.lstat(dirPath)).dev; } catch { dirDev = null; }
+    }
     // Using fsPromises from import
     let entries;
     try {
@@ -1721,12 +2095,14 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
             path: itemPath,
             type: entry.isDirectory() ? 'directory' : 'file'
         };
+        let entryDev = null;
 
         // Get file stats for additional metadata
         try {
             await acquire();
             try {
               const stats = await fsPromises.lstat(itemPath);
+              entryDev = stats.dev;
               item.size = stats.size;
               item.modified = stats.mtime.toISOString();
 
@@ -1759,14 +2135,26 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
             item.permissionsRwx = '---------';
         }
 
-        if (entry.isDirectory() && currentDepth < maxDepth) {
-            // Recurse. Let readdir's own EACCES bubble up through the catch in
-            // the recursive call rather than doing a separate access() probe
-            // (which doubled the round-trip count on SMB without adding info).
-            // The recursive call starts with a bounded readdir; holding a permit
-            // for the whole subtree can deadlock when sibling directories are
-            // waiting on their own children.
-            item.children = await getFileTree(itemPath, maxDepth, currentDepth + 1, showHidden);
+        if (entry.isDirectory()) {
+            const crossesMount = dirDev !== null && entryDev !== null && entryDev !== dirDev;
+            if (crossesMount) {
+                // Different filesystem (rclone/NFS/SMB/bind mount) — never walk it
+                // eagerly; the client fetches its contents on demand via ?path=.
+                item.truncated = true;
+                item.mount = true;
+            } else if (currentDepth < maxDepth) {
+                // Recurse. Let readdir's own EACCES bubble up through the catch in
+                // the recursive call rather than doing a separate access() probe
+                // (which doubled the round-trip count on SMB without adding info).
+                // The recursive call starts with a bounded readdir; holding a permit
+                // for the whole subtree can deadlock when sibling directories are
+                // waiting on their own children.
+                item.children = await getFileTree(itemPath, maxDepth, currentDepth + 1, showHidden, entryDev);
+            } else {
+                // Depth cutoff — the directory exists but its contents weren't
+                // walked; the client loads them on demand (lazy expansion).
+                item.truncated = true;
+            }
         }
 
         return item;

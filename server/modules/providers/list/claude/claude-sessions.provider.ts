@@ -461,6 +461,56 @@ function stripAnsiFormatting(text: string): string {
   return text.replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
+type TaskNotificationPayload = {
+  taskId: string;
+  taskStatus: string;
+  summary: string;
+  outputFile?: string;
+};
+
+/**
+ * Parse task notification XML that Claude emits for background tasks.
+ * Returns null if the content does not match the task notification format.
+ */
+function parseTaskNotification(content: string): TaskNotificationPayload | null {
+  const taskIdMatch = /<task-id>([^<]*)<\/task-id>/.exec(content);
+  const statusMatch = /<status>([^<]*)<\/status>/.exec(content);
+  const summaryMatch = /<summary>([^<]*)<\/summary>/.exec(content);
+  const outputFileMatch = /<output-file>([^<]*)<\/output-file>/.exec(content);
+
+  if (taskIdMatch && statusMatch && summaryMatch) {
+    return {
+      taskId: taskIdMatch[1] || '',
+      taskStatus: statusMatch[1] || 'completed',
+      summary: summaryMatch[1] || '',
+      outputFile: outputFileMatch ? outputFileMatch[1] : undefined,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Context-window fullness from raw transcript entries: the LAST assistant entry
+ * carrying `message.usage` describes the most recent API call — its input +
+ * cache tokens (plus that turn's output) approximate what the next call will
+ * occupy. Window size comes from CONTEXT_WINDOW (same env the web UI uses).
+ */
+export function deriveContextUsage(raws: unknown[]): { usedTokens: number; windowTokens: number } | null {
+  for (let i = raws.length - 1; i >= 0; i--) {
+    const r = raws[i] as AnyRecord | null;
+    const u = (r?.message as AnyRecord | undefined)?.usage as AnyRecord | undefined;
+    if (u && typeof u.input_tokens === 'number') {
+      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      const usedTokens =
+        n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens) + n(u.output_tokens);
+      const windowTokens = Number.parseInt(process.env.CONTEXT_WINDOW || '', 10) || 200_000;
+      return { usedTokens, windowTokens };
+    }
+  }
+  return null;
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -534,6 +584,29 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return messages;
     }
 
+    /**
+     * A tool_result's content can be an array of blocks — including IMAGE blocks
+     * whose base64 payload runs to hundreds of KB. JSON.stringify'ing that into
+     * the normalized `content` shipped megabyte "text" rows that clients then
+     * try to LAY OUT as text (the iOS app froze for seconds per frame on such a
+     * conversation). Extract the text, replace binary blocks with a marker.
+     */
+    const summarizeToolResultContent = (content: unknown): string => {
+      if (typeof content === 'string') return content;
+      if (!Array.isArray(content)) return JSON.stringify(content) ?? '';
+      return content
+        .map((p: AnyRecord) => {
+          if (p?.type === 'text') return String(p.text ?? '');
+          if (p?.type === 'image') {
+            const mime = (p?.source as AnyRecord | undefined)?.media_type || 'image';
+            return `[image: ${mime}]`;
+          }
+          return `[${String(p?.type ?? 'block')}]`;
+        })
+        .filter(Boolean)
+        .join('\n');
+    };
+
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
       const userImages = Array.isArray(raw.message.content)
         ? extractMessageImages(raw.message.content)
@@ -549,7 +622,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'tool_result',
               toolId: part.tool_use_id,
-              content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
+              content: summarizeToolResultContent(part.content),
               isError: Boolean(part.is_error),
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult,
@@ -662,6 +735,25 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               isLocalCommandStdout: true,
             }));
           }
+          return messages;
+        }
+
+        /**
+         * Task notifications are background task status updates emitted by Claude.
+         * Parse them into a proper message type instead of rendering raw XML.
+         */
+        const taskNotif = parseTaskNotification(text);
+        if (taskNotif) {
+          messages.push(createNormalizedMessage({
+            id: baseId,
+            sessionId,
+            timestamp: ts,
+            provider: PROVIDER,
+            kind: 'task_notification',
+            content: taskNotif.summary,
+            status: taskNotif.taskStatus,
+            summary: taskNotif.summary,
+          }));
           return messages;
         }
 
@@ -885,7 +977,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         const total = reachedStart ? this.countConversationMessages(normalized) : 0;
         const hasMore = !reachedStart || start > 0;
 
-        return { messages, total, hasMore, offset: normalizedOffset, limit: normalizedLimit };
+        return {
+          messages, total, hasMore, offset: normalizedOffset, limit: normalizedLimit,
+          context: deriveContextUsage(rawTail) ?? undefined,
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[ClaudeProvider] Failed to load session tail ${sessionId}:`, message);
@@ -907,6 +1002,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const normalized = this.normalizeRawMessages(rawMessages, sessionId);
     const total = this.countConversationMessages(normalized);
 
-    return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+    return {
+      messages: normalized, total, hasMore: false, offset: 0, limit: null,
+      context: deriveContextUsage(rawMessages) ?? undefined,
+    };
   }
 }

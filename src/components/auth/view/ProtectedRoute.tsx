@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
 import { CHAT_LOGIN, IS_PLATFORM } from '../../../constants/config';
+import { isNativeMobile } from '../../../mobile/serverConfig';
 import { useAuth } from '../context/AuthContext';
 import Onboarding from '../../onboarding/view/Onboarding';
 import AuthLoadingScreen from './AuthLoadingScreen';
 import ChatLoginExperience from './ChatLoginExperience';
 import LoginForm from './LoginForm';
+import MobileLoginForm from './MobileLoginForm';
 import SetupForm from './SetupForm';
 
 type ProtectedRouteProps = {
@@ -33,6 +35,12 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     }
 
     return <>{children}</>;
+  }
+
+  // Native apps always start at the mobile login (which also picks the server),
+  // even against a fresh server that would otherwise show the setup form.
+  if (isNativeMobile() && !user) {
+    return <MobileLoginForm />;
   }
 
   if (needsSetup) {

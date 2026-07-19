@@ -12,6 +12,9 @@ export interface FileTreeNode {
   modified?: string;
   permissionsRwx?: string;
   children?: FileTreeNode[];
+  /** Directory exists but wasn't walked (depth cutoff or mount boundary) — its
+   *  contents load on demand when expanded. */
+  truncated?: boolean;
   [key: string]: unknown;
 }
 
@@ -28,6 +31,14 @@ export interface FileTreeVideoSelection {
   path: string;
   projectPath?: string;
   // DB projectId; used by VideoViewer to build the raw content URL.
+  projectId: string;
+}
+
+export interface FileTreeAudioSelection {
+  name: string;
+  path: string;
+  projectPath?: string;
+  // DB projectId; used by AudioViewer to build the raw content URL.
   projectId: string;
 }
 

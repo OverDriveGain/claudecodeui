@@ -5,6 +5,9 @@ export type AuthUser = {
   username: string;
   /** BTI: per-user workspace dir the agent runs in (from the server). */
   workspacePath?: string;
+  // Set for agent-view share-token bearers: the one agent name this session may
+  // see. The UI collapses to that agent's conversation + files (no sidebar).
+  agentView?: string;
   [key: string]: unknown;
 };
 
@@ -48,6 +51,7 @@ export type AuthContextValue = {
   hasCompletedOnboarding: boolean;
   error: string | null;
   login: (username: string, password: string) => Promise<AuthActionResult>;
+  loginWithToken: (token: string) => Promise<AuthActionResult>;
   register: (username: string, password: string) => Promise<AuthActionResult>;
   requestToken: (email: string) => Promise<RequestTokenResult>;
   loginWithToken: (token: string) => Promise<AuthActionResult>;

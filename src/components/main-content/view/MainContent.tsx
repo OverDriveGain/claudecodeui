@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
 import CanvasView from '../../canvas/CanvasView';
@@ -40,6 +40,7 @@ function MainContent({
   sendMessage,
   latestMessage,
   isMobile,
+  agentViewMode = false,
   onMenuClick,
   isLoading,
   onInputFocusChange,
@@ -60,6 +61,18 @@ function MainContent({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
+
+  // Files tab is kept MOUNTED (hidden via CSS) once first visited, like the chat
+  // tab above — unmounting it on tab switch threw away the expanded-folders and
+  // drill-down state, so returning to Files always restarted at the tree root.
+  // Reset on project change so a new project gets a fresh (lazy) mount.
+  const [filesTabVisited, setFilesTabVisited] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'files') setFilesTabVisited(true);
+  }, [activeTab]);
+  useEffect(() => {
+    setFilesTabVisited(false);
+  }, [selectedProject?.projectId]);
 
   const {
     editingFile,

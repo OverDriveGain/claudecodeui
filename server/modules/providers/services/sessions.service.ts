@@ -13,6 +13,8 @@ import { AppError } from '@/shared/utils.js';
 // Remote-control proxy — read-only history fetch for connected agent sessions.
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
+import { deriveContextUsage } from '@/modules/providers/list/claude/claude-sessions.provider.js';
+import { currentAgentAllow, isNameAllowedForUser } from '@/services/user-context.js';
 
 type ArchivedSessionListItem = {
   sessionId: string;
@@ -119,6 +121,14 @@ export const sessionsService = {
       const events = await getRemoteSessionEventsCached(sessionId);
       const normalized: NormalizedMessage[] = [];
       for (const raw of events) {
+        // Skip subagent-internal events (Task sidechain): the relay stores a
+        // subagent's own prompt/thinking/tools/result inline, each tagged with the
+        // parent Task's tool_use_id. Locally these are folded under the Task tool,
+        // never shown as top-level messages — mirror that so history doesn't render
+        // the subagent's prompt as a user message or its thoughts as unsolicited output.
+        if (raw && typeof raw === 'object' && (raw as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
+          continue;
+        }
         normalized.push(...this.normalizeMessage('claude', raw, sessionId));
       }
 
@@ -131,13 +141,14 @@ export const sessionsService = {
         if (msg.kind !== 'tool_result') total += 1;
       }
 
+      const context = deriveContextUsage(events) ?? undefined;
       if (limit === null) {
-        return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+        return { messages: normalized, total, hasMore: false, offset: 0, limit: null, context };
       }
 
       const start = Math.max(0, totalNormalized - offset - limit);
       const end = Math.max(0, totalNormalized - offset);
-      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit };
+      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit, context };
     }
 
     const session = sessionsDb.getSessionById(sessionId);
@@ -146,6 +157,13 @@ export const sessionsService = {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
+    }
+
+    // Agent-restricted users (agent_allow set) may read history only for the local
+    // project that matches their agent name — the same scope the conversations list
+    // shows. Deny others rather than leak that the session exists.
+    if (currentAgentAllow()?.length && !isNameAllowedForUser(path.basename(session.project_path ?? ''))) {
+      return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
     const provider = session.provider as LLMProvider;

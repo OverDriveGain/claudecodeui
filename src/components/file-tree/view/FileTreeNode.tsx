@@ -85,7 +85,9 @@ export default function FileTreeNode({
 }: FileTreeNodeProps) {
   const isDirectory = item.type === 'directory';
   const isOpen = isDirectory && expandedDirs.has(item.path);
-  const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
+  // Truncated dirs (contents not walked yet — lazy-loaded on expand) must still
+  // present as expandable, else they'd render without a chevron and look empty.
+  const hasChildren = Boolean(isDirectory && ((item.children && item.children.length > 0) || item.truncated));
   const isRenaming = renamingItem?.path === item.path;
 
   const nameClassName = cn(
