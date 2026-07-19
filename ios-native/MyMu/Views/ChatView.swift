@@ -106,13 +106,6 @@ struct ChatView: View {
                             .equatable()
                             .id(m.id)
                     }
-                    // Inline thinking indicator — last transcript row, centered like
-                    // the web app's ClaudeStatus (justify-center).
-                    if relay.isLoading && !loadingHistory {
-                        MyMuLoader()
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 2)
-                    }
                     // Bottom sentinel: visible ⇒ the viewport is at the bottom. Drives
                     // the ↓ pill, re-arms follow-mode, and feeds the gap guard.
                     Color.clear.frame(height: 1).id("bottom")
@@ -208,6 +201,24 @@ struct ChatView: View {
             .overlay {
                 if !revealed {
                     MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            // STICKY working indicator: floats over the transcript just above the
+            // composer. As a transcript ROW it changed content height on appear
+            // (below the fold — you had to scroll to see it) and on removal at
+            // turn end (one of the blank-gap causes). An overlay shifts nothing.
+            .overlay(alignment: .bottom) {
+                if relay.isLoading && !loadingHistory && revealed {
+                    MyMuLoader()
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Theme.surface.opacity(0.94))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
