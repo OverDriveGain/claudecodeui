@@ -1,17 +1,19 @@
 import SwiftUI
 
-/// MyMu brand palette (the app's dark identity — mirrors src/index.css dark theme).
+/// MyMu brand palette — pitch-black, high-contrast. The purple IS the identity
+/// and stays untouched; everything that was a washed mid-gray got pushed to
+/// true black (OLED-crisp) with brighter text so edges read sharp, not pale.
 enum Theme {
-    static let background = Color(hex: "222222")   // conversation bg (darkest)
-    static let surface = Color(hex: "2B2B2B")      // cards / composer (elevated)
-    static let elevated = Color(hex: "393939")     // hover / selected / border
-    static let primary = Color(hex: "AA88DD")      // brand accent — "the M"
-    static let text = Color(hex: "E0E0E0")         // default text
-    static let mutedText = Color(hex: "8C8C8C")    // secondary text
-    static let border = Color(hex: "393939")
-    static let danger = Color(hex: "DB5C5C")       // error red
-    static let userBubble = Color(hex: "AA88DD").opacity(0.20)
-    static let assistantBubble = Color(hex: "2B2B2B")
+    static let background = Color(hex: "000000")   // conversation bg — pitch black
+    static let surface = Color(hex: "111113")      // cards / composer (barely lifted)
+    static let elevated = Color(hex: "232328")     // hover / selected
+    static let primary = Color(hex: "AA88DD")      // brand accent — "the M" (unchanged)
+    static let text = Color(hex: "F2F2F7")         // crisp near-white
+    static let mutedText = Color(hex: "A3A3AC")    // secondary — readable on black
+    static let border = Color(hex: "232328")
+    static let danger = Color(hex: "E5484D")       // sharper error red
+    static let userBubble = Color(hex: "AA88DD").opacity(0.22)
+    static let assistantBubble = Color(hex: "141416")
 }
 
 extension Color {
