@@ -351,6 +351,7 @@ async function getSessionMessages(
  */
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
+  '<local-command-caveat>',
   'Caveat:',
   '[Request interrupted',
 ] as const;
@@ -368,6 +369,24 @@ function isInternalContent(content: string): boolean {
  */
 function stripSystemReminders(content: string): string {
   return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+}
+
+/**
+ * The CLI writes "[Image: original WxH, displayed at WxH. …]" sizing notes next
+ * to attached images. Locally those rows are isMeta (never rendered), but the
+ * relay ships them as ordinary user rows, so remote transcripts showed them as
+ * bubbles. Strip the note lines; the image itself renders via extractMessageImages.
+ */
+function stripImageSizeNotes(content: string): string {
+  return content.replace(/^\[Image(?: #\d+)?: original \d+x\d+[^\]]*\]$/gm, '').trim();
+}
+
+/**
+ * The relay represents an empty assistant turn (e.g. the no-op reply after
+ * /clear) as a literal "(no content)" text block — never render it.
+ */
+function isEmptyAssistantPlaceholder(text: string): boolean {
+  return text.trim() === '(no content)';
 }
 
 /**
@@ -628,7 +647,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
-            const cleaned = stripSystemReminders(part.text || '');
+            const cleaned = stripImageSizeNotes(stripSystemReminders(part.text || ''));
             if (cleaned && !isInternalContent(cleaned)) {
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
@@ -649,7 +668,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n');
-          const cleanedParts = stripSystemReminders(textParts);
+          const cleanedParts = stripImageSizeNotes(stripSystemReminders(textParts));
           if (cleanedParts && !isInternalContent(cleanedParts)) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
@@ -696,7 +715,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         const localCommandPayload = parseLocalCommandPayload(text);
         if (localCommandPayload) {
           const displayText = buildLocalCommandDisplayText(localCommandPayload);
-          if (displayText) {
+          // /clear leaves no visible trace in the CLI (the screen just resets),
+          // and on relay sessions this row duplicates the typed "/clear" echo —
+          // suppress it instead of rendering a stray user bubble.
+          if (displayText && displayText !== '/clear') {
             messages.push(createNormalizedMessage({
               id: baseId,
               sessionId,
@@ -757,7 +779,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        const cleaned = stripSystemReminders(text);
+        const cleaned = stripImageSizeNotes(stripSystemReminders(text));
         if (cleaned && !isInternalContent(cleaned)) {
           messages.push(createNormalizedMessage({
             id: baseId,
@@ -837,7 +859,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       if (Array.isArray(raw.message.content)) {
         let partIndex = 0;
         for (const part of raw.message.content) {
-          if (part.type === 'text' && part.text) {
+          if (part.type === 'text' && part.text && !isEmptyAssistantPlaceholder(part.text)) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
@@ -870,7 +892,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           }
           partIndex++;
         }
-      } else if (typeof raw.message.content === 'string') {
+      } else if (typeof raw.message.content === 'string' && !isEmptyAssistantPlaceholder(raw.message.content)) {
         messages.push(createNormalizedMessage({
           id: baseId,
           sessionId,
