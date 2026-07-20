@@ -222,10 +222,19 @@ struct ChatView: View {
             // turn end (one of the blank-gap causes). An overlay shifts nothing.
             .overlay(alignment: .bottom) {
                 if relay.isLoading && !loadingHistory && revealed {
-                    MyMuLoader()
-                        .padding(.bottom, 8)
-                        .transition(.opacity)
-                        .allowsHitTesting(false)
+                    HStack(spacing: 10) {
+                        MyMuLoader()
+                        if let t = relay.turnStartedAt {
+                            TimelineView(.periodic(from: t, by: 1)) { ctx in
+                                Text(Self.elapsedLabel(from: t, to: ctx.date))
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(Theme.mutedText)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -347,6 +356,14 @@ struct ChatView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
         .overlay(Rectangle().frame(height: 1).foregroundColor(Theme.border), alignment: .top)
+    }
+
+    /// "42s" / "4m 12s" / "1h 04m" — how long the agent has been working.
+    static func elapsedLabel(from start: Date, to now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(start)))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m \(String(format: "%02d", s % 60))s" }
+        return "\(s / 3600)h \(String(format: "%02d", (s % 3600) / 60))m"
     }
 
     private func start() async {

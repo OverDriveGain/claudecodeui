@@ -12,7 +12,14 @@ import Foundation
 @MainActor
 final class RelayClient: ObservableObject {
     @Published var messages: [ChatMessage] = []
-    @Published var isLoading = false
+    @Published var isLoading = false {
+        didSet {
+            if isLoading && !oldValue { turnStartedAt = Date() }
+            if !isLoading { turnStartedAt = nil }
+        }
+    }
+    /// When the current turn started — drives the elapsed timer on the loader.
+    @Published var turnStartedAt: Date?
     @Published var statusText: String?
     @Published var connected = false
     @Published var pendingPermission: ChatMessage?
