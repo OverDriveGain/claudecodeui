@@ -35,6 +35,12 @@ final class RelayClient: ObservableObject {
     /// True once turnStartedAt holds the REAL turn start (local send or server
     /// transcript timestamp) rather than the provisional "when I noticed" stamp.
     private var turnAnchored = false
+    /// Armed by send(); the first response frame fires the reply haptic.
+    private var awaitingFirstResponse = false
+
+    private func noteResponseActivity() {
+        if awaitingFirstResponse { awaitingFirstResponse = false; Haptics.firstResponse() }
+    }
     @Published var statusText: String?
     @Published var connected = false
     @Published var pendingPermission: ChatMessage?
@@ -103,11 +109,21 @@ final class RelayClient: ObservableObject {
         sendJSON(["type": "rc-subscribe", "sessionId": sessionId])
     }
 
+    /// Foreground kick: iOS kills sockets in the background but they look alive
+    /// until the next I/O fails, so returning to the app could sit stale for the
+    /// full backoff. Re-subscribe (or reopen) and reconcile immediately instead.
+    func ensureConnected() {
+        if task == nil { openSocket() } else { subscribe() }
+        reconcile()
+    }
+
     private func scheduleReconnect() {
         guard !intentionalClose else { return }
         task = nil
         reconnectAttempts += 1
-        let delay = min(pow(2.0, Double(reconnectAttempts)), 15.0)
+        // Fast first retries (0.5s, 1s, 2s…) — the old 2s/4s/…/15s curve left
+        // visible dead air after every network blip.
+        let delay = min(0.5 * pow(2.0, Double(reconnectAttempts - 1)), 8.0)
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !self.intentionalClose else { return }
@@ -134,6 +150,10 @@ final class RelayClient: ObservableObject {
         // A turn started HERE is anchored exactly by the send moment; a mid-turn
         // queued message must NOT restart the timer (isLoading was already true).
         turnAnchored = true
+        awaitingFirstResponse = true
+        // iOS kills sockets in the background; a send into a dead one would
+        // silently vanish behind the optimistic bubble. Reopen before sending.
+        if task == nil { openSocket() }
         var options: [String: Any] = [:]
         if isRemote {
             options["sessionId"] = sessionId
@@ -147,7 +167,7 @@ final class RelayClient: ObservableObject {
             if !sessionId.isEmpty { options["sessionId"] = sessionId; options["resume"] = true }
         }
         if !attachments.isEmpty { options["images"] = attachments }
-        sendJSON(["type": "claude-command", "command": trimmed, "options": options])
+        sendJSON(["type": "claude-command", "command": trimmed, "options": options], retryOnce: true)
     }
 
     func answerPermission(requestId: String, allow: Bool) {
@@ -295,6 +315,7 @@ final class RelayClient: ObservableObject {
 
         switch kind {
         case "stream_delta":
+            noteResponseActivity()
             appendStream(obj["content"] as? String ?? "")
             isLoading = true
         case "stream_end":
@@ -302,6 +323,7 @@ final class RelayClient: ObservableObject {
         case "text":
             streamingId = nil
             let role = obj["role"] as? String ?? "assistant"
+            if role == "assistant" { noteResponseActivity() }
             let body = (obj["displayText"] as? String) ?? (obj["content"] as? String) ?? ""
             if !body.isEmpty {
                 // The relay echoes the user's own message back as a text frame. If we
@@ -320,6 +342,7 @@ final class RelayClient: ObservableObject {
                 }
             }
         case "tool_use":
+            noteResponseActivity()
             var m = ChatMessage(id: messageId(obj), kind: "tool_use", role: "assistant",
                                 toolName: obj["toolName"] as? String)
             if let ti = obj["toolInput"] { m.toolInput = AnyCodable(ti) }
@@ -331,6 +354,7 @@ final class RelayClient: ObservableObject {
             statusText = obj["text"] as? String
             isLoading = true
         case "permission_request":
+            Haptics.attention()
             var m = ChatMessage(id: messageId(obj), kind: "permission_request", role: "assistant",
                                 toolName: obj["toolName"] as? String)
             m.requestId = obj["requestId"] as? String
@@ -345,11 +369,13 @@ final class RelayClient: ObservableObject {
             pendingPermission = nil
         case "error":
             streamingId = nil
+            Haptics.error()
             appendOrReplace(ChatMessage(id: messageId(obj), kind: "error", role: "assistant",
                                         content: obj["content"] as? String, isError: true))
             isLoading = false
         case "complete":
             streamingId = nil
+            if isLoading { Haptics.complete() }
             isLoading = false
             statusText = nil
             scheduleReconcile()
@@ -408,9 +434,21 @@ final class RelayClient: ObservableObject {
 
     private func nextSeq() -> Int { seq += 1; return seq }
 
-    private func sendJSON(_ dict: [String: Any]) {
+    private func sendJSON(_ dict: [String: Any], retryOnce: Bool = false) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let str = String(data: data, encoding: .utf8) else { return }
-        task?.send(.string(str)) { _ in }
+        let ws = task
+        ws?.send(.string(str)) { [weak self] error in
+            guard error != nil, retryOnce else { return }
+            // Dead socket (backgrounding kills them): reopen and resend once so
+            // the message the user already sees as sent actually goes out.
+            Task { @MainActor in
+                guard let self else { return }
+                if self.task === ws { self.task = nil }
+                self.openSocket()
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                self.task?.send(.string(str)) { _ in }
+            }
+        }
     }
 }

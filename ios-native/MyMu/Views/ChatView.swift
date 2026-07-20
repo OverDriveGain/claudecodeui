@@ -40,6 +40,7 @@ struct ChatView: View {
     /// False until the opening transcript is pinned to the bottom — content is
     /// hidden (loader shown) so the settling scroll is never visible.
     @State private var revealed = false
+    @Environment(\.scenePhase) private var scenePhase
     private let previewMessages: [ChatMessage]?
 
     init(sessionId: String, projectId: String, isRemote: Bool, title: String, token: String,
@@ -98,6 +99,14 @@ struct ChatView: View {
                 await relay.syncRunningState(appState.api)
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
+        }
+        // Returning from the background: the socket iOS killed still LOOKS open,
+        // so without this kick the chat sat stale until the next failed I/O plus
+        // the reconnect backoff. Reconnect + reconcile + status sync right away.
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active, previewMessages == nil else { return }
+            relay.ensureConnected()
+            Task { await relay.syncRunningState(appState.api) }
         }
         .onDisappear { relay.disconnect() }
     }
