@@ -32,6 +32,10 @@ final class RelayClient: ObservableObject {
     private let token: String
     private(set) var sessionId: String
     private let isRemote: Bool
+    /// Remote agent sessions accept messages MID-TURN (the relay routes them
+    /// through the agent's native queue) — the composer uses this to allow
+    /// queueing while the agent is working.
+    var supportsMidTurnSend: Bool { isRemote }
     private let projectPath: String?
     private var task: URLSessionWebSocketTask?
     private var keepAlive: Task<Void, Never>?

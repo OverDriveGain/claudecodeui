@@ -460,10 +460,12 @@ private struct ChatComposer: View {
                     .padding(.trailing, 6)
                     .padding(.vertical, 14)
 
+                // Mid-turn sends are allowed for remote agents — the relay queues
+                // them into the agent's own message queue (same as the web app), so
+                // typed text always SENDS; stop is offered only when the composer
+                // is empty. Local sessions keep stop-while-working (no queue there).
                 Button {
-                    if relay.isLoading {
-                        relay.abort()
-                    } else {
+                    if canSend && (!relay.isLoading || relay.supportsMidTurnSend) {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         onWillSend()
                         let text = input
@@ -471,9 +473,13 @@ private struct ChatComposer: View {
                         input = ""
                         attachments = []
                         relay.send(text, attachments: files)
+                    } else if relay.isLoading {
+                        relay.abort()
                     }
                 } label: {
-                    Image(systemName: relay.isLoading ? "stop.circle.fill" : "arrow.up.circle.fill")
+                    Image(systemName: (canSend && (!relay.isLoading || relay.supportsMidTurnSend))
+                          ? "arrow.up.circle.fill"
+                          : (relay.isLoading ? "stop.circle.fill" : "arrow.up.circle.fill"))
                         .font(.system(size: 32))
                         .foregroundColor(sendButtonActive ? Theme.primary : Theme.mutedText.opacity(0.5))
                 }
