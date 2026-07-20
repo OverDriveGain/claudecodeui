@@ -391,6 +391,9 @@ struct ChatView: View {
                 let h = try await appState.api.history(sessionId: sid)
                 relay.setHistory(h.messages)
                 if let ctx = h.context { relay.context = ctx }
+                // If a stream frame already flipped the loader on, anchor the
+                // timer to the real turn start carried by this history fetch.
+                relay.applyServerTurnStart(h.turnStartedAt)
             } catch {
                 loadError = error.localizedDescription
             }

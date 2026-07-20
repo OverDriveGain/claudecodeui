@@ -267,6 +267,12 @@ export type FetchHistoryResult = {
   /** Context-window fullness derived from the transcript's last usage-bearing
    *  assistant message — lets clients show a "context X% full" meter. */
   context?: { usedTokens: number; windowTokens: number };
+  /** ISO timestamp of the user prompt that opened a still-unfinished turn (no
+   *  `result` event after it), or absent when the last turn completed. Lets a
+   *  client that opens a mid-turn conversation anchor its elapsed-time indicator
+   *  to the REAL turn start instead of restarting from zero. Remote (relay)
+   *  sessions only. */
+  turnStartedAt?: string;
 };
 
 // ---------------------------

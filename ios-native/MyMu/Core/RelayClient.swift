@@ -14,12 +14,18 @@ final class RelayClient: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isLoading = false {
         didSet {
-            if isLoading && !oldValue { turnStartedAt = Date() }
-            if !isLoading { turnStartedAt = nil }
+            // Date() is only a provisional anchor — the real turn start (the user
+            // prompt's transcript timestamp) replaces it via applyServerTurnStart,
+            // so reopening a mid-turn conversation shows true elapsed, not zero.
+            if isLoading && !oldValue { turnStartedAt = Date(); turnAnchored = false }
+            if !isLoading { turnStartedAt = nil; turnAnchored = false }
         }
     }
     /// When the current turn started — drives the elapsed timer on the loader.
     @Published var turnStartedAt: Date?
+    /// True once turnStartedAt holds the REAL turn start (local send or server
+    /// transcript timestamp) rather than the provisional "when I noticed" stamp.
+    private var turnAnchored = false
     @Published var statusText: String?
     @Published var connected = false
     @Published var pendingPermission: ChatMessage?
@@ -116,6 +122,9 @@ final class RelayClient: ObservableObject {
         }
         appendOrReplace(ChatMessage(id: "local-\(nextSeq())", kind: "text", role: "user", content: shown))
         isLoading = true
+        // A turn started HERE is anchored exactly by the send moment; a mid-turn
+        // queued message must NOT restart the timer (isLoading was already true).
+        turnAnchored = true
         var options: [String: Any] = [:]
         if isRemote {
             options["sessionId"] = sessionId
@@ -151,9 +160,37 @@ final class RelayClient: ObservableObject {
         guard isRemote else { return }
         if let st = try? await api.agentStatus(),
            let mine = st.first(where: { $0.id == sessionId }),
-           mine.running == true, !isLoading {
-            isLoading = true
+           mine.running == true {
+            if !isLoading { isLoading = true }
+            // Turn started elsewhere (web, another device, a scheduled run) or
+            // was already running on open: fetch the real start from the
+            // transcript so the timer doesn't restart from zero. Retries on the
+            // next poll until anchored (limit=1 keeps the fetch tiny).
+            if !turnAnchored { await refreshTurnStart(api) }
         }
+    }
+
+    /// Anchor the elapsed timer to the transcript's turn-start timestamp.
+    /// Ignored when idle (a stale anchor from a finished turn must not revive).
+    func applyServerTurnStart(_ iso: String?) {
+        guard isLoading, let iso, let date = Self.parseISO(iso) else { return }
+        turnStartedAt = date
+        turnAnchored = true
+    }
+
+    /// Fetch just the turn anchor — history with limit=1 still carries
+    /// turnStartedAt (derived server-side from the full event log).
+    private func refreshTurnStart(_ api: APIClient) async {
+        guard let h = try? await api.history(sessionId: sessionId, limit: 1) else { return }
+        applyServerTurnStart(h.turnStartedAt)
+    }
+
+    /// Relay timestamps carry microsecond fractions ("…T00:03:53.981039Z") that
+    /// ISO8601DateFormatter rejects — drop the fraction (second precision is
+    /// plenty for an elapsed timer).
+    static func parseISO(_ s: String) -> Date? {
+        let cleaned = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        return ISO8601DateFormatter().date(from: cleaned)
     }
 
     // MARK: History

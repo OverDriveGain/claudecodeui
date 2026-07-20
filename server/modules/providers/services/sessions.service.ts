@@ -51,6 +51,29 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
  * archive API self-contained while still matching the project's stored display
  * name when one exists.
  */
+/**
+ * Real start of a still-open turn: the newest user PROMPT event with no `result`
+ * (turn end) after it. Synthetic rows (caveats, image sizing notes), tool_result
+ * carriers, and subagent sidechains are not prompts. Returns null when the last
+ * turn completed — the client only consumes this while the agent is running, so
+ * a stale open turn (interrupted, never produced a result) is harmless.
+ */
+function deriveTurnStartedAt(events: unknown[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i] as Record<string, unknown> | null;
+    if (!e || typeof e !== 'object') continue;
+    if (e.type === 'result') return null;
+    if (e.type !== 'user' || e.isSynthetic === true || e.parent_tool_use_id) continue;
+    const content = (e.message as Record<string, unknown> | undefined)?.content;
+    if (Array.isArray(content) && content.some((p) => (p as Record<string, unknown>)?.type === 'tool_result')) {
+      continue;
+    }
+    const ts = e.created_at || e.timestamp;
+    return typeof ts === 'string' && ts ? ts : null;
+  }
+  return null;
+}
+
 function resolveProjectDisplayName(
   projectPath: string | null,
   customProjectName: string | null | undefined,
@@ -142,13 +165,14 @@ export const sessionsService = {
       }
 
       const context = deriveContextUsage(events) ?? undefined;
+      const turnStartedAt = deriveTurnStartedAt(events) ?? undefined;
       if (limit === null) {
-        return { messages: normalized, total, hasMore: false, offset: 0, limit: null, context };
+        return { messages: normalized, total, hasMore: false, offset: 0, limit: null, context, turnStartedAt };
       }
 
       const start = Math.max(0, totalNormalized - offset - limit);
       const end = Math.max(0, totalNormalized - offset);
-      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit, context };
+      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit, context, turnStartedAt };
     }
 
     const session = sessionsDb.getSessionById(sessionId);

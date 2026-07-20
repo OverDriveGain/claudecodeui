@@ -140,6 +140,9 @@ struct HistoryResponse: Codable {
     let offset: Int?
     let limit: Int?
     let context: ContextUsage?
+    /// ISO timestamp of the user prompt that opened a still-running turn —
+    /// lets the elapsed timer anchor to the REAL turn start across reopens.
+    let turnStartedAt: String?
 }
 
 // MARK: - AnyCodable — hold arbitrary JSON for tool payloads
