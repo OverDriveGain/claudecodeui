@@ -189,8 +189,10 @@ struct FilePreviewView: View {
     private var media: some View {
         if let url = Config.fileStreamURL(projectId: projectId, path: path, token: token, delivered: false) {
             if isImage {
-                AsyncImage(url: url) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                RemoteImage(url: url) {
+                    Label(name, systemImage: "photo").font(.caption).foregroundColor(Theme.mutedText)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             } else if isVideo {
                 VideoBubble(url: url)
             } else {

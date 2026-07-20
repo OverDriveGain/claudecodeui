@@ -17,12 +17,21 @@ final class RelayClient: ObservableObject {
             // Date() is only a provisional anchor — the real turn start (the user
             // prompt's transcript timestamp) replaces it via applyServerTurnStart,
             // so reopening a mid-turn conversation shows true elapsed, not zero.
-            if isLoading && !oldValue { turnStartedAt = Date(); turnAnchored = false }
-            if !isLoading { turnStartedAt = nil; turnAnchored = false }
+            if isLoading && !oldValue {
+                turnStartedAt = Date(); turnAnchored = false
+                // Baseline for the token counter: the last known context position.
+                turnStartContext = context?.usedTokens
+                turnTokens = nil
+            }
+            if !isLoading { turnStartedAt = nil; turnAnchored = false; turnStartContext = nil; turnTokens = nil }
         }
     }
     /// When the current turn started — drives the elapsed timer on the loader.
     @Published var turnStartedAt: Date?
+    /// Tokens the context grew since the turn started ("tokens this turn"),
+    /// ticking live off assistant frames' absolute contextTokens field.
+    @Published var turnTokens: Int?
+    private var turnStartContext: Int?
     /// True once turnStartedAt holds the REAL turn start (local send or server
     /// transcript timestamp) rather than the provisional "when I noticed" stamp.
     private var turnAnchored = false
@@ -170,19 +179,40 @@ final class RelayClient: ObservableObject {
         }
     }
 
-    /// Anchor the elapsed timer to the transcript's turn-start timestamp.
+    /// Anchor the elapsed timer to the transcript's turn-start timestamp and
+    /// seed the token counter's baseline when the server provides one.
     /// Ignored when idle (a stale anchor from a finished turn must not revive).
-    func applyServerTurnStart(_ iso: String?) {
+    func applyServerTurnStart(_ iso: String?, startContext: Int? = nil) {
         guard isLoading, let iso, let date = Self.parseISO(iso) else { return }
         turnStartedAt = date
         turnAnchored = true
+        if let startContext {
+            turnStartContext = startContext
+            if let current = context?.usedTokens {
+                turnTokens = max(0, current - startContext)
+            }
+        }
+    }
+
+    /// Assistant frames carry the absolute context position; diff against the
+    /// turn baseline for the live counter. Absolute values are replay-safe —
+    /// duplicated frames can never double-count.
+    private func noteContextTokens(_ tokens: Int) {
+        guard isLoading else { return }
+        if turnStartContext == nil { turnStartContext = tokens }
+        turnTokens = max(0, tokens - (turnStartContext ?? tokens))
+        // Keep the header context meter live during the turn too.
+        if let c = context, tokens > c.usedTokens {
+            context = ContextUsage(usedTokens: tokens, windowTokens: c.windowTokens)
+        }
     }
 
     /// Fetch just the turn anchor — history with limit=1 still carries
     /// turnStartedAt (derived server-side from the full event log).
     private func refreshTurnStart(_ api: APIClient) async {
         guard let h = try? await api.history(sessionId: sessionId, limit: 1) else { return }
-        applyServerTurnStart(h.turnStartedAt)
+        if let ctx = h.context { context = ctx }
+        applyServerTurnStart(h.turnStartedAt, startContext: h.turnStartContextTokens)
     }
 
     /// Relay timestamps carry microsecond fractions ("…T00:03:53.981039Z") that
@@ -259,6 +289,9 @@ final class RelayClient: ObservableObject {
             if let status = obj["status"] as? [String: Any], let t = status["text"] as? String { statusText = t }
             return
         }
+
+        // Live token counter: assistant frames carry the absolute context position.
+        if let ctx = obj["contextTokens"] as? Int { noteContextTokens(ctx) }
 
         switch kind {
         case "stream_delta":

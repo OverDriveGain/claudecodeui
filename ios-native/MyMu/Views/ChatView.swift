@@ -231,6 +231,11 @@ struct ChatView: View {
                                     .foregroundColor(Theme.mutedText)
                             }
                         }
+                        if let tok = relay.turnTokens, tok > 0 {
+                            Text("· \(Self.tokensLabel(tok)) tokens")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(Theme.mutedText)
+                        }
                     }
                     .padding(.bottom, 8)
                     .transition(.opacity)
@@ -358,6 +363,13 @@ struct ChatView: View {
         .overlay(Rectangle().frame(height: 1).foregroundColor(Theme.border), alignment: .top)
     }
 
+    /// "412" / "4.2k" / "112k" — tokens generated this turn, CLI-style.
+    static func tokensLabel(_ n: Int) -> String {
+        if n < 1000 { return "\(n)" }
+        if n < 100_000 { return String(format: "%.1fk", Double(n) / 1000) }
+        return "\(n / 1000)k"
+    }
+
     /// "42s" / "4m 12s" / "1h 04m" — how long the agent has been working.
     static func elapsedLabel(from start: Date, to now: Date) -> String {
         let s = max(0, Int(now.timeIntervalSince(start)))
@@ -393,7 +405,7 @@ struct ChatView: View {
                 if let ctx = h.context { relay.context = ctx }
                 // If a stream frame already flipped the loader on, anchor the
                 // timer to the real turn start carried by this history fetch.
-                relay.applyServerTurnStart(h.turnStartedAt)
+                relay.applyServerTurnStart(h.turnStartedAt, startContext: h.turnStartContextTokens)
             } catch {
                 loadError = error.localizedDescription
             }

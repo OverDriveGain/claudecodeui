@@ -224,6 +224,9 @@ export type NormalizedMessage = {
   isError?: boolean;
   text?: string;
   tokens?: number;
+  /** Absolute context position (tokens) at this assistant message — clients diff
+   *  it against the turn-start position for a live "tokens this turn" counter. */
+  contextTokens?: number;
   canInterrupt?: boolean;
   requestId?: string;
   input?: unknown;
@@ -273,6 +276,9 @@ export type FetchHistoryResult = {
    *  to the REAL turn start instead of restarting from zero. Remote (relay)
    *  sessions only. */
   turnStartedAt?: string;
+  /** Context position (tokens) just before the open turn started — baseline for
+   *  the live "tokens this turn" counter. Set only alongside turnStartedAt. */
+  turnStartContextTokens?: number;
 };
 
 // ---------------------------

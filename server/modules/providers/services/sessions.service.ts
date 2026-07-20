@@ -13,7 +13,7 @@ import { AppError } from '@/shared/utils.js';
 // Remote-control proxy — read-only history fetch for connected agent sessions.
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
-import { deriveContextUsage } from '@/modules/providers/list/claude/claude-sessions.provider.js';
+import { deriveContextUsage, usageContextTokens } from '@/modules/providers/list/claude/claude-sessions.provider.js';
 import { currentAgentAllow, isNameAllowedForUser } from '@/services/user-context.js';
 
 type ArchivedSessionListItem = {
@@ -58,7 +58,7 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
  * turn completed — the client only consumes this while the agent is running, so
  * a stale open turn (interrupted, never produced a result) is harmless.
  */
-function deriveTurnStartedAt(events: unknown[]): string | null {
+function deriveOpenTurn(events: unknown[]): { turnStartedAt: string; turnStartContextTokens?: number } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i] as Record<string, unknown> | null;
     if (!e || typeof e !== 'object') continue;
@@ -69,7 +69,15 @@ function deriveTurnStartedAt(events: unknown[]): string | null {
       continue;
     }
     const ts = e.created_at || e.timestamp;
-    return typeof ts === 'string' && ts ? ts : null;
+    if (typeof ts !== 'string' || !ts) return null;
+    // Baseline for the live "tokens this turn" counter: the context position of
+    // the last assistant message BEFORE this prompt.
+    for (let k = i - 1; k >= 0; k--) {
+      const prev = events[k] as Record<string, unknown> | null;
+      const tokens = usageContextTokens((prev?.message as Record<string, unknown> | undefined)?.usage);
+      if (tokens !== null) return { turnStartedAt: ts, turnStartContextTokens: tokens };
+    }
+    return { turnStartedAt: ts };
   }
   return null;
 }
@@ -165,14 +173,22 @@ export const sessionsService = {
       }
 
       const context = deriveContextUsage(events) ?? undefined;
-      const turnStartedAt = deriveTurnStartedAt(events) ?? undefined;
+      const openTurn = deriveOpenTurn(events) ?? undefined;
+      const turnStartedAt = openTurn?.turnStartedAt;
+      const turnStartContextTokens = openTurn?.turnStartContextTokens;
       if (limit === null) {
-        return { messages: normalized, total, hasMore: false, offset: 0, limit: null, context, turnStartedAt };
+        return {
+          messages: normalized, total, hasMore: false, offset: 0, limit: null,
+          context, turnStartedAt, turnStartContextTokens,
+        };
       }
 
       const start = Math.max(0, totalNormalized - offset - limit);
       const end = Math.max(0, totalNormalized - offset);
-      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit, context, turnStartedAt };
+      return {
+        messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit,
+        context, turnStartedAt, turnStartContextTokens,
+      };
     }
 
     const session = sessionsDb.getSessionById(sessionId);

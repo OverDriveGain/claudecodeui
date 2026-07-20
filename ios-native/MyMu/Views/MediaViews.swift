@@ -1,5 +1,80 @@
 import SwiftUI
 import AVKit
+import ImageIO
+import UIKit
+
+/// AsyncImage replacement for authenticated media. AsyncImage cancels its load
+/// the moment the row leaves the viewport — the open-settle scroll does that
+/// constantly in a lazy transcript — and then PARKS in .failure forever, so
+/// delivered images showed as bare filename chips. This loader retries on every
+/// re-appear, keeps decoded images in a process-wide cache (scroll-back is
+/// instant, no re-download), and downsamples huge renders to screen scale.
+struct RemoteImage<Failure: View>: View {
+    let url: URL
+    @ViewBuilder let failure: () -> Failure
+
+    @State private var image: UIImage?
+    @State private var failed = false
+    @State private var attempt = 0
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if failed {
+                failure()
+            } else {
+                ProgressView().frame(maxWidth: .infinity)
+            }
+        }
+        // .task re-runs when the row re-enters the viewport; bumping `attempt`
+        // on re-appear also retries a genuine earlier failure.
+        .task(id: attempt) { await load() }
+        .onAppear { if image == nil && failed { failed = false; attempt += 1 } }
+    }
+
+    private func load() async {
+        if let cached = RemoteImageCache.shared.object(forKey: url as NSURL) { image = cached; return }
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200, let img = Self.downsampled(data) else {
+                failed = true
+                return
+            }
+            RemoteImageCache.shared.setObject(img, forKey: url as NSURL)
+            image = img
+        } catch {
+            // A cancelled load (row left the screen mid-download) is not a
+            // failure — the next appear retries it silently.
+            if (error as? URLError)?.code == .cancelled || error is CancellationError { return }
+            failed = true
+        }
+    }
+
+    /// Agents deliver full-resolution renders (multi-MB, 3000px+). Decode at a
+    /// bounded pixel size so a transcript with several images can't spike memory.
+    private static func downsampled(_ data: Data) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return UIImage(data: data) }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1600,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: cg)
+    }
+}
+
+enum RemoteImageCache {
+    static let shared: NSCache<NSURL, UIImage> = {
+        let c = NSCache<NSURL, UIImage>()
+        c.totalCostLimit = 64 * 1024 * 1024
+        return c
+    }()
+}
 
 /// Inline preview of a file an agent delivered (SendUserFile). Streams from the
 /// authenticated delivered-file endpoint (token in the query — media elements
@@ -25,21 +100,9 @@ struct DeliveredMediaView: View {
                 // reflowed the list and re-opened the blank strip when opening
                 // an agent conversation. A row's height must NEVER change after
                 // first layout.
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFit()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    case .failure:
-                        fallback(url)
-                    case .empty:
-                        ProgressView().frame(maxWidth: .infinity)
-                    @unknown default:
-                        fallback(url)
-                    }
-                }
-                .frame(height: 240, alignment: .leading)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                RemoteImage(url: url) { fallback(url) }
+                    .frame(height: 240, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             case "mp4", "mov", "m4v", "webm", "ogv":
                 VideoBubble(url: url)
             case "mp3", "wav", "m4a", "aac", "ogg", "opus", "flac", "oga":

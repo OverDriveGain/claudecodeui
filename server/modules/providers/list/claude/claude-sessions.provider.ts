@@ -515,6 +515,20 @@ function parseTaskNotification(content: string): TaskNotificationPayload | null 
  * cache tokens (plus that turn's output) approximate what the next call will
  * occupy. Window size comes from CONTEXT_WINDOW (same env the web UI uses).
  */
+/**
+ * Absolute context position (tokens) recorded in one assistant message's usage.
+ * Grows monotonically through a turn — clients diff it against the turn-start
+ * position for a live "tokens this turn" counter. Note: per-event
+ * `output_tokens` is a message-START snapshot (1-2 tokens), never sum it.
+ */
+export function usageContextTokens(usage: unknown): number | null {
+  const u = usage as AnyRecord | undefined;
+  if (!u || typeof u !== 'object' || typeof u.input_tokens !== 'number') return null;
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const total = n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens);
+  return total > 0 ? total : null;
+}
+
 export function deriveContextUsage(raws: unknown[]): { usedTokens: number; windowTokens: number } | null {
   for (let i = raws.length - 1; i >= 0; i--) {
     const r = raws[i] as AnyRecord | null;
@@ -856,6 +870,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (raw.message?.role === 'assistant' && raw.message?.content) {
+      // Absolute context position rides on every assistant frame so live clients
+      // can tick a "tokens this turn" counter (absolute → replay/dedup safe).
+      const contextTokens = usageContextTokens(raw.message?.usage) ?? undefined;
       if (Array.isArray(raw.message.content)) {
         let partIndex = 0;
         for (const part of raw.message.content) {
@@ -868,6 +885,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               kind: 'text',
               role: 'assistant',
               content: part.text,
+              contextTokens,
             }));
           } else if (part.type === 'tool_use') {
             messages.push(createNormalizedMessage({
@@ -879,6 +897,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolName: part.name,
               toolInput: part.input,
               toolId: part.id,
+              contextTokens,
             }));
           } else if (part.type === 'thinking' && part.thinking) {
             messages.push(createNormalizedMessage({
@@ -901,6 +920,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           kind: 'text',
           role: 'assistant',
           content: raw.message.content,
+          contextTokens,
         }));
       }
       return messages;

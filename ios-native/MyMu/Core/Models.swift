@@ -143,6 +143,9 @@ struct HistoryResponse: Codable {
     /// ISO timestamp of the user prompt that opened a still-running turn —
     /// lets the elapsed timer anchor to the REAL turn start across reopens.
     let turnStartedAt: String?
+    /// Context position (tokens) just before the open turn started — baseline
+    /// for the live "tokens this turn" counter.
+    let turnStartContextTokens: Int?
 }
 
 // MARK: - AnyCodable — hold arbitrary JSON for tool payloads
