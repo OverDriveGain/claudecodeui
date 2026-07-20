@@ -43,14 +43,15 @@ export const PRESETS = [
   },
 ];
 
-// Default chain: GPT for all panes; costs runs on Google Flash (fast, cheap,
-// text/JSON — the pane best suited to it).
+// Default chain: GPT for all panes — the four drawing panes through the IMAGE
+// endpoint (real rendered drawings, not text-drawn SVG); costs runs on Google
+// Flash (fast, cheap, text/JSON — the pane best suited to it).
 const DEFAULTS = {
   version: 1,
   endpoints: {
-    top_view: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'general_query', mode: 'spawn', enabled: true, label: 'GPT (A2A)' },
-    section: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'general_query', mode: 'spawn', enabled: true, label: 'GPT (A2A)' },
-    elevations: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'general_query', mode: 'spawn', enabled: true, label: 'GPT (A2A)' },
+    top_view: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'generate_image', mode: 'exec', enabled: true, label: 'GPT render (A2A)' },
+    section: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'generate_image', mode: 'exec', enabled: true, label: 'GPT render (A2A)' },
+    elevations: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'generate_image', mode: 'exec', enabled: true, label: 'GPT render (A2A)' },
     front_view: { backend: 'a2a', provider: 'bti-bldr-gpt', skill: 'generate_image', mode: 'exec', enabled: true, label: 'GPT render (A2A)' },
     costs: { backend: 'openai', baseUrl: 'http://10.10.0.2:19081/v1', model: 'gemini-flash', enabled: true, label: 'Google Flash' },
   },

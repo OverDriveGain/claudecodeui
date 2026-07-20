@@ -18,9 +18,8 @@ export const BLDR_GPT_PROVIDER = process.env.BLDR_GPT_PROVIDER || 'bti-bldr-gpt'
 
 // Every pane the chain produces, in order. Map/location is intentionally excluded.
 export const GENERATED_PANES = PANE_IDS;
-// SVG line-drawing panes (endpoint draws vector); front_view is a photoreal
-// RENDER (image endpoint); costs is JSON.
-const SVG_PANES = new Set(['top_view', 'section', 'elevations']);
+// front_view is always a real render; the other drawing panes render as images
+// when their endpoint is an image endpoint, else fall back to text-drawn SVG.
 const RENDER_PANES = new Set(['front_view']);
 
 /** True if at least one pane endpoint is currently callable. */
@@ -52,12 +51,30 @@ const IMAGE_PROMPTS = {
     `Show front and side elevations stacked, with window/door openings, roof line, and a height dimension. ${SVG_TAIL}`,
 };
 
-// Prompt for the photoreal exterior render (front_view), built from the brief.
-const renderPrompt = (b) =>
-  `Photorealistic architectural exterior render of a modern 3D-printed concrete villa. ` +
-  `Design brief: ${briefLine(b)}. Layered concrete-print wall texture, large floor-to-ceiling glazing, ` +
-  `warm interior light, flat roof with thin parapet, Dubai desert setting, cinematic golden-hour dusk lighting, ` +
-  `minimalist desert landscaping with stone and desert plants, professional real-estate photography, ultra-detailed.`;
+// Per-pane prompts for IMAGE-render endpoints (generate_image): real rendered
+// architectural drawings, matching the look of BTI proposal sheets — not SVG art.
+const RENDER_PROMPTS = {
+  top_view: (b) =>
+    `Professional architectural floor plan drawing, top view, of ${briefLine(b)}. ` +
+    `CAD-style drafted plan on a white sheet: black wall poche, door swings, furniture symbols, ` +
+    `room labels with areas in m², dimension lines, north arrow, small title block. ` +
+    `Clean technical drafting, monochrome with subtle gray fills, no perspective, no photo background.`,
+  section: (b) =>
+    `Professional architectural SECTION drawing (vertical cross-section) of ${briefLine(b)}. ` +
+    `CAD-style drafted sheet: cut walls with hatch poche, foundation, floor slabs, roof build-up, ` +
+    `ceiling-height dimension lines, level markers, ground line with earth hatch, section title "SECTION A-A". ` +
+    `Clean technical drafting on white, monochrome, no perspective, no photo background.`,
+  elevations: (b) =>
+    `Professional architectural ELEVATION sheet of ${briefLine(b)}: front and side elevations stacked ` +
+    `on one white sheet. CAD-style drafted linework: window and door openings with frames, roof line, ` +
+    `overall height dimension lines, subtle material hatching (layered 3D-printed concrete banding), ` +
+    `titles under each view. Clean technical drafting, monochrome, no perspective, no photo background.`,
+  front_view: (b) =>
+    `Photorealistic architectural exterior render of a modern 3D-printed concrete villa. ` +
+    `Design brief: ${briefLine(b)}. Layered concrete-print wall texture, large floor-to-ceiling glazing, ` +
+    `warm interior light, flat roof with thin parapet, Dubai desert setting, cinematic golden-hour dusk lighting, ` +
+    `minimalist desert landscaping with stone and desert plants, professional real-estate photography, ultra-detailed.`,
+};
 
 const costsPrompt = (b, current) =>
   `Generate the COSTS pane for ${briefLine(b)}.\n` +
@@ -144,17 +161,18 @@ async function genImagePane(id, brief, ep) {
   return { id, file: { name: `${id}.${ext}`, buffer }, sourcePatch: { type: 'image', path: `${id}.${ext}` } };
 }
 
-/** Generate a photoreal RENDER pane. An a2a image endpoint (generate_image exec)
- * writes a PNG on box (bti-owned) and returns its absolute path, which this app
- * (same OS user) reads directly. Any other endpoint is asked for a data URL
- * (vector fallback). Returns { id, file, source } or null. */
+/** Generate a RENDER pane (real image, per-pane drawing/render prompt). An a2a
+ * image endpoint (generate_image exec) writes a PNG on box (bti-owned) and
+ * returns its absolute path, which this app (same OS user) reads directly. Any
+ * other endpoint is asked for a data URL (vector fallback).
+ * Returns { id, file, source } or null. */
 async function genRenderPane(id, brief, ep) {
   if (ep.backend === 'a2a' && ep.skill === 'generate_image') {
     const reply = await a2aCall({
       provider: ep.provider,
       skill: ep.skill,
       mode: ep.mode,
-      params: { prompt: renderPrompt(brief), size: '1536x1024' },
+      params: { prompt: (RENDER_PROMPTS[id] || RENDER_PROMPTS.front_view)(brief), size: '1536x1024' },
       timeoutMs: CALL_TIMEOUT_MS,
     });
     // The exec skill returns the absolute PNG path (possibly with surrounding text).
@@ -231,11 +249,14 @@ async function runJob(workspacePath, job, brief, wanted) {
       }
       job.panes[id] = 'working';
       try {
-        const r = RENDER_PANES.has(id)
-          ? await genRenderPane(id, brief, ep)
-          : SVG_PANES.has(id)
-            ? await genImagePane(id, brief, ep)
-            : await genCostsPane(brief, current, ep);
+        // Dispatch by the pane's ENDPOINT: an image endpoint means a real
+        // rendered drawing for any drawing pane; a text endpoint draws SVG.
+        const isImageEndpoint = ep.backend === 'a2a' && ep.skill === 'generate_image';
+        const r = id === 'costs'
+          ? await genCostsPane(brief, current, ep)
+          : RENDER_PANES.has(id) || isImageEndpoint
+            ? await genRenderPane(id, brief, ep)
+            : await genImagePane(id, brief, ep);
         if (r) { applyPane(workspacePath, id, r); job.panes[id] = 'done'; }
         else job.panes[id] = 'failed';
       } catch (err) {
