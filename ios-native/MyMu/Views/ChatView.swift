@@ -85,7 +85,11 @@ struct ChatView: View {
                 }
             }
         }
-        .task { await start() }
+        .task {
+            RecentlyViewedStore.shared.record(sessionId: sessionId, projectId: projectId,
+                                              isRemote: isRemote, title: title)
+            await start()
+        }
         // Agent already working when the chat opens (or a turn starts silently):
         // check the live status endpoint now and every 10s as a backstop.
         .task {
