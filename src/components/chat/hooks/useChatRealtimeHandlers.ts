@@ -61,6 +61,8 @@ interface UseChatRealtimeHandlersArgs {
   setCanAbortSession: (canAbort: boolean) => void;
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
+  /** Feed an assistant frame's absolute context position to the live turn counter. */
+  noteTurnContextTokens?: (contextTokens: number) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   streamTimerRef: MutableRefObject<number | null>;
@@ -89,6 +91,7 @@ export function useChatRealtimeHandlers({
   setCanAbortSession,
   setClaudeStatus,
   setTokenBudget,
+  noteTurnContextTokens,
   setPendingPermissionRequests,
   pendingViewSessionRef,
   streamTimerRef,
@@ -253,6 +256,12 @@ export function useChatRealtimeHandlers({
 
     if (sid && shouldPersist) {
       sessionStore.appendRealtime(sid, msg as NormalizedMessage);
+    }
+
+    // Live "tokens this turn" counter: assistant text/tool_use frames carry the
+    // absolute context position. Only the viewed session's frames tick this view.
+    if (drivesActiveView && typeof msg.contextTokens === 'number') {
+      noteTurnContextTokens?.(msg.contextTokens);
     }
 
     // --- UI side effects for specific kinds ---
@@ -450,6 +459,7 @@ export function useChatRealtimeHandlers({
     setCanAbortSession,
     setClaudeStatus,
     setTokenBudget,
+    noteTurnContextTokens,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamTimerRef,

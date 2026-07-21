@@ -48,6 +48,13 @@ export interface SessionSlot {
   hasMore: boolean;
   offset: number;
   tokenUsage: unknown;
+  /** ISO start of a still-open turn (server-derived), or null once it completed.
+   *  Lets a client opening a mid-turn conversation anchor the elapsed timer to the
+   *  REAL turn start instead of restarting from zero. */
+  turnStartedAt: string | null;
+  /** Context position (tokens) just before the open turn started — baseline for the
+   *  live "tokens this turn" counter. */
+  turnStartContextTokens: number | null;
   /** @internal Monotonic counter to discard out-of-order server fetch responses. */
   _fetchSeq: number;
 }
@@ -64,6 +71,8 @@ function createEmptySlot(): SessionSlot {
     hasMore: false,
     offset: 0,
     tokenUsage: null,
+    turnStartedAt: null,
+    turnStartContextTokens: null,
     _fetchSeq: 0,
   };
 }
@@ -222,6 +231,9 @@ export function useSessionStore() {
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
       }
+      // Turn timing/baseline for the live loader (elapsed + tokens-this-turn).
+      slot.turnStartedAt = typeof data.turnStartedAt === 'string' ? data.turnStartedAt : null;
+      slot.turnStartContextTokens = typeof data.turnStartContextTokens === 'number' ? data.turnStartContextTokens : null;
       // Re-render only when the messages or the cold-load status actually changed.
       if (changed || coldLoad) {
         commit(slot);

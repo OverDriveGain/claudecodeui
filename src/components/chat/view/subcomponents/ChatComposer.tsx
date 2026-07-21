@@ -55,6 +55,8 @@ interface ChatComposerProps {
   claudeStatus: { text: string; tokens: number; can_interrupt: boolean } | null;
   isLoading: boolean;
   externalRunning?: boolean;
+  turnStartedAt?: number | null;
+  turnTokens?: number | null;
   messageQueue?: QueuedMessage[];
   onRemoveQueuedMessage?: (id: string) => void;
   onAbortSession: () => void;
@@ -112,6 +114,8 @@ export default function ChatComposer({
   claudeStatus,
   isLoading,
   externalRunning,
+  turnStartedAt,
+  turnTokens,
   messageQueue,
   onRemoveQueuedMessage,
   onAbortSession,
@@ -184,6 +188,8 @@ export default function ChatComposer({
           status={claudeStatus}
           isLoading={isLoading}
           externalRunning={externalRunning}
+          turnStartedAt={turnStartedAt}
+          turnTokens={turnTokens}
           onAbort={onAbortSession}
           provider={provider}
         />

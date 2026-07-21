@@ -107,6 +107,9 @@ function ChatInterface({
     setIsUserScrolledUp,
     tokenBudget,
     setTokenBudget,
+    turnStartedAt,
+    turnTokens,
+    noteTurnContextTokens,
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
@@ -291,6 +294,7 @@ function ChatInterface({
     setCanAbortSession,
     setClaudeStatus,
     setTokenBudget,
+    noteTurnContextTokens,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamTimerRef,
@@ -429,6 +433,8 @@ function ChatInterface({
           claudeStatus={claudeStatus}
           isLoading={isLoading}
           externalRunning={externalRunning}
+          turnStartedAt={turnStartedAt}
+          turnTokens={turnTokens}
           messageQueue={messageQueue}
           onRemoveQueuedMessage={removeQueuedMessage}
           onAbortSession={handleAbortSession}

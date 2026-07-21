@@ -112,6 +112,14 @@ export function useChatSessionState({
   const [canAbortSession, setCanAbortSession] = useState(false);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
+  // Live "working loader" telemetry: when the current turn started (epoch ms, drives
+  // the elapsed clock) and how many tokens the context has grown this turn.
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
+  const [turnTokens, setTurnTokens] = useState<number | null>(null);
+  // Baseline context position at turn start; the counter diffs assistant frames'
+  // absolute contextTokens against it. Seeded from the server on a mid-turn reopen,
+  // else from the first frame of the turn.
+  const turnStartContextRef = useRef<number | null>(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_VISIBLE_MESSAGES);
   const [claudeStatus, setClaudeStatus] = useState<{ text: string; tokens: number; can_interrupt: boolean } | null>(null);
   const [allMessagesLoaded, setAllMessagesLoaded] = useState(false);
@@ -183,8 +191,11 @@ export function useChatSessionState({
     messagesOffsetRef.current = 0;
     setHasMoreMessages(false);
     setTotalMessages(0);
-    
+
     setTokenBudget(null);
+    setTurnStartedAt(null);
+    setTurnTokens(null);
+    turnStartContextRef.current = null;
     setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
     setAllMessagesLoaded(false);
     allMessagesLoadedRef.current = false;
@@ -212,6 +223,33 @@ export function useChatSessionState({
   /* ---------------------------------------------------------------- */
   /*  Derive chatMessages from the store                              */
   /* ---------------------------------------------------------------- */
+
+  // Anchor/clear the turn clock off the loading transition. A fresh send flips
+  // isLoading false→true here and we stamp "now" — UNLESS a mid-turn reopen already
+  // seeded the real server start (see fetchFromServer below), which must win. Turn
+  // end (true→false) clears everything so a completed turn shows no stale timer.
+  const prevIsLoadingRef = useRef(false);
+  useEffect(() => {
+    const was = prevIsLoadingRef.current;
+    prevIsLoadingRef.current = isLoading;
+    if (isLoading && !was) {
+      setTurnStartedAt((cur) => cur ?? Date.now());
+      turnStartContextRef.current = null;
+      setTurnTokens(null);
+    } else if (!isLoading && was) {
+      setTurnStartedAt(null);
+      setTurnTokens(null);
+      turnStartContextRef.current = null;
+    }
+  }, [isLoading]);
+
+  // Assistant frames carry the absolute context position; diff it against the
+  // turn-start baseline for a live "tokens this turn" count (replay/dedup safe).
+  const noteTurnContextTokens = useCallback((ctx: number) => {
+    if (typeof ctx !== 'number' || ctx <= 0) return;
+    if (turnStartContextRef.current == null) turnStartContextRef.current = ctx;
+    setTurnTokens(Math.max(0, ctx - (turnStartContextRef.current ?? ctx)));
+  }, []);
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null);
@@ -475,6 +513,9 @@ export function useChatSessionState({
       setHasMoreMessages(false);
       setTotalMessages(0);
       setTokenBudget(null);
+      setTurnStartedAt(null);
+      setTurnTokens(null);
+      turnStartContextRef.current = null;
       lastLoadedSessionKeyRef.current = null;
       return;
     }
@@ -512,6 +553,9 @@ export function useChatSessionState({
     if (sessionChanged) {
       setTokenBudget(null);
       setIsLoading(false);
+      setTurnStartedAt(null);
+      setTurnTokens(null);
+      turnStartContextRef.current = null;
     }
 
     setCurrentSessionId(selectedSession.id);
@@ -539,6 +583,15 @@ export function useChatSessionState({
         setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
         if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
+        // Reopening a mid-turn conversation: adopt the REAL server turn start +
+        // token baseline. Only when the server reports an open turn (truthy) — a
+        // null here means the last turn completed and must not clobber a turn the
+        // user just started locally in this same session.
+        if (slot.turnStartedAt) {
+          const parsed = Date.parse(slot.turnStartedAt);
+          if (!Number.isNaN(parsed)) setTurnStartedAt(parsed);
+          turnStartContextRef.current = slot.turnStartContextTokens ?? turnStartContextRef.current ?? null;
+        }
       }
       setIsLoadingSessionMessages(false);
     }).catch(() => {
@@ -884,6 +937,9 @@ export function useChatSessionState({
     setIsUserScrolledUp,
     tokenBudget,
     setTokenBudget,
+    turnStartedAt,
+    turnTokens,
+    noteTurnContextTokens,
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
