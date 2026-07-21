@@ -8,6 +8,8 @@ export type AuthUser = {
   // Set for agent-view share-token bearers: the one agent name this session may
   // see. The UI collapses to that agent's conversation + files (no sidebar).
   agentView?: string;
+  // Open-access mode: an auto-issued anonymous identity (no DB row, never admin).
+  guest?: boolean;
   [key: string]: unknown;
 };
 
@@ -28,6 +30,10 @@ export type AuthSessionPayload = {
 
 export type AuthStatusPayload = {
   needsSetup?: boolean;
+  // Open-access mode: the server hands out a ready guest session with the status.
+  open?: boolean;
+  token?: string;
+  user?: AuthUser;
 };
 
 export type AuthUserPayload = {

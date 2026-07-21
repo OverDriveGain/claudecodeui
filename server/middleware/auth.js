@@ -7,6 +7,22 @@ import { runWithUserContext } from '../services/user-context.js';
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
 
+// BTI open-access mode: no login at all. /api/auth/status hands every new
+// browser a signed guest token; tokens carry a `guest` claim instead of a DB
+// user id. Guest tokens only verify while the mode is ON, so switching it off
+// re-enables the login gate and orphans all guest sessions at once.
+const OPEN_ACCESS = process.env.OPEN_ACCESS === 'true';
+
+// A guest is a full (non-admin) user identity without a DB row — same shape the
+// agent-view share tokens use. username drives the per-user workspace path.
+const guestUserFrom = (decoded) => ({
+  id: `guest:${decoded.guest}`,
+  username: `guest-${decoded.guest}`,
+  guest: true,
+  // Same visibility as regular customer accounts on this instance (unrestricted).
+  agent_allow: null,
+});
+
 // Optional API key middleware
 const validateApiKey = (req, res, next) => {
   // Skip API key validation if not configured
@@ -78,6 +94,13 @@ const authenticateToken = async (req, res, next) => {
       return runWithUserContext(decoded.agentView, next);
     }
 
+    // Open-access guest token: no DB row backs it; identity is the signed claim.
+    if (OPEN_ACCESS && typeof decoded.guest === 'string' && decoded.guest) {
+      const guest = guestUserFrom(decoded);
+      req.user = guest;
+      return runWithUserContext(guest.agent_allow, next);
+    }
+
     // Verify user still exists and is active
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
@@ -147,6 +170,11 @@ const authenticateWebSocket = (token) => {
         agent_allow: decoded.agentView,
       };
     }
+    // Open-access guest token — same guest identity as the REST path above.
+    if (OPEN_ACCESS && typeof decoded.guest === 'string' && decoded.guest) {
+      const guest = guestUserFrom(decoded);
+      return { userId: guest.id, username: guest.username, guest: true, agent_allow: guest.agent_allow };
+    }
     // Verify user actually exists in database (matches REST authenticateToken behavior)
     const user = userDb.getUserById(decoded.userId);
     if (!user) {
@@ -164,5 +192,6 @@ export {
   authenticateToken,
   generateToken,
   authenticateWebSocket,
-  JWT_SECRET
+  JWT_SECRET,
+  OPEN_ACCESS
 };

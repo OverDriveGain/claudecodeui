@@ -6,7 +6,7 @@ import path from 'path';
 import jwt from 'jsonwebtoken';
 import { userDb } from '../modules/database/index.js';
 import { getConnection } from '../modules/database/connection.js';
-import { generateToken, authenticateToken, JWT_SECRET } from '../middleware/auth.js';
+import { generateToken, authenticateToken, JWT_SECRET, OPEN_ACCESS } from '../middleware/auth.js';
 import { currentAgentAllow } from '../services/user-context.js';
 import { sendLoginToken } from '../modules/email/login-email.js';
 import { seedWorkspace } from '../bldr/seed.js';
@@ -59,8 +59,22 @@ const setAuthCookie = (res, token) => {
 // Check auth status and setup requirements
 router.get('/status', async (req, res) => {
   try {
+    // Open-access mode: no login. Hand every caller a ready-to-use guest session;
+    // the client only adopts it when it doesn't already hold a working token, so
+    // returning visitors (and signed-in admins) keep their identity/workspace.
+    if (OPEN_ACCESS) {
+      const guestId = crypto.randomBytes(8).toString('hex');
+      const token = jwt.sign({ guest: guestId }, JWT_SECRET, { expiresIn: '30d' });
+      return res.json({
+        needsSetup: false,
+        open: true,
+        token,
+        user: { id: `guest:${guestId}`, username: `guest-${guestId}`, guest: true },
+      });
+    }
+
     const hasUsers = await userDb.hasUsers();
-    res.json({ 
+    res.json({
       needsSetup: !hasUsers,
       isAuthenticated: false // Will be overridden by frontend if token exists
     });

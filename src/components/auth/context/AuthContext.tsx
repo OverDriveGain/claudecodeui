@@ -107,25 +107,46 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setNeedsSetup(false);
 
+      // Open-access mode: the status response carries a ready guest session.
+      // Adopt it whenever we don't already hold a working token — the visitor
+      // lands straight in the app, no login of any kind.
+      const guestSession =
+        statusPayload?.open && statusPayload.token && statusPayload.user
+          ? { user: statusPayload.user, token: statusPayload.token }
+          : null;
+
       if (!token) {
+        if (guestSession) {
+          setSession(guestSession.user, guestSession.token);
+          setHasCompletedOnboarding(true);
+        }
         return;
       }
 
       const userResponse = await api.auth.user();
       if (!userResponse.ok) {
         clearSession();
+        if (guestSession) {
+          setSession(guestSession.user, guestSession.token);
+          setHasCompletedOnboarding(true);
+        }
         return;
       }
 
       const userPayload = await parseJsonSafely<AuthUserPayload>(userResponse);
       if (!userPayload?.user) {
         clearSession();
+        if (guestSession) {
+          setSession(guestSession.user, guestSession.token);
+          setHasCompletedOnboarding(true);
+        }
         return;
       }
 
       setUser(userPayload.user);
-      // Agent-view bearers aren't DB users — onboarding doesn't apply to them.
-      if (userPayload.user.agentView) {
+      // Agent-view bearers and open-access guests aren't DB users — onboarding
+      // doesn't apply to them.
+      if (userPayload.user.agentView || userPayload.user.guest) {
         setHasCompletedOnboarding(true);
       } else {
         await checkOnboardingStatus();
@@ -136,7 +157,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [checkOnboardingStatus, clearSession, token]);
+  }, [checkOnboardingStatus, clearSession, setSession, token]);
 
   useEffect(() => {
     if (IS_PLATFORM) {
