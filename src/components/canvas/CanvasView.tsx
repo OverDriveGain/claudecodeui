@@ -34,11 +34,8 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const conversationId = selectedProject?.projectId;
   const canvas = useCanvasState(conversationId);
   const [proposalState, setProposalState] = useState<'idle' | 'working' | 'error'>('idle');
-  const [genEnabled, setGenEnabled] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [genState, setGenState] = useState<'idle' | 'working' | 'error'>('idle');
-  const [genProgress, setGenProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
-  const [brief, setBrief] = useState('');
+  const [genJob, setGenJob] = useState<{ running: boolean; panes: Record<string, string> } | null>(null);
   const [pastProjects, setPastProjects] = useState<PastProject[]>([]);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -87,37 +84,38 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
     }
   }
 
-  // Route B: kick off async per-pane generation via bti-bldr-gpt, then poll the
-  // job — refreshing the panes live as each one is produced.
-  async function handleGenerate() {
-    if (genState === 'working') return;
-    setGenState('working');
-    setGenProgress({ done: 0, total: 0 });
-    try {
-      const res = await api.bldr.generate(brief);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      // Poll the job every 3s until it stops running; refresh panes each tick.
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 3000));
-        let job: { running?: boolean; panes?: Record<string, string> } = {};
-        try {
-          const jr = await api.bldr.generateJob();
-          if (jr.ok) job = await jr.json();
-        } catch { /* transient */ }
-        const states = Object.values(job.panes || {});
-        const done = states.filter((s) => s === 'done' || s === 'failed').length;
-        setGenProgress({ done, total: states.length });
-        await refreshManifest();
-        if (!job.running) break;
+  // Generation is driven from the CHAT (the assistant's generate_design tool).
+  // The canvas just watches the workspace job and repaints panes as they land.
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    let wasRunning = false;
+    const tick = async () => {
+      try {
+        const res = await api.bldr.generateJob();
+        if (!res.ok || cancelled) return;
+        const job = (await res.json()) as { running?: boolean; panes?: Record<string, string> };
+        setGenJob({ running: Boolean(job.running), panes: job.panes ?? {} });
+        if (job.running) {
+          wasRunning = true;
+          await refreshManifest();
+        } else if (wasRunning) {
+          wasRunning = false;
+          await refreshManifest();
+          void refreshProjects(); // the previous design was archived when the run started
+        }
+      } catch {
+        /* transient */
       }
-      setGenState('idle');
-      void refreshProjects(); // the previous design was archived when this run started
-    } catch {
-      setGenState('error');
-      setTimeout(() => setGenState('idle'), 4000);
-    }
-  }
+    };
+    void tick();
+    const interval = setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   // "Proceed with the project" — fetch the generated BTI proposal PDF and save it.
   async function handleProceed() {
@@ -161,19 +159,8 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
     };
   }, [conversationId]);
 
-  // Is the design agent (bti-bldr-gpt) reachable over A2A yet? Gates the control.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.bldr.generateStatus();
-        if (!res.ok) return;
-        const { enabled } = await res.json();
-        if (!cancelled) setGenEnabled(!!enabled);
-      } catch {
-        /* leave disabled */
-      }
-    })();
     (async () => {
       try {
         const res = await api.bldr.admin.me();
@@ -265,42 +252,24 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           </button>
         )}
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          {genEnabled ? (
-            <>
-              <input
-                type="text"
-                value={brief}
-                onChange={(e) => setBrief(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleGenerate(); }}
-                placeholder="Describe the build — e.g. 3-bed villa, 200 m², JVC Dubai, full fit-out"
-                disabled={genState === 'working'}
-                className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
-              />
-              <button
-                type="button"
-                onClick={handleGenerate}
-                disabled={genState === 'working'}
-                className="inline-flex shrink-0 items-center gap-2 rounded-md border border-primary px-4 py-2 text-sm font-semibold text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {genState === 'working' ? (
-                  <>
-                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    {genProgress.total ? `Designing… ${genProgress.done}/${genProgress.total}` : 'Designing…'}
-                  </>
-                ) : genState === 'error' ? (
-                  'Retry ✦ Generate'
-                ) : (
-                  '✦ Generate with AI'
-                )}
-              </button>
-            </>
+          {genJob?.running ? (
+            (() => {
+              const states = Object.values(genJob.panes);
+              const done = states.filter((s) => s === 'done' || s === 'failed').length;
+              return (
+                <div className="inline-flex items-center gap-2 text-sm text-primary">
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Designing your building… {done}/{states.length} panes
+                </div>
+              );
+            })()
           ) : (
             <div className="text-xs text-muted-foreground">
               {proposalState === 'working'
                 ? 'Preparing your BTI proposal…'
                 : proposalState === 'error'
                   ? 'Could not generate the proposal — please try again.'
-                  : 'Ready — download your BTI proposal for this design.'}
+                  : 'Describe your building in the chat below — the design appears here.'}
             </div>
           )}
         </div>

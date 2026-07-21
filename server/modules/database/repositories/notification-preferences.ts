@@ -52,6 +52,11 @@ function normalizeNotificationPreferences(value: unknown): NotificationPreferenc
 export const notificationPreferencesDb = {
   /** Returns the normalized preferences for a user, creating defaults on first read. */
   getNotificationPreferences(userId: number): NotificationPreferences {
+    // Guests / agent-view bearers have string ids and no DB row — they get the
+    // defaults and never touch the (shared) users database.
+    if (!Number.isInteger(userId)) {
+      return normalizeNotificationPreferences(DEFAULT_NOTIFICATION_PREFERENCES);
+    }
     const db = getConnection();
     const row = db
       .prepare(
@@ -82,6 +87,10 @@ export const notificationPreferencesDb = {
     preferences: unknown
   ): NotificationPreferences {
     const normalized = normalizeNotificationPreferences(preferences);
+    // Guests / agent-view bearers: nothing to persist (no DB identity).
+    if (!Number.isInteger(userId)) {
+      return normalized;
+    }
     const db = getConnection();
 
     db.prepare(

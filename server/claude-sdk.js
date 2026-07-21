@@ -553,7 +553,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const mcpServers = await loadMcpConfig(options.cwd);
     sdkOptions.mcpServers = {
       ...(mcpServers || {}),
-      bldr_canvas: createCanvasMcpServer(),
+      // cwd = the customer's workspace, which scopes generate_design to it.
+      bldr_canvas: createCanvasMcpServer(options.cwd),
     };
 
     // Handle images - save to temp files and modify prompt
@@ -589,10 +590,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // tools to a PreToolUse hook (runs before the mode check) if we need them
     // to work in those modes.
     sdkOptions.canUseTool = async (toolName, input, context) => {
-      // bldr's own in-process canvas tool is always safe — it only updates the
-      // user's panes. Never prompt for it, regardless of permission mode (so the
-      // customer never sees an approval dialog for update_canvas).
-      if (toolName === 'mcp__bldr_canvas__update_canvas') {
+      // bldr's own in-process canvas tools are always safe — they only touch the
+      // user's own panes/workspace. Never prompt for them, regardless of
+      // permission mode (the customer must never see an approval dialog).
+      if (toolName === 'mcp__bldr_canvas__update_canvas' || toolName === 'mcp__bldr_canvas__generate_design') {
         return { behavior: 'allow', updatedInput: input };
       }
 

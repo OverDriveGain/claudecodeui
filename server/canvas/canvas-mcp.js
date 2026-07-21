@@ -22,6 +22,10 @@
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import path from 'path';
+import { WORKSPACE_BASE } from '../bldr/workspace.js';
+import { startGeneration, getJob, canGenerate } from '../bldr/generate.js';
+import { beginNewProject } from '../bldr/gallery.js';
 
 /**
  * AssetRef — a reference to a binary asset (image, model, pdf). Exactly one of
@@ -110,19 +114,32 @@ function blockedImagePanes(args) {
   return READONLY_IMAGE_PANES.filter((id) => args[id]);
 }
 
+// True when this chat session runs inside a customer project workspace (the
+// only place design generation applies — never fleet/agent working dirs).
+function isCustomerWorkspace(cwd) {
+  if (!cwd) return false;
+  const resolved = path.resolve(cwd);
+  const base = path.resolve(WORKSPACE_BASE);
+  return resolved !== base && resolved.startsWith(base + path.sep);
+}
+
 /**
  * Builds the in-process Canvas MCP server. Returns the server config object that
  * gets merged into `sdkOptions.mcpServers` in claude-sdk.js.
+ *
+ * `workspaceCwd` is the chat session's working directory — for customer chats
+ * that IS their project workspace, which lets generate_design run the real
+ * per-pane generation engine in-process (shared job state with /api/bldr).
  */
-export function createCanvasMcpServer() {
+export function createCanvasMcpServer(workspaceCwd) {
   const updateCanvas = tool(
     'update_canvas',
-    'Update the computed bldr Canvas panes. MOCKUP PHASE: the image panes '
-      + '(top_view, section, elevations, front_view) are REAL BTI proposal drawings '
-      + 'and are READ-ONLY — do NOT pass them, do NOT write image files, do NOT '
-      + 'regenerate or replace them (dedicated render agents do that later). Only '
-      + 'update the computed panes: costs (cost-table) and location (map). Each call '
-      + 'updates ONLY the panes you provide; only those reload.',
+    'Update the computed bldr Canvas panes. The image panes (top_view, section, '
+      + 'elevations, front_view) are produced ONLY by generate_design and are '
+      + 'READ-ONLY here — do NOT pass them, do NOT write image files. Use this '
+      + 'only for a quick costs tweak or a location pin correction (lat/lng/label) '
+      + 'without a redesign; for any design change call generate_design instead. '
+      + 'Each call updates ONLY the panes you provide; only those reload.',
     inputSchema,
     async (args) => {
       const panes = updatedPanes(args);
@@ -156,9 +173,58 @@ export function createCanvasMcpServer() {
     },
   );
 
+  // The ONE way the chat produces the customer's design: kicks off the async
+  // per-pane generation (plan/section/elevations/render/costs) for this
+  // workspace. The panes fill in live beside the chat as each one lands.
+  const generateDesign = tool(
+    'generate_design',
+    'Generate (or regenerate) the customer\'s FULL building design from a one-line '
+      + 'brief: floor plan, section, elevations, photoreal front render and the cost '
+      + 'table. Runs asynchronously — panes beside the chat fill in over ~1-3 minutes. '
+      + 'Call this whenever the customer describes what they want to build OR asks to '
+      + 'change the design; fold their changes into one complete updated brief '
+      + '(e.g. "modern 2-floor 4-bedroom 3D-printed villa, 300 m², Dubai Hills, flat roof"). '
+      + 'Their previous design is kept automatically in their project gallery.',
+    {
+      brief: z
+        .string()
+        .min(8)
+        .max(300)
+        .describe('One complete line describing the building: type, floors/rooms, size, area/location, style.'),
+    },
+    async ({ brief }) => {
+      if (!isCustomerWorkspace(workspaceCwd)) {
+        return {
+          content: [{ type: 'text', text: 'generate_design is only available inside a customer project workspace.' }],
+          isError: true,
+        };
+      }
+      if (!canGenerate()) {
+        return {
+          content: [{ type: 'text', text: 'The design generation backend is not reachable right now — apologize and ask the customer to try again shortly.' }],
+          isError: true,
+        };
+      }
+      const wp = path.resolve(workspaceCwd);
+      if (getJob(wp)?.running) {
+        return {
+          content: [{ type: 'text', text: 'A design generation is already running for this project — tell the customer it is underway and the panes will update shortly. Do not start another one.' }],
+        };
+      }
+      beginNewProject(wp, brief); // archives the current design into their gallery
+      startGeneration(wp, brief);
+      return {
+        content: [{
+          type: 'text',
+          text: `Design generation started for: "${brief}". The panes will fill in over the next 1-3 minutes — tell the customer their design is being generated and will appear beside the chat. Their previous design (if any) is saved under "My projects".`,
+        }],
+      };
+    },
+  );
+
   return createSdkMcpServer({
     name: 'bldr_canvas',
     version: '0.1.0',
-    tools: [updateCanvas],
+    tools: [updateCanvas, generateDesign],
   });
 }
