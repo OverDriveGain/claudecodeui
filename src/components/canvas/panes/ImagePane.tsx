@@ -6,6 +6,7 @@ import PaneFrame from './PaneFrame';
 
 interface ImagePaneProps {
   title: string;
+  code?: string;
   source?: SourceValue;
 }
 
@@ -25,7 +26,7 @@ function resolveSrc(source?: SourceValue): string | null {
 /** Image pane — top view / section / elevations / front view. Double-click (or the
  * expand button) opens a full-screen preview. The image sits on a uniform white
  * mat with even padding so every pane reads consistently regardless of aspect. */
-export default function ImagePane({ title, source }: ImagePaneProps) {
+export default function ImagePane({ title, code, source }: ImagePaneProps) {
   const src = resolveSrc(source);
   const alt = source?.alt || title;
   const [preview, setPreview] = useState(false);
@@ -41,7 +42,7 @@ export default function ImagePane({ title, source }: ImagePaneProps) {
   }, [preview]);
 
   return (
-    <PaneFrame title={title} flush empty={!src}>
+    <PaneFrame title={title} code={code} flush empty={!src}>
       {src && (
         <div
           className="group absolute inset-0 flex items-center justify-center bg-white p-3"
@@ -52,7 +53,7 @@ export default function ImagePane({ title, source }: ImagePaneProps) {
             src={src}
             alt={alt}
             draggable={false}
-            className="max-h-full max-w-full select-none rounded object-contain cursor-zoom-in"
+            className="max-h-full max-w-full select-none object-contain cursor-zoom-in"
           />
           {/* expand affordance (discoverability for the double-click preview) */}
           <button

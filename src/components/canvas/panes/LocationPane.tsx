@@ -8,6 +8,7 @@ import PaneFrame from './PaneFrame';
 
 interface LocationPaneProps {
   title: string;
+  code?: string;
   source?: SourceValue;
 }
 
@@ -22,7 +23,7 @@ function asLocation(source?: SourceValue): LocationData | null {
  * World Terrain + OSM Buildings + the bldr building as a red box). Falls back to
  * a coordinate card if Cesium or the ion token isn't available.
  */
-export default function LocationPane({ title, source }: LocationPaneProps) {
+export default function LocationPane({ title, code, source }: LocationPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -150,7 +151,7 @@ export default function LocationPane({ title, source }: LocationPaneProps) {
   }, [canRender, loc?.lat, loc?.lng, Cesium, token]);
 
   return (
-    <PaneFrame title={title} flush empty={!loc}>
+    <PaneFrame title={title} code={code} flush empty={!loc}>
       <div ref={containerRef} className="absolute inset-0" />
       {loc && (!canRender || err) && (
         <div className="absolute inset-0 flex items-center justify-center bg-[#0f1b2d] p-3 text-center">

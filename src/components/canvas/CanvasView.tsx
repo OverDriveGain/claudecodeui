@@ -184,9 +184,9 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           return (
             <div key={meta.id} className="min-h-[180px]">
               <PaneErrorBoundary title={meta.title}>
-                {meta.type === 'image' && <ImagePane title={meta.title} source={source} />}
-                {meta.type === 'cost-table' && <CostTablePane title={meta.title} source={source} />}
-                {meta.type === 'map-cesium' && <LocationPane title={meta.title} source={source} />}
+                {meta.type === 'image' && <ImagePane title={meta.title} code={meta.code} source={source} />}
+                {meta.type === 'cost-table' && <CostTablePane title={meta.title} code={meta.code} source={source} />}
+                {meta.type === 'map-cesium' && <LocationPane title={meta.title} code={meta.code} source={source} />}
               </PaneErrorBoundary>
             </div>
           );

@@ -11,15 +11,17 @@ export interface SourceMeta {
   id: string;
   title: string;
   type: SourceType;
+  /** Drawing-set sheet code, shown in each pane's title block (one document). */
+  code: string;
 }
 
 export const SOURCE_META: SourceMeta[] = [
-  { id: 'top_view', title: 'Top view', type: 'image' },
-  { id: 'section', title: 'Section', type: 'image' },
-  { id: 'elevations', title: 'Elevations', type: 'image' },
-  { id: 'front_view', title: 'Front view', type: 'image' },
-  { id: 'costs', title: 'Costs', type: 'cost-table' },
-  { id: 'location', title: 'Location', type: 'map-cesium' },
+  { id: 'top_view', title: 'Floor plan', type: 'image', code: 'A-101' },
+  { id: 'section', title: 'Section', type: 'image', code: 'A-201' },
+  { id: 'elevations', title: 'Elevations', type: 'image', code: 'A-301' },
+  { id: 'front_view', title: 'Exterior render', type: 'image', code: 'R-401' },
+  { id: 'costs', title: 'Cost estimate', type: 'cost-table', code: 'C-501' },
+  { id: 'location', title: 'Site — Dubai', type: 'map-cesium', code: 'S-601' },
 ];
 
 export const SOURCE_IDS = SOURCE_META.map((s) => s.id);

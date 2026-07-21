@@ -53,27 +53,44 @@ const IMAGE_PROMPTS = {
 
 // Per-pane prompts for IMAGE-render endpoints (generate_image): real rendered
 // architectural drawings, matching the look of BTI proposal sheets — not SVG art.
+//
+// ONE DRAWING SET: every sheet shares the same visual language and the same
+// title block, so the four panes (and the app's matching pane chrome) read as
+// one document, not four unrelated images.
+const SHEET_STYLE = (code, sheetName) =>
+  `Present it as ONE SHEET of a professional architecture drawing set, consistent with its sibling sheets: ` +
+  `pure white paper background, precise black ink CAD linework, a single accent color red #D52027 used only sparingly ` +
+  `(sheet-code text, small marker accents). Along the very bottom edge a slim horizontal TITLE BLOCK: thin red rule on top, ` +
+  `left "BTI — BUILD TECH INNOVATION 3D" in small capitals, center the project name, right the sheet code "${code} ${sheetName}". ` +
+  `Same margins, same lettering style (clean engineering sans-serif capitals) as the rest of the set. ` +
+  `No watermark, no logo images, no decorative borders.`;
+
 const RENDER_PROMPTS = {
   top_view: (b) =>
     `Professional architectural floor plan drawing, top view, of ${briefLine(b)}. ` +
-    `CAD-style drafted plan on a white sheet: black wall poche, door swings, furniture symbols, ` +
-    `room labels with areas in m², dimension lines, north arrow, small title block. ` +
-    `Clean technical drafting, monochrome with subtle gray fills, no perspective, no photo background.`,
+    `CAD-style drafted plan: black wall poche, door swings, furniture symbols, ` +
+    `room labels with areas in m², dimension lines, north arrow. ` +
+    `Clean technical drafting, monochrome with subtle gray fills, no perspective, no photo background. ` +
+    SHEET_STYLE('A-101', 'FLOOR PLAN'),
   section: (b) =>
     `Professional architectural SECTION drawing (vertical cross-section) of ${briefLine(b)}. ` +
-    `CAD-style drafted sheet: cut walls with hatch poche, foundation, floor slabs, roof build-up, ` +
-    `ceiling-height dimension lines, level markers, ground line with earth hatch, section title "SECTION A-A". ` +
-    `Clean technical drafting on white, monochrome, no perspective, no photo background.`,
+    `CAD-style drafted: cut walls with hatch poche, foundation, floor slabs, roof build-up, ` +
+    `ceiling-height dimension lines, level markers, ground line with earth hatch, view caption "SECTION A-A". ` +
+    `Clean technical drafting, monochrome, no perspective, no photo background. ` +
+    SHEET_STYLE('A-201', 'SECTION'),
   elevations: (b) =>
-    `Professional architectural ELEVATION sheet of ${briefLine(b)}: front and side elevations stacked ` +
-    `on one white sheet. CAD-style drafted linework: window and door openings with frames, roof line, ` +
+    `Professional architectural ELEVATION sheet of ${briefLine(b)}: front and side elevations stacked. ` +
+    `CAD-style drafted linework: window and door openings with frames, roof line, ` +
     `overall height dimension lines, subtle material hatching (layered 3D-printed concrete banding), ` +
-    `titles under each view. Clean technical drafting, monochrome, no perspective, no photo background.`,
+    `captions under each view. Clean technical drafting, monochrome, no perspective, no photo background. ` +
+    SHEET_STYLE('A-301', 'ELEVATIONS'),
   front_view: (b) =>
-    `Photorealistic architectural exterior render of a modern 3D-printed concrete villa. ` +
+    `Photorealistic architectural exterior render of a modern 3D-printed concrete building. ` +
     `Design brief: ${briefLine(b)}. Layered concrete-print wall texture, large floor-to-ceiling glazing, ` +
-    `warm interior light, flat roof with thin parapet, Dubai desert setting, cinematic golden-hour dusk lighting, ` +
-    `minimalist desert landscaping with stone and desert plants, professional real-estate photography, ultra-detailed.`,
+    `warm interior light, Dubai setting, cinematic golden-hour dusk lighting, ` +
+    `minimalist desert landscaping, professional real-estate photography, ultra-detailed. ` +
+    `The photograph fills the sheet edge-to-edge above the title block. ` +
+    SHEET_STYLE('R-401', 'EXTERIOR RENDER'),
 };
 
 const costsPrompt = (b, current) =>
