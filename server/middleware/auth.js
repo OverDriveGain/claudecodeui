@@ -97,6 +97,15 @@ const authenticateToken = async (req, res, next) => {
     // Open-access guest token: no DB row backs it; identity is the signed claim.
     if (OPEN_ACCESS && typeof decoded.guest === 'string' && decoded.guest) {
       const guest = guestUserFrom(decoded);
+      // Rolling session: past half-life, re-issue the SAME guest id so any
+      // visitor who returns at least once a fortnight keeps their workspace
+      // (and thus their project) indefinitely.
+      if (decoded.exp && decoded.iat) {
+        const now = Math.floor(Date.now() / 1000);
+        if (now > decoded.iat + (decoded.exp - decoded.iat) / 2) {
+          res.setHeader('X-Refreshed-Token', jwt.sign({ guest: decoded.guest }, JWT_SECRET, { expiresIn: '30d' }));
+        }
+      }
       req.user = guest;
       return runWithUserContext(guest.agent_allow, next);
     }
