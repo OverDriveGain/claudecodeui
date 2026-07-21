@@ -8,8 +8,19 @@ import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWit
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
 import { listRemoteAgents, listAccountErrors } from '@/services/rc.service.js';
+import { isLockdownEnabled } from '@/services/deployment-policy.js';
 
 const router = express.Router();
+
+/** Reject a structural mutation when the deployment is locked to view+converse. */
+function assertNotLocked(action: string): void {
+  if (isLockdownEnabled()) {
+    throw new AppError(`${action} is disabled on this deployment.`, {
+      code: 'DEPLOYMENT_LOCKED',
+      statusCode: 403,
+    });
+  }
+}
 
 type AuthenticatedUser = {
   id?: number | string;
@@ -132,6 +143,7 @@ router.get(
 router.post(
   '/create-project',
   asyncHandler(async (req, res) => {
+    assertNotLocked('Creating a project');
     const requestBody = req.body as Record<string, unknown>;
     const projectPath = typeof requestBody.path === 'string' ? requestBody.path : '';
     const customName = typeof requestBody.customName === 'string' ? requestBody.customName : null;
@@ -202,6 +214,7 @@ router.get('/clone-progress', async (req, res) => {
   req.on('close', closeListener);
 
   try {
+    assertNotLocked('Cloning a project');
     const queryParams = req.query as Record<string, unknown>;
     const workspacePath = readQueryStringValue(queryParams.path);
     const githubUrl = readQueryStringValue(queryParams.githubUrl);
@@ -291,6 +304,10 @@ router.post(
 router.delete(
   '/:projectId',
   asyncHandler(async (req, res) => {
+    // Removing a project is a structural change — blocked when locked. Users can
+    // still cosmetically hide a project from their own view, which never touches
+    // the shared backend.
+    assertNotLocked('Removing a project');
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     const force = req.query.force === 'true';
     await deleteOrArchiveProject(projectId, force);

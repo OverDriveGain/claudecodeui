@@ -5,6 +5,7 @@ import { userDb } from '../modules/database/index.js';
 import { getConnection } from '../modules/database/connection.js';
 import { generateToken, authenticateToken, JWT_SECRET } from '../middleware/auth.js';
 import { currentAgentAllow } from '../services/user-context.js';
+import { isLockdownEnabled } from '../services/deployment-policy.js';
 
 const router = express.Router();
 const db = getConnection();
@@ -13,9 +14,13 @@ const db = getConnection();
 router.get('/status', async (req, res) => {
   try {
     const hasUsers = await userDb.hasUsers();
-    res.json({ 
+    res.json({
       needsSetup: !hasUsers,
-      isAuthenticated: false // Will be overridden by frontend if token exists
+      isAuthenticated: false, // Will be overridden by frontend if token exists
+      // Deployment capability lock (env CCUI_LOCKDOWN). Clients read this to hide
+      // create/delete affordances and force the archive-only delete prompt. The
+      // server enforces it regardless — this is only for UX.
+      lockdown: isLockdownEnabled(),
     });
   } catch (error) {
     console.error('Auth status error:', error);

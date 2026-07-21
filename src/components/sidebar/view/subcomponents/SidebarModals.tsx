@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import { useAuth } from '../../../auth/context/AuthContext';
 import { Button } from '../../../../shared/view/ui';
 import Settings from '../../../settings/view/Settings';
 import VersionUpgradeModal from '../../../version-upgrade/view';
@@ -70,6 +71,8 @@ export default function SidebarModals({
   installMode,
   t,
 }: SidebarModalsProps) {
+  // Deployment lock: no project creation/removal, delete = archive only.
+  const { lockdown } = useAuth();
   // Settings expects project identity/path fields to be present for dropdown labels and local-scope MCP config.
   const settingsProjects = useMemo(
     () => projects.map(normalizeProjectForSettings),
@@ -78,7 +81,7 @@ export default function SidebarModals({
 
   return (
     <>
-      {showNewProject &&
+      {showNewProject && !lockdown &&
         ReactDOM.createPortal(
           <ProjectCreationWizard
             onClose={onCloseNewProject}
@@ -173,15 +176,17 @@ export default function SidebarModals({
                       ?
                     </p>
                     <p className="mt-3 text-xs text-muted-foreground">
-                      {sessionDeleteConfirmation.isArchived
-                        ? t('deleteConfirmation.archivedSessionNotice', 'This session is already archived. You can keep it hidden or delete it permanently.')
-                        : t('deleteConfirmation.archiveSessionNotice', 'Archive keeps the session out of the active list while preserving its history.')}
+                      {lockdown
+                        ? t('deleteConfirmation.lockdownSessionNotice', 'This conversation will be archived (hidden from view). Its history is preserved and permanent deletion is disabled on this deployment.')
+                        : sessionDeleteConfirmation.isArchived
+                          ? t('deleteConfirmation.archivedSessionNotice', 'This session is already archived. You can keep it hidden or delete it permanently.')
+                          : t('deleteConfirmation.archiveSessionNotice', 'Archive keeps the session out of the active list while preserving its history.')}
                     </p>
                   </div>
                 </div>
               </div>
               <div className="flex flex-col gap-2 border-t border-border bg-muted/30 p-4">
-                {!sessionDeleteConfirmation.isArchived && (
+                {(!sessionDeleteConfirmation.isArchived || lockdown) && (
                   <Button
                     variant="outline"
                     className="w-full justify-start"
@@ -191,14 +196,18 @@ export default function SidebarModals({
                     {t('deleteConfirmation.archiveSession', 'Archive session')}
                   </Button>
                 )}
-                <Button
-                  variant="destructive"
-                  className="w-full justify-start bg-red-600 text-white hover:bg-red-700"
-                  onClick={() => onConfirmDeleteSession(true)}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  {t('deleteConfirmation.deleteSessionPermanently', 'Delete permanently')}
-                </Button>
+                {/* Permanent deletion is removed entirely on a locked deployment —
+                    the server forces the request to an archive regardless. */}
+                {!lockdown && (
+                  <Button
+                    variant="destructive"
+                    className="w-full justify-start bg-red-600 text-white hover:bg-red-700"
+                    onClick={() => onConfirmDeleteSession(true)}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {t('deleteConfirmation.deleteSessionPermanently', 'Delete permanently')}
+                  </Button>
+                )}
                 <Button variant="ghost" className="w-full" onClick={onCancelDeleteSession}>
                   {t('actions.cancel')}
                 </Button>

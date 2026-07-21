@@ -14,6 +14,7 @@ import type {
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
+import { isLockdownEnabled } from '@/services/deployment-policy.js';
 
 const router = express.Router();
 
@@ -395,8 +396,12 @@ router.delete(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    const force = parseOptionalBooleanQuery(req.query.force, 'force') ?? false;
-    const deletedFromDisk = parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force;
+    // Locked deployments never permanently delete: a delete request is forced
+    // down to an archive (hidden from view, transcript untouched, restorable).
+    // The client shows a prompt explaining this instead of offering "permanent".
+    const locked = isLockdownEnabled();
+    const force = locked ? false : (parseOptionalBooleanQuery(req.query.force, 'force') ?? false);
+    const deletedFromDisk = locked ? false : (parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force);
     const result = await sessionsService.deleteOrArchiveSessionById(sessionId, {
       force,
       deletedFromDisk,

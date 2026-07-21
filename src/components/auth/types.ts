@@ -20,6 +20,7 @@ export type AuthSessionPayload = {
 
 export type AuthStatusPayload = {
   needsSetup?: boolean;
+  lockdown?: boolean;
 };
 
 export type AuthUserPayload = {
@@ -40,6 +41,9 @@ export type AuthContextValue = {
   token: string | null;
   isLoading: boolean;
   needsSetup: boolean;
+  /** Deployment capability lock (server env CCUI_LOCKDOWN): hide create/delete
+   *  affordances and force the archive-only delete prompt. Server enforces it too. */
+  lockdown: boolean;
   hasCompletedOnboarding: boolean;
   error: string | null;
   login: (username: string, password: string) => Promise<AuthActionResult>;

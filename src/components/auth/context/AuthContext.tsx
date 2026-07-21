@@ -57,6 +57,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [token, setToken] = useState<string | null>(() => adoptUrlToken() ?? readStoredToken());
   const [isLoading, setIsLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [lockdown, setLockdown] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,6 +100,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       const statusResponse = await api.auth.status();
       const statusPayload = await parseJsonSafely<AuthStatusPayload>(statusResponse);
+
+      setLockdown(Boolean(statusPayload?.lockdown));
 
       if (statusPayload?.needsSetup) {
         setNeedsSetup(true);
@@ -263,6 +266,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       token,
       isLoading,
       needsSetup,
+      lockdown,
       hasCompletedOnboarding,
       error,
       login,
@@ -275,6 +279,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       error,
       hasCompletedOnboarding,
       isLoading,
+      lockdown,
       login,
       loginWithToken,
       logout,
