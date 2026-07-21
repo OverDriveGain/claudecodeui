@@ -87,7 +87,7 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd, isAgentCaptureAllowed } from './services/rc.service.js';
-import { currentAgentAllow, isNameAllowedForUser } from './services/user-context.js';
+import { currentProjectAllow, isNameAllowedForUser } from './services/user-context.js';
 import { resolveLocalSession } from './services/local-sessions.js';
 import {
     inboundFederationEnabled,
@@ -117,10 +117,9 @@ async function resolveProjectRootById(projectId) {
         return await getRemoteAgentCwd(sessionIdFromProjectId(projectId));
     }
     const projectPath = await projectsDb.getProjectPathById(projectId);
-    // Agent-restricted users (agent_allow set) may browse only the local project
-    // that matches their agent name — the same scope the conversations list shows —
-    // not arbitrary host projects.
-    if (projectPath && currentAgentAllow()?.length && !isNameAllowedForUser(path.basename(projectPath))) {
+    // Project-restricted users may browse only local projects their project_allow
+    // (which inherits agent_allow) matches — not arbitrary host projects.
+    if (projectPath && currentProjectAllow()?.length && !isNameAllowedForUser(path.basename(projectPath))) {
         return null;
     }
     return projectPath;

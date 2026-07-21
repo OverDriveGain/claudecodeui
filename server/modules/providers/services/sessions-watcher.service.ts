@@ -316,7 +316,7 @@ async function flushPendingWatcherUpdate(): Promise<void> {
 
     connectedClients.forEach(client => {
       if (client.readyState !== WS_OPEN_STATE) return;
-      const projectsForClient = filterProjectsForUser(updatedProjects, client.agentAllow ?? null);
+      const projectsForClient = filterProjectsForUser(updatedProjects, client.agentAllow ?? null, client.projectAllow ?? null);
       client.send(JSON.stringify({ ...baseMessage, projects: projectsForClient }));
     });
   } catch (error) {

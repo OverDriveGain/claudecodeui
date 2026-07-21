@@ -9,7 +9,7 @@ import type {
   RealtimeClientConnection,
 } from '@/shared/types.js';
 import { createNormalizedMessage, parseIncomingJsonObject } from '@/shared/utils.js';
-import { runWithUserContext, parseAgentAllow } from '@/services/user-context.js';
+import { runWithUserContext, parseAgentAllow, resolveProjectAllow } from '@/services/user-context.js';
 
 type ChatIncomingMessage = AnyRecord & {
   type?: string;
@@ -121,12 +121,16 @@ export function handleChatConnection(
   // scoping on subscribe/drive (same as HTTP requests via the auth middleware).
   const agentAllowRaw =
     (request?.user as { agent_allow?: string | null } | undefined)?.agent_allow ?? null;
-  // Stamp the parsed allow-list on the socket so per-user broadcasters (e.g. the
+  const projectAllowRaw =
+    (request?.user as { project_allow?: string | null } | undefined)?.project_allow ?? null;
+  // Stamp the parsed allow-lists on the socket so per-user broadcasters (e.g. the
   // sessions watcher's projects_updated) can scope their push to this client,
-  // instead of pushing the unrestricted list to every socket.
+  // instead of pushing the unrestricted list to every socket. agentAllow scopes
+  // remote agents; projectAllow (inherits agent_allow when unset) scopes local projects.
   (ws as unknown as RealtimeClientConnection).agentAllow = parseAgentAllow(agentAllowRaw);
+  (ws as unknown as RealtimeClientConnection).projectAllow = resolveProjectAllow(agentAllowRaw, projectAllowRaw);
 
-  ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, async () => {
+  ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, projectAllowRaw, async () => {
     try {
       const parsed = parseIncomingJsonObject(rawMessage);
       if (!parsed) {

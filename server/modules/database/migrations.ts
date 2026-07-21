@@ -419,6 +419,12 @@ export const runMigrations = (db: Database) => {
     // every agent the deployment allows). A comma-separated glob list restricts
     // this user to ONLY agents whose name matches — enforced server-side.
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_allow', 'TEXT DEFAULT NULL');
+    // Per-user LOCAL project + file visibility, kept SEPARATE from agent_allow so
+    // "which agents show" and "which projects show" are independent. NULL = inherit
+    // agent_allow (existing tenants stay isolated with no re-provisioning). A value
+    // of `*` (or a glob list) overrides it — e.g. a user who sees all local projects
+    // but only a filtered set of remote agents.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'project_allow', 'TEXT DEFAULT NULL');
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
