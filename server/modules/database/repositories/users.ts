@@ -19,13 +19,9 @@ type UserRow = {
   git_email: string | null;
   has_completed_onboarding: number;
   agent_allow: string | null;
-  project_allow: string | null;
 };
 
-type UserPublicRow = Pick<
-  UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'project_allow'
->;
+type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow'>;
 
 type UserGitConfig = {
   git_name: string | null;
@@ -89,7 +85,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, project_allow FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -99,7 +95,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, project_allow FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

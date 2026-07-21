@@ -7,7 +7,7 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 import { remoteProjectId, listRemoteAgents } from '@/services/rc.service.js';
-import { currentAgentAllow, currentProjectAllow, isNameAllowedFor } from '@/services/user-context.js';
+import { currentAgentAllow, isNameAllowedFor } from '@/services/user-context.js';
 
 type SessionSummary = {
   id: string;
@@ -220,25 +220,23 @@ function broadcastProgress(progress: ProgressUpdate) {
 }
 
 /**
- * Filter a project list to what a user may see, applying the two INDEPENDENT
- * visibility concerns: remote-agent leaves are gated by `agentAllow` (the same
- * roster the Agents list uses); local projects by `projectAllow` (which inherits
- * agent_allow for a restricted tenant, but can be `*`/a list so a user sees all
- * projects while still having a filtered agent list). null/empty on either side =
- * unrestricted for that kind. One rule, used both by the HTTP fetch (request
- * context) and the watcher's per-client broadcast, so a realtime push can never
- * show a restricted user more than a refresh would.
+ * Filter a project list to what a user with `agentAllow` may see. null/empty =
+ * unrestricted (returns the list unchanged). Otherwise keeps a project when its
+ * agent name matches an allow pattern: the display name for any leaf (a remote
+ * agent's title or a local project's name) plus the path basename for local
+ * projects (covers custom-named / path-decoded names). One rule, used both by the
+ * HTTP fetch (request context) and the watcher's per-client broadcast, so a
+ * realtime push can never show a restricted user more than a refresh would.
  */
 export function filterProjectsForUser<T extends ProjectListItem>(
   projects: T[],
   agentAllow: string[] | null | undefined,
-  projectAllow: string[] | null | undefined,
 ): T[] {
-  return projects.filter((p) =>
-    p.isRemoteAgent
-      ? isNameAllowedFor(p.displayName, agentAllow)
-      : isNameAllowedFor(p.displayName, projectAllow) ||
-        isNameAllowedFor(path.basename(p.path), projectAllow),
+  if (!agentAllow || agentAllow.length === 0) return projects;
+  return projects.filter(
+    (p) =>
+      isNameAllowedFor(p.displayName, agentAllow) ||
+      (!p.isRemoteAgent && isNameAllowedFor(path.basename(p.path), agentAllow)),
   );
 }
 
@@ -343,10 +341,9 @@ export async function getProjectsWithSessions(
     });
   }
 
-  // A restricted user sees the SAME list as the host, filtered independently:
-  // remote agents by agent_allow, local projects by project_allow (see
-  // filterProjectsForUser).
-  return filterProjectsForUser(projects, currentAgentAllow(), currentProjectAllow());
+  // A user restricted by agent_allow sees the SAME list as the host, just filtered
+  // to their agent (see filterProjectsForUser).
+  return filterProjectsForUser(projects, currentAgentAllow());
 }
 
 /**

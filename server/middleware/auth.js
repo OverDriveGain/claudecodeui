@@ -31,8 +31,8 @@ const authenticateToken = async (req, res, next) => {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
       req.user = user;
-      // Carry the user's per-agent AND per-project visibility for the request.
-      return runWithUserContext(user.agent_allow, user.project_allow, next);
+      // Carry the user's per-agent visibility for the rest of the request.
+      return runWithUserContext(user.agent_allow, next);
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -65,10 +65,8 @@ const authenticateToken = async (req, res, next) => {
         username: `agent-view:${decoded.agentView}`,
         agentView: decoded.agentView,
         agent_allow: decoded.agentView,
-        project_allow: decoded.agentView,
       };
-      // A share token is scoped to one agent; its project view matches that agent.
-      return runWithUserContext(decoded.agentView, decoded.agentView, next);
+      return runWithUserContext(decoded.agentView, next);
     }
 
     // Verify user still exists and is active
@@ -88,8 +86,8 @@ const authenticateToken = async (req, res, next) => {
     }
 
     req.user = user;
-    // Carry the user's per-agent AND per-project visibility for the request.
-    return runWithUserContext(user.agent_allow, user.project_allow, next);
+    // Carry the user's per-agent visibility for the rest of the request.
+    return runWithUserContext(user.agent_allow, next);
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
@@ -115,7 +113,7 @@ const authenticateWebSocket = (token) => {
     try {
       const user = userDb.getFirstUser();
       if (user) {
-        return { id: user.id, userId: user.id, username: user.username, agent_allow: user.agent_allow, project_allow: user.project_allow };
+        return { id: user.id, userId: user.id, username: user.username, agent_allow: user.agent_allow };
       }
       return null;
     } catch (error) {
@@ -138,7 +136,6 @@ const authenticateWebSocket = (token) => {
         username: `agent-view:${decoded.agentView}`,
         agentView: decoded.agentView,
         agent_allow: decoded.agentView,
-        project_allow: decoded.agentView,
       };
     }
     // Verify user actually exists in database (matches REST authenticateToken behavior)
@@ -146,7 +143,7 @@ const authenticateWebSocket = (token) => {
     if (!user) {
       return null;
     }
-    return { userId: user.id, username: user.username, agent_allow: user.agent_allow, project_allow: user.project_allow };
+    return { userId: user.id, username: user.username, agent_allow: user.agent_allow };
   } catch (error) {
     console.error('WebSocket token verification error:', error);
     return null;

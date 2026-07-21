@@ -39,12 +39,6 @@ export type RealtimeClientConnection = {
    * request is scoped, instead of leaking the full list to every socket.
    */
   agentAllow?: string[] | null;
-  /**
-   * The connected user's per-project visibility (parsed, inherits agent_allow when
-   * the user has no explicit project_allow). Scopes local-project broadcasts
-   * independently of remote-agent visibility.
-   */
-  projectAllow?: string[] | null;
 };
 
 /**
