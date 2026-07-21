@@ -60,7 +60,6 @@ export type AuthContextValue = {
   loginWithToken: (token: string) => Promise<AuthActionResult>;
   register: (username: string, password: string) => Promise<AuthActionResult>;
   requestToken: (email: string) => Promise<RequestTokenResult>;
-  loginWithToken: (token: string) => Promise<AuthActionResult>;
   logout: () => void;
   refreshOnboardingStatus: () => Promise<void>;
 };

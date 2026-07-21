@@ -82,10 +82,17 @@ export const canvasStore = {
       };
     }
     const prev = states.get(conversationId);
-    // Don't clobber live updates already applied for unchanged sources: only seed
-    // if we have nothing, or merge manifest as the baseline.
+    // Rev-aware merge: a source moves to the manifest version when its rev caught
+    // up (server writes — generation panes landing, a gallery restore — always
+    // bump rev). A live update the manifest hasn't persisted yet keeps its
+    // higher-rev value, so nothing on screen ever goes backwards.
+    const merged: Record<string, SourceValue> = { ...(prev?.sources ?? {}) };
+    for (const [id, v] of Object.entries(sources)) {
+      const existing = merged[id];
+      if (!existing || (v.rev ?? 0) >= (existing.rev ?? 0)) merged[id] = v;
+    }
     const next: CanvasState = {
-      sources: { ...sources, ...(prev?.sources ?? {}) },
+      sources: merged,
       note: prev?.note,
       updates: (prev?.updates ?? 0) + 1,
     };

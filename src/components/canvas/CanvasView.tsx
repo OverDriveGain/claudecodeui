@@ -16,6 +16,15 @@ interface CanvasViewProps {
   selectedProject?: Project | null;
 }
 
+// One retrievable past project in the visitor's gallery (see server/bldr/gallery.js).
+type PastProject = {
+  id: string;
+  name: string;
+  savedAt: number | null;
+  thumb: string | null;
+  thumbRev: number;
+};
+
 /**
  * bldr project Canvas — a grid of panes, one per data source. Each pane renders
  * by the source's TYPE. Seeded from the on-disk manifest (so panes show on load
@@ -30,6 +39,40 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const [genState, setGenState] = useState<'idle' | 'working' | 'error'>('idle');
   const [genProgress, setGenProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [brief, setBrief] = useState('');
+  const [pastProjects, setPastProjects] = useState<PastProject[]>([]);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  // The visitor's retrievable past projects (server keeps at most 5).
+  async function refreshProjects() {
+    try {
+      const res = await api.bldr.projects();
+      if (!res.ok) return;
+      const data = (await res.json()) as { projects?: PastProject[] };
+      setPastProjects(data.projects ?? []);
+    } catch {
+      /* transient */
+    }
+  }
+
+  // Swap a past project back in as the current one, then repaint the panes.
+  async function handleRestore(id: string) {
+    if (restoringId) return;
+    setRestoringId(id);
+    try {
+      const res = await api.bldr.restoreProject(id);
+      if (res.ok) {
+        const data = (await res.json()) as { projects?: PastProject[] };
+        setPastProjects(data.projects ?? []);
+        await refreshManifest();
+        setGalleryOpen(false);
+      }
+    } catch {
+      /* leave the gallery open so the user can retry */
+    } finally {
+      setRestoringId(null);
+    }
+  }
 
   // Re-read the manifest and apply it to the panes (used on load + after generate).
   async function refreshManifest() {
@@ -69,6 +112,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         if (!job.running) break;
       }
       setGenState('idle');
+      void refreshProjects(); // the previous design was archived when this run started
     } catch {
       setGenState('error');
       setTimeout(() => setGenState('idle'), 4000);
@@ -139,6 +183,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         /* not admin */
       }
     })();
+    void refreshProjects();
     return () => {
       cancelled = true;
     };
@@ -160,7 +205,65 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           );
         })}
       </div>
-      <div className="mt-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+      <div className="relative mt-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+        {galleryOpen && pastProjects.length > 0 && (
+          <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-2xl rounded-lg border border-border bg-background p-3 shadow-xl">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-semibold">My projects</span>
+              <button
+                type="button"
+                onClick={() => setGalleryOpen(false)}
+                className="rounded px-2 text-sm text-muted-foreground hover:bg-accent"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              {pastProjects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleRestore(p.id)}
+                  disabled={restoringId !== null}
+                  title={p.name}
+                  className="group flex flex-col overflow-hidden rounded-md border border-border text-left transition hover:border-primary disabled:opacity-60"
+                >
+                  <div className="flex h-20 w-full items-center justify-center overflow-hidden bg-accent/40">
+                    {p.thumb ? (
+                      <img
+                        src={api.bldr.assetUrl(p.thumb, p.thumbRev) ?? undefined}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-2xl">🏠</span>
+                    )}
+                  </div>
+                  <div className="p-2">
+                    <div className="truncate text-xs font-medium">{p.name}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {restoringId === p.id
+                        ? 'Opening…'
+                        : p.savedAt
+                          ? new Date(p.savedAt).toLocaleDateString()
+                          : ''}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {pastProjects.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setGalleryOpen((v) => !v)}
+            title="Reopen one of your past projects"
+            className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
+          >
+            ▤ My projects ({pastProjects.length})
+          </button>
+        )}
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {genEnabled ? (
             <>

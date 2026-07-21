@@ -94,6 +94,10 @@ export const api = {
       }),
     // Poll the in-flight generation job (per-pane state: pending/working/done/failed).
     generateJob: () => authenticatedFetch('/api/bldr/generate/job'),
+    // Gallery of the visitor's past projects (max 5) + swap one back in.
+    projects: () => authenticatedFetch('/api/bldr/projects'),
+    restoreProject: (id) =>
+      authenticatedFetch(`/api/bldr/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
     // Admin: the pane→endpoint chain (who generates each pane).
     admin: {
       me: () => authenticatedFetch('/api/bldr/admin/me'),

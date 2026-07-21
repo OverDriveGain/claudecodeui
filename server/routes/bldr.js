@@ -11,6 +11,7 @@ import { seedWorkspace, MANIFEST_FILE } from '../bldr/seed.js';
 import { generateProposalPdf } from '../bldr/proposal.js';
 import { startGeneration, getJob, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
 import { loadEndpoints, saveEndpoints, endpointAvailability, PANE_IDS, PRESETS } from '../bldr/endpoints.js';
+import { listProjects, restoreProject, beginNewProject, MAX_PROJECTS } from '../bldr/gallery.js';
 
 const router = express.Router();
 
@@ -149,11 +150,41 @@ router.post('/generate', express.json({ limit: '32kb' }), (req, res) => {
     if (!fs.existsSync(path.join(wp, MANIFEST_FILE))) seedWorkspace(wp);
     const brief = typeof req.body?.brief === 'string' ? req.body.brief : '';
     const panes = Array.isArray(req.body?.panes) && req.body.panes.length ? req.body.panes : undefined;
+    // A FULL run is a new project: archive the one on screen into the gallery
+    // first (pane-subset runs — admin tests, retries — edit the current one).
+    if (!panes && !getJob(wp)?.running) beginNewProject(wp, brief);
     const job = startGeneration(wp, brief, panes);
     res.json({ ok: true, job });
   } catch (err) {
     console.error('[bldr] generate error:', err?.message || err);
     res.status(500).json({ error: 'Design generation failed to start.', code: 'GENERATE_FAILED' });
+  }
+});
+
+// --- project gallery ------------------------------------------------------
+// Up to MAX_PROJECTS past projects per visitor, retrievable at any time.
+
+router.get('/projects', (req, res) => {
+  try {
+    res.json({ projects: listProjects(workspaceOf(req)), max: MAX_PROJECTS });
+  } catch (err) {
+    console.error('[bldr] projects list error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to list projects.' });
+  }
+});
+
+// Swap a past project back in as the current one (current gets archived).
+router.post('/projects/:id/restore', (req, res) => {
+  try {
+    const wp = workspaceOf(req);
+    if (getJob(wp)?.running) {
+      return res.status(409).json({ error: 'A generation is running — wait for it to finish.' });
+    }
+    const manifest = restoreProject(wp, String(req.params.id));
+    res.json({ ok: true, manifest, projects: listProjects(wp) });
+  } catch (err) {
+    console.error('[bldr] project restore error:', err?.message || err);
+    res.status(400).json({ error: err?.message || 'Failed to restore project.' });
   }
 });
 
