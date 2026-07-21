@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { EyeOff } from 'lucide-react';
+import { EyeOff, Radio } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
+import { cn } from '../../../../lib/utils';
 import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 
@@ -107,6 +108,7 @@ export default function SidebarProjectList({
   t,
 }: SidebarProjectListProps) {
   const [showHiddenAgents, setShowHiddenAgents] = useState(false);
+  const [showOnlineAgents, setShowOnlineAgents] = useState(false);
   const state = (
     <SidebarProjectsState
       isLoading={isLoading}
@@ -179,12 +181,26 @@ export default function SidebarProjectList({
 
   if (listKind === 'agents') {
     const agentProjects = filteredProjects.filter(isAgent);
-    // Per-user "Remove from view": a hidden agent drops out of the list by default;
-    // a "Show hidden (N)" toggle reveals them (dimmed) with an unhide action. Pure
-    // display — keyed on the stable agent identity so it survives an agent restart.
+    // Per-user "Remove from view": a hidden agent drops out of the list by default.
+    // Two independent reveal toggles surface hidden agents (dimmed, with an inline
+    // unhide action) — pure display, keyed on the stable agent identity:
+    //   • "Show hidden (N)"  — reveals ALL hidden agents, online or not.
+    //   • "Show online (N)"  — reveals only hidden agents that are currently ONLINE,
+    //     so live status OVERRIDES the hidden filter (a way to see/recover what's
+    //     actually alive). Redundant while "Show hidden" is on (that's a superset).
     const hiddenOf = (project: Project) => Boolean(isAgentHidden?.(project));
+    // Same liveness signal the agent leaf renders as its online dot.
+    const isOnline = (project: Project) => project.remoteConnected !== false;
     const visibleAgents = agentProjects.filter((project) => !hiddenOf(project));
     const hiddenAgents = agentProjects.filter(hiddenOf);
+    const hiddenOnlineAgents = hiddenAgents.filter(isOnline);
+    // What the toggles reveal: "Show hidden" (all hidden) supersedes "Show online"
+    // (only online hidden); if neither is on, nothing hidden is revealed.
+    const revealedHidden = showHiddenAgents
+      ? hiddenAgents
+      : showOnlineAgents
+        ? hiddenOnlineAgents
+        : [];
     return (
       <div className="pb-safe-area-inset-bottom md:space-y-1">
         {visibleAgents.length > 0 ? (
@@ -194,25 +210,55 @@ export default function SidebarProjectList({
             {t('sidebar.noAgents', { defaultValue: 'No agents found.' })}
           </div>
         ) : null}
-        {hiddenAgents.length > 0 && (
+        {(hiddenAgents.length > 0 || hiddenOnlineAgents.length > 0) && (
           <div className="mt-1 md:space-y-1">
-            <button
-              type="button"
-              onClick={() => setShowHiddenAgents((v) => !v)}
-              className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground md:px-3"
-            >
-              <EyeOff className="h-3.5 w-3.5 flex-shrink-0" />
-              {showHiddenAgents
-                ? t('sidebar.hideHiddenAgents', {
-                    defaultValue: 'Hide hidden ({{count}})',
-                    count: hiddenAgents.length,
-                  })
-                : t('sidebar.showHiddenAgents', {
-                    defaultValue: 'Show hidden ({{count}})',
-                    count: hiddenAgents.length,
-                  })}
-            </button>
-            {showHiddenAgents && hiddenAgents.map((project) => renderItem(project, true))}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 md:px-3">
+              {hiddenOnlineAgents.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowOnlineAgents((v) => !v)}
+                  aria-pressed={showOnlineAgents}
+                  className={cn(
+                    'flex items-center gap-1.5 text-left text-xs font-medium hover:text-foreground',
+                    showOnlineAgents ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  <Radio className="h-3.5 w-3.5 flex-shrink-0" />
+                  {showOnlineAgents
+                    ? t('sidebar.hideOnlineAgents', {
+                        defaultValue: 'Hide online ({{count}})',
+                        count: hiddenOnlineAgents.length,
+                      })
+                    : t('sidebar.showOnlineAgents', {
+                        defaultValue: 'Show online ({{count}})',
+                        count: hiddenOnlineAgents.length,
+                      })}
+                </button>
+              )}
+              {hiddenAgents.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowHiddenAgents((v) => !v)}
+                  aria-pressed={showHiddenAgents}
+                  className={cn(
+                    'flex items-center gap-1.5 text-left text-xs font-medium hover:text-foreground',
+                    showHiddenAgents ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  <EyeOff className="h-3.5 w-3.5 flex-shrink-0" />
+                  {showHiddenAgents
+                    ? t('sidebar.hideHiddenAgents', {
+                        defaultValue: 'Hide hidden ({{count}})',
+                        count: hiddenAgents.length,
+                      })
+                    : t('sidebar.showHiddenAgents', {
+                        defaultValue: 'Show hidden ({{count}})',
+                        count: hiddenAgents.length,
+                      })}
+                </button>
+              )}
+            </div>
+            {revealedHidden.map((project) => renderItem(project, true))}
           </div>
         )}
       </div>
