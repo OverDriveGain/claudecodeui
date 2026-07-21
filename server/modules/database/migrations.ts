@@ -6,6 +6,7 @@ import {
   PROJECTS_TABLE_SCHEMA_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
+  USER_HIDDEN_AGENTS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
   VAPID_KEYS_TABLE_SCHEMA_SQL,
 } from '@/modules/database/schema.js';
@@ -421,6 +422,8 @@ export const runMigrations = (db: Database) => {
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_allow', 'TEXT DEFAULT NULL');
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
+    db.exec(USER_HIDDEN_AGENTS_TABLE_SCHEMA_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_user_hidden_agents_user ON user_hidden_agents(user_id)');
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
     db.exec(VAPID_KEYS_TABLE_SCHEMA_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL);

@@ -254,6 +254,19 @@ export const api = {
       authenticatedFetch('/api/user/complete-onboarding', {
         method: 'POST',
       }),
+    // Per-user "Remove from view" preference for the agents view. `agentKey` is a
+    // stable agent identity (account + title), not the volatile relay session id.
+    hiddenAgents: () => authenticatedFetch('/api/user/hidden-agents'),
+    hideAgent: (agentKey) =>
+      authenticatedFetch('/api/user/hidden-agents', {
+        method: 'POST',
+        body: JSON.stringify({ agentKey }),
+      }),
+    unhideAgent: (agentKey) =>
+      authenticatedFetch('/api/user/hidden-agents', {
+        method: 'DELETE',
+        body: JSON.stringify({ agentKey }),
+      }),
   },
 
   // Generic GET method for any endpoint

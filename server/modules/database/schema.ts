@@ -69,6 +69,20 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 `;
 
+// Per-user "hide agent from my view" preference. Pure DISPLAY layer — separate
+// from any security/access filter (agent_allow). `agent_key` is a STABLE agent
+// identity (account label + agent title), NOT the volatile relay session id, so a
+// hidden agent stays hidden across relay/agent restarts. One row per (user, agent).
+export const USER_HIDDEN_AGENTS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS user_hidden_agents (
+    user_id INTEGER NOT NULL,
+    agent_key TEXT NOT NULL,
+    hidden_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, agent_key),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
 export const PROJECTS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY NOT NULL,
@@ -132,6 +146,9 @@ CREATE INDEX IF NOT EXISTS idx_user_credentials_active ON user_credentials(is_ac
 
 ${USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_user_notification_preferences_user_id ON user_notification_preferences(user_id);
+
+${USER_HIDDEN_AGENTS_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_user_hidden_agents_user ON user_hidden_agents(user_id);
 
 ${VAPID_KEYS_TABLE_SCHEMA_SQL}
 

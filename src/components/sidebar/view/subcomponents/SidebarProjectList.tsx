@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { EyeOff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
@@ -55,6 +56,11 @@ export type SidebarProjectListProps = {
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  // Per-user "Remove from view" preference for the agents tab. Optional so the
+  // projects/conversations lists are unaffected.
+  isAgentHidden?: (project: Project) => boolean;
+  onHideAgent?: (project: Project) => void;
+  onUnhideAgent?: (project: Project) => void;
   t: TFunction;
 };
 
@@ -95,8 +101,12 @@ export default function SidebarProjectList({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
+  isAgentHidden,
+  onHideAgent,
+  onUnhideAgent,
   t,
 }: SidebarProjectListProps) {
+  const [showHiddenAgents, setShowHiddenAgents] = useState(false);
   const state = (
     <SidebarProjectsState
       isLoading={isLoading}
@@ -120,9 +130,12 @@ export default function SidebarProjectList({
 
   // React key + per-project state lookups all use the DB `projectId` so they remain
   // stable across renames and session changes.
-  const renderItem = (project: Project) => (
+  const renderItem = (project: Project, agentHidden = false) => (
     <SidebarProjectItem
       key={project.projectId}
+      isRemoteAgentHidden={agentHidden}
+      onHideAgent={onHideAgent}
+      onUnhideAgent={onUnhideAgent}
       project={project}
       selectedProject={selectedProject}
       selectedSession={selectedSession}
@@ -166,13 +179,40 @@ export default function SidebarProjectList({
 
   if (listKind === 'agents') {
     const agentProjects = filteredProjects.filter(isAgent);
+    // Per-user "Remove from view": a hidden agent drops out of the list by default;
+    // a "Show hidden (N)" toggle reveals them (dimmed) with an unhide action. Pure
+    // display — keyed on the stable agent identity so it survives an agent restart.
+    const hiddenOf = (project: Project) => Boolean(isAgentHidden?.(project));
+    const visibleAgents = agentProjects.filter((project) => !hiddenOf(project));
+    const hiddenAgents = agentProjects.filter(hiddenOf);
     return (
       <div className="pb-safe-area-inset-bottom md:space-y-1">
-        {agentProjects.length > 0 ? (
-          agentProjects.map(renderItem)
-        ) : (
+        {visibleAgents.length > 0 ? (
+          visibleAgents.map((project) => renderItem(project))
+        ) : hiddenAgents.length === 0 ? (
           <div className="px-4 py-12 text-center text-sm text-muted-foreground md:py-8">
             {t('sidebar.noAgents', { defaultValue: 'No agents found.' })}
+          </div>
+        ) : null}
+        {hiddenAgents.length > 0 && (
+          <div className="mt-1 md:space-y-1">
+            <button
+              type="button"
+              onClick={() => setShowHiddenAgents((v) => !v)}
+              className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground md:px-3"
+            >
+              <EyeOff className="h-3.5 w-3.5 flex-shrink-0" />
+              {showHiddenAgents
+                ? t('sidebar.hideHiddenAgents', {
+                    defaultValue: 'Hide hidden ({{count}})',
+                    count: hiddenAgents.length,
+                  })
+                : t('sidebar.showHiddenAgents', {
+                    defaultValue: 'Show hidden ({{count}})',
+                    count: hiddenAgents.length,
+                  })}
+            </button>
+            {showHiddenAgents && hiddenAgents.map((project) => renderItem(project, true))}
           </div>
         )}
       </div>
@@ -239,7 +279,7 @@ export default function SidebarProjectList({
 
   return (
     <div className="pb-safe-area-inset-bottom md:space-y-1">
-      {!showProjects ? state : conversationProjects.map(renderItem)}
+      {!showProjects ? state : conversationProjects.map((project) => renderItem(project))}
     </div>
   );
 }

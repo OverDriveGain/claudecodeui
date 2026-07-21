@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
+import { useHiddenAgents } from '../../../hooks/useHiddenAgents';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
@@ -51,6 +52,7 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const paletteOps = usePaletteOps();
+  const { isHidden: isAgentHidden, hideAgent, unhideAgent } = useHiddenAgents();
 
   const {
     isSidebarCollapsed,
@@ -185,6 +187,13 @@ function Sidebar({
     },
     onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => {
       void updateSessionSummary(projectName, sessionId, summary, provider);
+    },
+    isAgentHidden,
+    onHideAgent: (project) => {
+      void hideAgent(project);
+    },
+    onUnhideAgent: (project) => {
+      void unhideAgent(project);
     },
     t,
   };

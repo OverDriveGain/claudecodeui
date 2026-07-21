@@ -1,4 +1,5 @@
-import { Check, ChevronDown, ChevronRight, Edit3, SquareTerminal, Star, Trash2, X } from 'lucide-react';
+import type { MouseEvent } from 'react';
+import { Check, ChevronDown, ChevronRight, Edit3, Eye, EyeOff, SquareTerminal, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -49,6 +50,12 @@ type SidebarProjectItemProps = {
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  // Per-user "Remove from view" for remote agents. `isRemoteAgentHidden` marks a
+  // row currently shown under "Show hidden"; the handlers hide/unhide it. Only wired
+  // for the agents tab.
+  isRemoteAgentHidden?: boolean;
+  onHideAgent?: (project: Project) => void;
+  onUnhideAgent?: (project: Project) => void;
   t: TFunction;
 };
 
@@ -90,6 +97,9 @@ export default function SidebarProjectItem({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
+  isRemoteAgentHidden = false,
+  onHideAgent,
+  onUnhideAgent,
   t,
 }: SidebarProjectItemProps) {
   // Project identity is tracked by the DB-assigned `projectId` everywhere
@@ -149,8 +159,16 @@ export default function SidebarProjectItem({
         project.projectId,
       );
     };
+    const hideAgent = (event: MouseEvent) => {
+      event.stopPropagation();
+      onHideAgent?.(project);
+    };
+    const unhideAgent = (event: MouseEvent) => {
+      event.stopPropagation();
+      onUnhideAgent?.(project);
+    };
     return (
-      <div className="md:space-y-1">
+      <div className="group/agent relative md:space-y-1">
         <Button
           variant="ghost"
           onClick={openAgent}
@@ -159,6 +177,7 @@ export default function SidebarProjectItem({
             'w-full justify-start gap-2 p-3 md:p-2 h-auto font-normal hover:bg-accent/50',
             isSelected && 'bg-accent text-accent-foreground',
             !isOnline && 'opacity-60',
+            isRemoteAgentHidden && 'opacity-50',
           )}
         >
           <SquareTerminal className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
@@ -193,6 +212,29 @@ export default function SidebarProjectItem({
             />
           )}
         </Button>
+        {isRemoteAgentHidden
+          ? onUnhideAgent && (
+              <button
+                type="button"
+                onClick={unhideAgent}
+                title={t('sidebar.unhideAgent', { defaultValue: 'Unhide agent' })}
+                aria-label={t('sidebar.unhideAgent', { defaultValue: 'Unhide agent' })}
+                className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-background/80 text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground"
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </button>
+            )
+          : onHideAgent && (
+              <button
+                type="button"
+                onClick={hideAgent}
+                title={t('sidebar.hideAgent', { defaultValue: 'Remove from view' })}
+                aria-label={t('sidebar.hideAgent', { defaultValue: 'Remove from view' })}
+                className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-background/80 text-muted-foreground opacity-0 shadow-sm transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover/agent:opacity-100"
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+              </button>
+            )}
       </div>
     );
   }

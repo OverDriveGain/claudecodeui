@@ -1,5 +1,5 @@
 import express from 'express';
-import { userDb } from '../modules/database/index.js';
+import { userDb, userHiddenAgentsDb } from '../modules/database/index.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { getSystemGitConfig } from '../utils/gitConfig.js';
 import { spawn } from 'child_process';
@@ -117,6 +117,55 @@ router.get('/onboarding-status', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error checking onboarding status:', error);
     res.status(500).json({ error: 'Failed to check onboarding status' });
+  }
+});
+
+// --- Per-user hidden agents (display preference for the agents view) ----------
+// `agent_key` is a STABLE agent identity (account label + title) minted by the
+// client, NOT the volatile relay session id, so a hide survives an agent restart.
+// This is a pure display layer scoped to req.user.id — it never affects another
+// user's view or any access/security filter.
+
+function readAgentKey(req) {
+  const raw = req.body?.agentKey;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+router.get('/hidden-agents', authenticateToken, (req, res) => {
+  try {
+    const hiddenAgentKeys = userHiddenAgentsDb.listKeys(req.user.id);
+    res.json({ success: true, hiddenAgentKeys });
+  } catch (error) {
+    console.error('Error listing hidden agents:', error);
+    res.status(500).json({ error: 'Failed to list hidden agents' });
+  }
+});
+
+router.post('/hidden-agents', authenticateToken, (req, res) => {
+  try {
+    const agentKey = readAgentKey(req);
+    if (!agentKey) {
+      return res.status(400).json({ error: 'agentKey is required' });
+    }
+    userHiddenAgentsDb.hide(req.user.id, agentKey);
+    res.json({ success: true, hiddenAgentKeys: userHiddenAgentsDb.listKeys(req.user.id) });
+  } catch (error) {
+    console.error('Error hiding agent:', error);
+    res.status(500).json({ error: 'Failed to hide agent' });
+  }
+});
+
+router.delete('/hidden-agents', authenticateToken, (req, res) => {
+  try {
+    const agentKey = readAgentKey(req);
+    if (!agentKey) {
+      return res.status(400).json({ error: 'agentKey is required' });
+    }
+    userHiddenAgentsDb.unhide(req.user.id, agentKey);
+    res.json({ success: true, hiddenAgentKeys: userHiddenAgentsDb.listKeys(req.user.id) });
+  } catch (error) {
+    console.error('Error unhiding agent:', error);
+    res.status(500).json({ error: 'Failed to unhide agent' });
   }
 });
 
