@@ -82,7 +82,7 @@ struct MessageRow: View, Equatable {
                 VStack(alignment: .trailing, spacing: 6) {
                     if let images = message.images, !images.isEmpty {
                         ForEach(images, id: \.self) { url in
-                            DataURLImage(dataURL: url)
+                            DataURLImage(dataURL: url, zoomable: true)
                                 .frame(maxWidth: 260, maxHeight: 260, alignment: .trailing)
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                         }

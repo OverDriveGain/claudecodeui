@@ -11,17 +11,21 @@ import UIKit
 /// instant, no re-download), and downsamples huge renders to screen scale.
 struct RemoteImage<Failure: View>: View {
     let url: URL
+    var zoomable = false
     @ViewBuilder let failure: () -> Failure
 
     @State private var image: UIImage?
     @State private var failed = false
     @State private var attempt = 0
+    @State private var lightbox = false
 
     var body: some View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFit()
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .onTapGesture { if zoomable { lightbox = true } }
+                    .fullScreenCover(isPresented: $lightbox) { ImageLightbox(image: image) }
             } else if failed {
                 failure()
             } else {
@@ -81,14 +85,18 @@ enum RemoteImageCache {
 /// thread, and downsampled so a full-res photo can't spike memory).
 struct DataURLImage: View {
     let dataURL: String
+    var zoomable = false
 
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var lightbox = false
 
     var body: some View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFit()
+                    .onTapGesture { if zoomable { lightbox = true } }
+                    .fullScreenCover(isPresented: $lightbox) { ImageLightbox(image: image) }
             } else if failed {
                 Image(systemName: "photo").foregroundColor(Theme.mutedText)
             } else {
@@ -149,7 +157,7 @@ struct DeliveredMediaView: View {
                 // reflowed the list and re-opened the blank strip when opening
                 // an agent conversation. A row's height must NEVER change after
                 // first layout.
-                RemoteImage(url: url) { fallback(url) }
+                RemoteImage(url: url, zoomable: true) { fallback(url) }
                     .frame(height: 240, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             case "mp4", "mov", "m4v", "webm", "ogv":
@@ -216,5 +224,102 @@ struct AudioBubble: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .onAppear { if player == nil { player = AVPlayer(url: url) } }
         .onDisappear { player?.pause(); playing = false }
+    }
+}
+
+/// Full-screen viewer for a tapped inline image: pinch to zoom (1–6x),
+/// double-tap to toggle, pan while zoomed, X or tap-at-1x to close.
+struct ImageLightbox: View {
+    let image: UIImage
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            ZoomableImage(image: image) { dismiss() }
+                .ignoresSafeArea()
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(.white.opacity(0.85), .black.opacity(0.5))
+                    .padding(14)
+            }
+        }
+        .statusBarHidden()
+    }
+}
+
+/// UIScrollView-backed zoom — SwiftUI has no native pinch-zoomable scroll view.
+private struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+    let onTapAtMinZoom: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onTapAtMinZoom: onTapAtMinZoom) }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = UIScrollView()
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 6
+        scroll.showsVerticalScrollIndicator = false
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.backgroundColor = .clear
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.delegate = context.coordinator
+
+        let iv = UIImageView(image: image)
+        iv.contentMode = .scaleAspectFit
+        iv.frame = scroll.bounds
+        iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        iv.isUserInteractionEnabled = true
+        scroll.addSubview(iv)
+        context.coordinator.imageView = iv
+
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator,
+                                               action: #selector(Coordinator.doubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        iv.addGestureRecognizer(doubleTap)
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.singleTapped(_:)))
+        tap.require(toFail: doubleTap)
+        iv.addGestureRecognizer(tap)
+        return scroll
+    }
+
+    func updateUIView(_ scroll: UIScrollView, context: Context) {
+        // Frame arrives after makeUIView; keep the image view filling at 1x.
+        if scroll.zoomScale == 1 { context.coordinator.imageView?.frame = scroll.bounds }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var imageView: UIImageView?
+        let onTapAtMinZoom: () -> Void
+        init(onTapAtMinZoom: @escaping () -> Void) { self.onTapAtMinZoom = onTapAtMinZoom }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        // Keep the (aspect-fit) content centered while zoomed.
+        func scrollViewDidZoom(_ s: UIScrollView) {
+            let dx = max((s.bounds.width - s.contentSize.width) / 2, 0)
+            let dy = max((s.bounds.height - s.contentSize.height) / 2, 0)
+            s.contentInset = UIEdgeInsets(top: dy, left: dx, bottom: dy, right: dx)
+        }
+
+        @objc func doubleTapped(_ g: UITapGestureRecognizer) {
+            guard let scroll = imageView?.superview as? UIScrollView else { return }
+            if scroll.zoomScale > 1 {
+                scroll.setZoomScale(1, animated: true)
+            } else {
+                let point = g.location(in: imageView)
+                let size = CGSize(width: scroll.bounds.width / 3, height: scroll.bounds.height / 3)
+                let rect = CGRect(origin: CGPoint(x: point.x - size.width / 2,
+                                                  y: point.y - size.height / 2), size: size)
+                scroll.zoom(to: rect, animated: true)
+            }
+        }
+
+        @objc func singleTapped(_ g: UITapGestureRecognizer) {
+            guard let scroll = imageView?.superview as? UIScrollView else { return }
+            if scroll.zoomScale <= 1.01 { onTapAtMinZoom() }
+        }
     }
 }
