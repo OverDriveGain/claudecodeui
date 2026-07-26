@@ -10,7 +10,9 @@
  */
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { a2aCall } from './a2a.js';
+import { getOtel, flushOtel, OTEL_DEBUG_TEXT } from './otel.js';
 import { MANIFEST_FILE } from './seed.js';
 import { loadEndpoints, endpointAvailability, PANE_IDS } from './endpoints.js';
 
@@ -142,7 +144,8 @@ const CALL_TIMEOUT_MS = 480000;
  * Send one prompt through a configured endpoint and return the reply text.
  * a2a → the granted fleet agent; openai → any OpenAI-compatible /chat/completions.
  */
-async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS) {
+async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS, meta = null) {
+  if (meta) meta.prompt = message;
   if (ep.backend === 'a2a') {
     return a2aCall({ provider: ep.provider, skill: ep.skill, mode: ep.mode, message, timeoutMs });
   }
@@ -158,6 +161,9 @@ async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS) {
     });
     if (!res.ok) throw new Error(`endpoint ${ep.baseUrl} HTTP ${res.status}`);
     const body = await res.json();
+    if (meta && body?.usage) {
+      meta.usage = { input: body.usage.prompt_tokens, output: body.usage.completion_tokens };
+    }
     return String(body?.choices?.[0]?.message?.content || '').trim();
   }
   throw new Error(`unknown backend '${ep.backend}'`);
@@ -166,8 +172,8 @@ async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS) {
 // --- per-pane tasks -------------------------------------------------------
 
 /** Generate one image pane. Returns { id, file:{name,buffer}, source } or null. */
-async function genImagePane(id, brief, ep) {
-  const reply = await callEndpoint(ep, IMAGE_PROMPTS[id](brief));
+async function genImagePane(id, brief, ep, meta = null) {
+  const reply = await callEndpoint(ep, IMAGE_PROMPTS[id](brief), CALL_TIMEOUT_MS, meta);
   const dataUrl = extractDataUrl(reply);
   if (!dataUrl) return null;
   const mime = dataUrl.slice(5, dataUrl.indexOf(';'));
@@ -183,13 +189,15 @@ async function genImagePane(id, brief, ep) {
  * returns its absolute path, which this app (same OS user) reads directly. Any
  * other endpoint is asked for a data URL (vector fallback).
  * Returns { id, file, source } or null. */
-async function genRenderPane(id, brief, ep) {
+async function genRenderPane(id, brief, ep, meta = null) {
   if (ep.backend === 'a2a' && ep.skill === 'generate_image') {
+    const prompt = (RENDER_PROMPTS[id] || RENDER_PROMPTS.front_view)(brief);
+    if (meta) meta.prompt = prompt;
     const reply = await a2aCall({
       provider: ep.provider,
       skill: ep.skill,
       mode: ep.mode,
-      params: { prompt: (RENDER_PROMPTS[id] || RENDER_PROMPTS.front_view)(brief), size: '1536x1024' },
+      params: { prompt, size: '1536x1024' },
       timeoutMs: CALL_TIMEOUT_MS,
     });
     // The exec skill returns the absolute PNG path (possibly with surrounding text).
@@ -201,7 +209,7 @@ async function genRenderPane(id, brief, ep) {
     return { id, file: { name: `${id}.png`, buffer }, sourcePatch: { type: 'image', path: `${id}.png` } };
   }
   // Text-only endpoint: fall back to a drawn SVG front view.
-  const reply = await callEndpoint(ep, `${IMAGE_PROMPTS.elevations(brief).replace('ELEVATIONS pane', 'FRONT_VIEW pane (front facade)')}`);
+  const reply = await callEndpoint(ep, `${IMAGE_PROMPTS.elevations(brief).replace('ELEVATIONS pane', 'FRONT_VIEW pane (front facade)')}`, CALL_TIMEOUT_MS, meta);
   const dataUrl = extractDataUrl(reply);
   if (!dataUrl) return null;
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
@@ -211,8 +219,8 @@ async function genRenderPane(id, brief, ep) {
 }
 
 /** Generate the costs pane. Returns { id:'costs', source } or null. */
-async function genCostsPane(brief, current, ep) {
-  const reply = await callEndpoint(ep, costsPrompt(brief, current));
+async function genCostsPane(brief, current, ep, meta = null) {
+  const reply = await callEndpoint(ep, costsPrompt(brief, current), CALL_TIMEOUT_MS, meta);
   const data = extractJson(reply);
   if (!validCosts(data)) return null;
   const total = typeof data.total === 'number' ? data.total : data.rows.reduce((a, r) => a + (Number(r.cost) || 0), 0);
@@ -279,6 +287,21 @@ async function runJob(workspacePath, job, brief, wanted) {
   const manifest = JSON.parse(fs.readFileSync(path.join(workspacePath, MANIFEST_FILE), 'utf8'));
   const current = { costs: manifest.sources?.costs?.data || null };
   const { endpoints } = loadEndpoints(); // snapshot the chain once per job
+  // Tracing (no-op unless BLDR_OTEL=1): one parent span per request, one child
+  // span per LLM call — the pane fan-out shows as a tree in Tempo.
+  const otel = await getOtel();
+  const briefText = briefLine(brief);
+  const parentSpan = otel?.tracer.startSpan('bldr.generate', {
+    attributes: {
+      'bldr.workspace': path.basename(workspacePath),
+      'bldr.panes': wanted.join(','),
+      'bldr.brief.sha256': crypto.createHash('sha256').update(briefText).digest('hex').slice(0, 16),
+      'bldr.brief.length': briefText.length,
+      ...(OTEL_DEBUG_TEXT ? { 'bldr.brief': briefText.slice(0, 300) } : {}),
+    },
+  });
+  const paneCtx = parentSpan ? otel.trace.setSpan(otel.context.active(), parentSpan) : null;
+  if (parentSpan) console.log('[bldr-otel] trace', parentSpan.spanContext().traceId);
   let idx = 0;
   const worker = async () => {
     while (idx < wanted.length) {
@@ -296,15 +319,26 @@ async function runJob(workspacePath, job, brief, wanted) {
       job.panes[id] = t.state = 'working';
       t.startedAt = Date.now();
       logTrace('pane_start', { workspace: path.basename(workspacePath), pane: id, endpoint: t.endpoint });
+      const span = paneCtx
+        ? otel.tracer.startSpan(`llm.${id}`, {
+            attributes: {
+              'bldr.pane': id,
+              'bldr.endpoint': t.endpoint,
+              'gen_ai.system': ep.backend === 'a2a' ? `a2a:${ep.provider}` : 'openai',
+              'gen_ai.request.model': ep.model || `${ep.provider || '?'}/${ep.skill || '?'}`,
+            },
+          }, paneCtx)
+        : null;
+      const meta = {};
       try {
         // Dispatch by the pane's ENDPOINT: an image endpoint means a real
         // rendered drawing for any drawing pane; a text endpoint draws SVG.
         const isImageEndpoint = ep.backend === 'a2a' && ep.skill === 'generate_image';
         const r = id === 'costs'
-          ? await genCostsPane(brief, current, ep)
+          ? await genCostsPane(brief, current, ep, meta)
           : RENDER_PANES.has(id) || isImageEndpoint
-            ? await genRenderPane(id, brief, ep)
-            : await genImagePane(id, brief, ep);
+            ? await genRenderPane(id, brief, ep, meta)
+            : await genImagePane(id, brief, ep, meta);
         if (r) { applyPane(workspacePath, id, r); job.panes[id] = t.state = 'done'; }
         else {
           job.panes[id] = t.state = 'failed';
@@ -317,6 +351,17 @@ async function runJob(workspacePath, job, brief, wanted) {
       }
       t.finishedAt = Date.now();
       t.ms = t.finishedAt - (t.startedAt || t.finishedAt);
+      if (span) {
+        span.setAttributes({
+          'bldr.state': t.state,
+          'bldr.latency_ms': t.ms,
+          ...(meta.usage?.input != null ? { 'gen_ai.usage.input_tokens': meta.usage.input } : {}),
+          ...(meta.usage?.output != null ? { 'gen_ai.usage.output_tokens': meta.usage.output } : {}),
+          ...(OTEL_DEBUG_TEXT && meta.prompt ? { 'gen_ai.prompt': String(meta.prompt).slice(0, 500) } : {}),
+        });
+        if (t.error) span.setStatus({ code: otel.SpanStatusCode.ERROR, message: t.error });
+        span.end();
+      }
       logTrace('pane_end', {
         workspace: path.basename(workspacePath),
         pane: id,
@@ -334,11 +379,21 @@ async function runJob(workspacePath, job, brief, wanted) {
     job.running = false;
     job.finishedAt = Date.now();
     const states = Object.values(job.panes);
+    const doneCount = states.filter((s) => s === 'done').length;
+    const failedCount = states.filter((s) => s === 'failed' || s === 'skipped').length;
+    if (parentSpan) {
+      parentSpan.setAttributes({ 'bldr.done': doneCount, 'bldr.failed': failedCount, 'bldr.total': states.length });
+      if (doneCount === 0 && states.length > 0) {
+        parentSpan.setStatus({ code: otel.SpanStatusCode.ERROR, message: 'all panes failed' });
+      }
+      parentSpan.end();
+      flushOtel();
+    }
     logTrace('job_end', {
       workspace: path.basename(workspacePath),
       ms: job.finishedAt - job.startedAt,
-      done: states.filter((s) => s === 'done').length,
-      failed: states.filter((s) => s === 'failed' || s === 'skipped').length,
+      done: doneCount,
+      failed: failedCount,
       total: states.length,
     });
     history.unshift(snapshotJob(workspacePath, job));
