@@ -9,7 +9,7 @@ import type {
   RealtimeClientConnection,
 } from '@/shared/types.js';
 import { createNormalizedMessage, parseIncomingJsonObject } from '@/shared/utils.js';
-import { runWithUserContext, parseAgentAllow } from '@/services/user-context.js';
+import { runWithUserContext, parseAgentAllow, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/services/user-context.js';
 
 type ChatIncomingMessage = AnyRecord & {
   type?: string;
@@ -119,12 +119,14 @@ export function handleChatConnection(
   // Per-connection agent visibility: every message this socket sends is dispatched
   // inside the user's context, so the rc.service capture checks enforce per-user
   // scoping on subscribe/drive (same as HTTP requests via the auth middleware).
-  const agentAllowRaw =
-    (request?.user as { agent_allow?: string | null } | undefined)?.agent_allow ?? null;
-  // Stamp the parsed allow-list on the socket so per-user broadcasters (e.g. the
-  // sessions watcher's projects_updated) can scope their push to this client,
-  // instead of pushing the unrestricted list to every socket.
+  const wsUser = request?.user as import('@/services/user-context.js').VisibilityUser | undefined;
+  const agentAllowRaw = effectiveAgentAllowRaw(wsUser);
+  const wsLinuxUser = effectiveLinuxUser(wsUser);
+  // Stamp the parsed allow-list + linux user on the socket so per-user
+  // broadcasters (e.g. the sessions watcher's projects_updated) can scope their
+  // push to this client, instead of pushing the unrestricted list to every socket.
   (ws as unknown as RealtimeClientConnection).agentAllow = parseAgentAllow(agentAllowRaw);
+  (ws as unknown as RealtimeClientConnection).linuxUser = wsLinuxUser;
 
   ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, async () => {
     try {
@@ -324,7 +326,7 @@ export function handleChatConnection(
         error: message,
       });
     }
-  }));
+  }, wsLinuxUser));
 
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');

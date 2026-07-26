@@ -3,6 +3,20 @@ import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '../utils/api';
 import { sessionActivityStore } from '../stores/useSessionActivityStore';
+import { agentHealthStore, type AgentAccountError } from '../stores/agentHealthStore';
+import {
+  listRemoteHosts,
+  registerHostOwnership,
+  unregisterIds,
+  useRemoteHosts,
+  type RemoteHost,
+} from '../utils/remoteHosts';
+import {
+  assignedHostFor,
+  loadAgentHostAssignments,
+  subscribeAgentHostAssignments,
+} from '../utils/agentHostAssignments';
+import { agentDisplayKey } from '../utils/agentKey';
 import type {
   AppSocketMessage,
   AppTab,
@@ -26,6 +40,97 @@ type FetchProjectsOptions = {
 };
 
 const serialize = (value: unknown) => JSON.stringify(value ?? null);
+
+// ── Multi-host helpers ──────────────────────────────────────────────────────
+// Projects from a connected peer host are tagged __hostUrl and live in the same
+// `projects` array; the primary host's items are untagged. A host's segment is
+// only ever replaced by data FROM that host (fetch or its own projects_updated
+// push) — so one host's update can never wipe another's agents from the view.
+
+const projectHostUrl = (p: Project): string | null => ((p as any).__hostUrl as string | undefined) ?? null;
+
+const allSessionIdsOf = (list: Project[]): string[] => {
+  const ids: string[] = [];
+  for (const p of list) {
+    const remoteId = (p as any).remoteSessionId;
+    if (typeof remoteId === 'string' && remoteId) ids.push(remoteId);
+    for (const s of getProjectSessions(p)) ids.push(String(s.id));
+  }
+  return ids;
+};
+
+/** Fetch one peer host's projects, tagged; null on failure (keep its old segment). */
+const fetchHostProjects = async (host: RemoteHost): Promise<Project[] | null> => {
+  try {
+    const r = await api.projectsFor(host);
+    if (!r.ok) return null;
+    const list = (await r.json()) as Project[];
+    return list.map((p) => ({ ...p, __hostUrl: host.url }) as Project);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Cross-account dedupe (Manar's rule): a connected host running under ANOTHER
+ * Claude account contributes agents the primary roster doesn't have — add them.
+ * A host on the SAME account shows agents the primary already lists — skip
+ * those. Matching by live session id makes this automatic and self-updating:
+ * peer agents whose session already appears untagged (primary) are dropped, and
+ * their ownership entries cleared so routing always favors the primary copy.
+ */
+const dedupeAgainstPrimary = (combined: Project[]): Project[] => {
+  const primarySessionIds = new Set(
+    combined
+      .filter((p) => projectHostUrl(p) === null && p.isRemoteAgent && p.remoteSessionId)
+      .map((p) => p.remoteSessionId as string),
+  );
+  // Assigned-host preference (Manar, 2026-07-26): an agent PINNED to a
+  // connected peer host keeps the PEER copy — its ownership registration then
+  // routes sends and file landing to the machine the agent runs on. Only peer
+  // copies whose host matches the admin assignment qualify; everything else
+  // keeps the primary-wins rule.
+  const preferredPeerHostBySession = new Map<string, string>(); // sessionId -> host url
+  for (const p of combined) {
+    const h = projectHostUrl(p);
+    if (
+      h !== null &&
+      p.isRemoteAgent &&
+      p.remoteSessionId &&
+      assignedHostFor(agentDisplayKey(p)) === h
+    ) {
+      preferredPeerHostBySession.set(p.remoteSessionId as string, h);
+    }
+  }
+  const dropped: Project[] = [];
+  const kept = combined.filter((p) => {
+    if (!p.isRemoteAgent || !p.remoteSessionId) return true;
+    const sid = p.remoteSessionId as string;
+    const h = projectHostUrl(p);
+    const preferredPeer = preferredPeerHostBySession.get(sid);
+    if (preferredPeer) {
+      const keep = h === preferredPeer;
+      if (!keep) dropped.push(p);
+      return keep;
+    }
+    const dup = h !== null && primarySessionIds.has(sid);
+    if (dup) dropped.push(p);
+    return !dup;
+  });
+  if (dropped.length > 0) {
+    // Both hosts' copies share ids (`remote:<sessionId>`), so never unregister
+    // an id a KEPT peer copy still owns — that would silently reroute the
+    // surviving copy back to the primary.
+    const keptPeer = kept.filter((p) => projectHostUrl(p) !== null);
+    const keptPeerProjectIds = new Set(keptPeer.map((p) => p.projectId));
+    const keptPeerSessionIds = new Set(allSessionIdsOf(keptPeer));
+    unregisterIds(
+      dropped.map((p) => p.projectId).filter((id) => !keptPeerProjectIds.has(id)),
+      allSessionIdsOf(dropped).filter((id) => !keptPeerSessionIds.has(id)),
+    );
+  }
+  return kept;
+};
 
 const projectsHaveChanges = (
   prevProjects: Project[],
@@ -305,11 +410,41 @@ export function useProjectsState({
       if (showLoadingState) {
         setIsLoadingProjects(true);
       }
-      const response = await api.projects();
+      const remoteHostList = listRemoteHosts();
+      const [response, ...remoteResults] = await Promise.all([
+        api.projects(),
+        ...remoteHostList.map((host) => fetchHostProjects(host)),
+        // Dedupe consults the agent→host assignments synchronously; make sure
+        // they're loaded before the first roster is built.
+        loadAgentHostAssignments(),
+      ]);
       const projectData = (await response.json()) as Project[];
 
       setProjects((prevProjects) => {
-        const projectsWithTaskMaster = mergeTaskMasterCache(projectData, prevProjects);
+        // Union of every host's fresh segment; a host whose fetch failed keeps
+        // its previous segment (a flaky peer must not blank its agents), and
+        // segments of disconnected hosts drop out.
+        const connected = new Set(remoteHostList.map((h) => h.url));
+        const combined: Project[] = [...projectData];
+        remoteHostList.forEach((host, i) => {
+          const fresh = remoteResults[i];
+          if (fresh) combined.push(...fresh);
+          else combined.push(...prevProjects.filter((p) => projectHostUrl(p) === host.url));
+        });
+        const kept = dedupeAgainstPrimary(
+          combined.filter((p) => {
+            const h = projectHostUrl(p);
+            return h === null || connected.has(h);
+          }),
+        );
+        // Register ownership AFTER dedupe so a session visible via the primary
+        // account never routes to a peer host.
+        for (const host of remoteHostList) {
+          const segment = kept.filter((p) => projectHostUrl(p) === host.url);
+          registerHostOwnership(host.url, segment.map((p) => p.projectId), allSessionIdsOf(segment));
+        }
+
+        const projectsWithTaskMaster = mergeTaskMasterCache(kept, prevProjects);
         const mergedProjects = mergeExpandedSessionPages(prevProjects, projectsWithTaskMaster);
 
         if (prevProjects.length === 0) {
@@ -333,6 +468,13 @@ export function useProjectsState({
     // Keep chat view stable while still syncing sidebar/session metadata in background.
     await fetchProjects({ showLoadingState: false });
   }, [fetchProjects]);
+
+  // An admin (re)assigning an agent's host must re-run the dedupe so the kept
+  // copy — and with it all routing — switches hosts immediately.
+  useEffect(
+    () => subscribeAgentHostAssignments(() => void fetchProjects({ showLoadingState: false })),
+    [fetchProjects],
+  );
 
   // Hydrates TaskMaster details for the given `projectId`. The project
   // identifier comes directly from the DB-driven /api/projects response.
@@ -385,24 +527,45 @@ export function useProjectsState({
     void fetchProjects();
   }, [fetchProjects]);
 
+  // Refetch when the connected-hosts list changes (a host was added/removed in
+  // the Hosts dialog) so its agents appear/disappear without a reload. The
+  // mount fetch above already covers the initial list — skip the first run.
+  const remoteHosts = useRemoteHosts();
+  const remoteHostsInitRef = useRef(true);
+  useEffect(() => {
+    if (remoteHostsInitRef.current) {
+      remoteHostsInitRef.current = false;
+      return;
+    }
+    void fetchProjects({ showLoadingState: false });
+  }, [remoteHosts, fetchProjects]);
+
   // Live running state for remote-control agents. claude.ai/code polls its session
   // list for each agent's worker_status; we mirror that with a cheap status poll and
   // patch remoteRunning/remoteConnected in place — driving the sidebar running dot
   // without re-fetching the whole project tree. Only patches when something changed.
+  // Multi-host: every connected host is polled and patches ONLY its own segment.
   useEffect(() => {
     let cancelled = false;
-    const poll = async () => {
+    const pollHost = async (host: RemoteHost | null) => {
       try {
-        const response = await api.agentStatus();
+        const response = host ? await api.agentStatusFor(host) : await api.agentStatus();
         if (!response.ok) return;
         const data = (await response.json()) as {
           agents?: Array<{ id: string; running: boolean; connected: boolean }>;
+          accountErrors?: AgentAccountError[];
         };
         const byId = new Map((data.agents ?? []).map((a) => [a.id, a]));
         if (cancelled) return;
+        // Roster-reader health rides along on the same poll — the sidebar banner
+        // needs it when a reader login dies and the agent list silently degrades.
+        // (Primary host only; a peer's reader problems are that host's story.)
+        if (!host) agentHealthStore.setAccountErrors(data.accountErrors ?? []);
+        const hostUrl = host?.url ?? null;
         setProjects((prev) => {
           let changed = false;
           const next = prev.map((project) => {
+            if (projectHostUrl(project) !== hostUrl) return project;
             if (!project.isRemoteAgent || !project.remoteSessionId) return project;
             const status = byId.get(project.remoteSessionId);
             if (!status) return project;
@@ -421,6 +584,7 @@ export function useProjectsState({
         // transient — try again next tick
       }
     };
+    const poll = () => Promise.all([null, ...listRemoteHosts()].map((h) => pollHost(h)));
     void poll();
     const interval = setInterval(() => void poll(), 5000);
     return () => {
@@ -480,7 +644,9 @@ export function useProjectsState({
       const ids = Array.isArray(latestMessage.runningSessionIds)
         ? (latestMessage.runningSessionIds as unknown[]).filter((id): id is string => typeof id === 'string')
         : [];
-      sessionActivityStore.setRunning(ids);
+      // Scoped per source host: a peer's activity push must not clobber the
+      // primary's running set (and vice versa) — the store unions the scopes.
+      sessionActivityStore.setRunning(ids, ((latestMessage as any).__hostUrl as string | undefined) ?? null);
       return;
     }
 
@@ -502,8 +668,26 @@ export function useProjectsState({
 
     const hasActiveSession = Boolean(selectedSession && activeSessions.has(selectedSession.id));
 
-    const updatedProjectsWithTaskMaster = mergeTaskMasterCache(projectsMessage.projects, projects);
-    const updatedProjects = mergeExpandedSessionPages(projects, updatedProjectsWithTaskMaster);
+    // A projects_updated push describes ONE host's projects (the socket it came
+    // over). Replace only that host's segment; other hosts' items are untouched.
+    const msgHostUrl = ((latestMessage as any).__hostUrl as string | undefined) ?? null;
+    const incoming = msgHostUrl
+      ? (projectsMessage.projects.map((p) => ({ ...p, __hostUrl: msgHostUrl }) as Project))
+      : projectsMessage.projects;
+    const segment = projects.filter((p) => projectHostUrl(p) === msgHostUrl);
+    const otherSegments = projects.filter((p) => projectHostUrl(p) !== msgHostUrl);
+
+    const updatedSegmentWithTaskMaster = mergeTaskMasterCache(incoming, segment);
+    const updatedSegment = mergeExpandedSessionPages(segment, updatedSegmentWithTaskMaster);
+    // Dedupe cross-account overlap on every push (same rule as the fetch path),
+    // then register the surviving peer projects for routing.
+    const updatedProjects = dedupeAgainstPrimary(
+      msgHostUrl ? [...otherSegments, ...updatedSegment] : [...updatedSegment, ...otherSegments],
+    );
+    if (msgHostUrl) {
+      const survivors = updatedProjects.filter((p) => projectHostUrl(p) === msgHostUrl);
+      registerHostOwnership(msgHostUrl, survivors.map((p) => p.projectId), allSessionIdsOf(survivors));
+    }
 
     if (
       hasActiveSession &&
@@ -532,17 +716,12 @@ export function useProjectsState({
       setSelectedProject(updatedSelectedProject);
     }
 
-    if (!selectedSession) {
-      return;
-    }
-
-    const updatedSelectedSession = getProjectSessions(updatedSelectedProject).find(
-      (session) => session.id === selectedSession.id,
-    );
-
-    if (!updatedSelectedSession) {
-      setSelectedSession(null);
-    }
+    // NOTE: deliberately do NOT deselect when the session is missing from this
+    // update. Remote-agent session lists flap (relay 401 bursts, paginated
+    // session pages, roster refreshes) and a transient absence used to null the
+    // selection — which tore down the open chat and, on re-resolve, forced a
+    // full reload + scroll-to-bottom while the user was reading. A genuinely
+    // deleted session just leaves a static transcript until the user navigates.
   }, [latestMessage, selectedProject, selectedSession, activeSessions, projects]);
 
   useEffect(() => {

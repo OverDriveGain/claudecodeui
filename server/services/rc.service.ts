@@ -228,12 +228,13 @@ export type AccountError = { label: string; status: number; message: string };
 
 /**
  * Per-account roster-fetch errors from the last agent-list fanout — e.g. an expired
- * token on one login. Empty when every account is healthy (and always empty for a
- * single-account deployment, which throws-then-serves-stale instead). Lets the UI
- * warn "account X failed" without hiding the accounts that DID load.
+ * token on one login. Empty when every account is healthy. Lets the UI warn
+ * "account X failed" without hiding the accounts that DID load. NOT gated on
+ * multi-account: a single-account deployment whose lone login dies used to report
+ * `{agents: [], accountErrors: []}` — an empty roster with zero diagnostic signal
+ * (that exact silence cost a day on the 2026-07-22 box outage).
  */
 export function listAccountErrors(): AccountError[] {
-  if (!hasMultipleAccounts()) return [];
   try {
     return (getAccountErrors() as AccountError[]) ?? [];
   } catch {

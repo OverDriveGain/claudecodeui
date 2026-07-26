@@ -39,6 +39,8 @@ export type RealtimeClientConnection = {
    * request is scoped, instead of leaking the full list to every socket.
    */
   agentAllow?: string[] | null;
+  /** The linux user this connection's account maps to (path-based project visibility). */
+  linuxUser?: string | null;
 };
 
 /**
@@ -212,6 +214,10 @@ export type NormalizedMessage = {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  /** Harness-injected content (skill payloads, synthetic context) carried as a
+   *  user-role row — the person did NOT type it; clients render it as injected
+   *  context, not as a user bubble. */
+  isInjected?: boolean;
   images?: unknown;
   toolName?: string;
   toolInput?: unknown;

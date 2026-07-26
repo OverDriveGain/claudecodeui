@@ -7,7 +7,7 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 import { remoteProjectId, listRemoteAgents } from '@/services/rc.service.js';
-import { currentAgentAllow, isNameAllowedFor } from '@/services/user-context.js';
+import { currentAgentAllow, currentLinuxUser, isNameAllowedFor, isPathOwnedByLinuxUser } from '@/services/user-context.js';
 
 type SessionSummary = {
   id: string;
@@ -231,12 +231,17 @@ function broadcastProgress(progress: ProgressUpdate) {
 export function filterProjectsForUser<T extends ProjectListItem>(
   projects: T[],
   agentAllow: string[] | null | undefined,
+  linuxUser: string | null | undefined = null,
 ): T[] {
   if (!agentAllow || agentAllow.length === 0) return projects;
   return projects.filter(
     (p) =>
       isNameAllowedFor(p.displayName, agentAllow) ||
-      (!p.isRemoteAgent && isNameAllowedFor(path.basename(p.path), agentAllow)),
+      (!p.isRemoteAgent && isNameAllowedFor(path.basename(p.path), agentAllow)) ||
+      // One-instance-per-host PATH rule: local projects inside the mapped linux
+      // user's home are theirs regardless of naming ("they have projects they
+      // see in their linux user") — no per-user pattern maintenance for locals.
+      (!p.isRemoteAgent && isPathOwnedByLinuxUser(p.fullPath || p.path, linuxUser)),
   );
 }
 
@@ -343,7 +348,7 @@ export async function getProjectsWithSessions(
 
   // A user restricted by agent_allow sees the SAME list as the host, just filtered
   // to their agent (see filterProjectsForUser).
-  return filterProjectsForUser(projects, currentAgentAllow());
+  return filterProjectsForUser(projects, currentAgentAllow(), currentLinuxUser());
 }
 
 /**

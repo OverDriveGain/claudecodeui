@@ -80,6 +80,7 @@ import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import userRoutes from './routes/user.js';
+import agentHostsRoutes from './routes/agent-hosts.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import providerRoutes from './modules/providers/provider.routes.js';
@@ -87,8 +88,9 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { isRemoteProjectId, sessionIdFromProjectId, getRemoteAgentCwd, isAgentCaptureAllowed } from './services/rc.service.js';
-import { currentAgentAllow, isNameAllowedForUser } from './services/user-context.js';
+import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isPathOwnedByLinuxUser } from './services/user-context.js';
 import { resolveLocalSession } from './services/local-sessions.js';
+import { ownerForPath, readFileAsUser, treeAsUser, existsAsUser, overwriteFileAsUser } from './services/user-fs.js';
 import {
     inboundFederationEnabled,
     outboundFederationEnabled,
@@ -118,9 +120,14 @@ async function resolveProjectRootById(projectId) {
     }
     const projectPath = await projectsDb.getProjectPathById(projectId);
     // Agent-restricted users (agent_allow set) may browse only the local project
-    // that matches their agent name — the same scope the conversations list shows —
-    // not arbitrary host projects.
-    if (projectPath && currentAgentAllow()?.length && !isNameAllowedForUser(path.basename(projectPath))) {
+    // that matches their agent name OR that lives in their mapped linux user's
+    // home (path-ownership rule) — the same scope the projects list shows.
+    if (
+        projectPath &&
+        currentAgentAllow()?.length &&
+        !isNameAllowedForUser(path.basename(projectPath)) &&
+        !isPathOwnedByLinuxUser(projectPath, currentLinuxUser())
+    ) {
         return null;
     }
     return projectPath;
@@ -250,6 +257,7 @@ app.use('/api/settings', authenticateToken, settingsRoutes);
 
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
+app.use('/api/agent-hosts', authenticateToken, agentHostsRoutes);
 
 // Gemini API Routes (protected)
 app.use('/api/gemini', authenticateToken, geminiRoutes);
@@ -285,6 +293,31 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 // API Routes (protected)
 // /api/config endpoint removed - no longer needed
 // Frontend now uses window.location for WebSocket URLs
+
+// Stack version info — package version, when the server build was produced, and
+// which client bundle this instance serves. Unauthenticated on purpose: it holds
+// nothing sensitive and lets any client (and the Hosts dialog for peer hosts)
+// answer "which build is deployed here?" at a glance.
+let versionInfoCache = null;
+app.get('/api/version', (req, res) => {
+    if (!versionInfoCache) {
+        let version = 'unknown';
+        let builtAt = null;
+        let bundle = null;
+        try {
+            version = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version || 'unknown';
+        } catch { /* keep default */ }
+        try {
+            builtAt = fs.statSync(path.join(__dirname, 'index.js')).mtime.toISOString();
+        } catch { /* keep default */ }
+        try {
+            const html = fs.readFileSync(path.join(APP_ROOT, 'dist', 'index.html'), 'utf8');
+            bundle = (html.match(/index-[A-Za-z0-9_-]+\.js/) || [null])[0];
+        } catch { /* keep default */ }
+        versionInfoCache = { name: 'MyMu', version, builtAt, bundle };
+    }
+    res.json(versionInfoCache);
+});
 
 // System update endpoint
 app.post('/api/system/update', authenticateToken, async (req, res) => {
@@ -528,6 +561,20 @@ function requireFederationToken(req, res, next) {
  * federation peer endpoint. `resolved` must already be jail-checked.
  */
 async function serveFileBytes(req, res, resolved) {
+    // One-instance-per-host: a path in a mapped FOREIGN linux user's home is
+    // read AS that user (sudo). Whole-buffer serve — no Range — which is fine
+    // for previews/downloads; same-user paths keep the streaming path below.
+    const crossUser = ownerForPath(resolved);
+    if (crossUser) {
+        try {
+            const bytes = await readFileAsUser(crossUser, resolved);
+            res.setHeader('Content-Type', mime.lookup(resolved) || 'application/octet-stream');
+            res.setHeader('Content-Length', bytes.length);
+            return res.end(bytes);
+        } catch {
+            return res.status(404).json({ error: 'File not found' });
+        }
+    }
     try {
         await fsPromises.access(resolved);
     } catch {
@@ -874,7 +921,10 @@ app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
             return res.status(403).json({ error: 'Path must be under project root' });
         }
 
-        const content = await fsPromises.readFile(resolved, 'utf8');
+        const readOwner = ownerForPath(resolved);
+        const content = readOwner
+            ? (await readFileAsUser(readOwner, resolved)).toString('utf8')
+            : await fsPromises.readFile(resolved, 'utf8');
         res.json({ content, path: resolved });
     } catch (error) {
         console.error('Error reading file:', error);
@@ -976,8 +1026,13 @@ app.get('/api/projects/:projectId/delivered-file', authenticateToken, async (req
         // Serve locally when this host both authorized it (in the allowlist) and
         // holds the bytes on disk — the same-host case.
         if (isDelivered) {
+            const deliveredOwner = ownerForPath(resolved);
             let onDisk = true;
-            try { await fsPromises.access(resolved); } catch { onDisk = false; }
+            if (deliveredOwner) {
+                onDisk = await existsAsUser(deliveredOwner, resolved);
+            } else {
+                try { await fsPromises.access(resolved); } catch { onDisk = false; }
+            }
             if (onDisk) {
                 // Inline, mime-typed, Range-capable stream (shared with files/content)
                 // so images render and audio/video seek without a manual download.
@@ -1042,8 +1097,13 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
             return res.status(403).json({ error: 'Path must be under project root' });
         }
 
-        // Write the new content
-        await fsPromises.writeFile(resolved, content, 'utf8');
+        // Write the new content (as the owning linux user for foreign homes).
+        const writeOwner = ownerForPath(resolved);
+        if (writeOwner) {
+            await overwriteFileAsUser(writeOwner, resolved, content);
+        } else {
+            await fsPromises.writeFile(resolved, content, 'utf8');
+        }
 
         res.json({
             success: true,
@@ -1100,6 +1160,12 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
                 return res.status(403).json({ error: validation.error });
             }
             treeRoot = validation.resolved;
+        }
+
+        // One-instance-per-host: a mapped foreign user's tree walks AS that user.
+        const treeOwner = ownerForPath(treeRoot);
+        if (treeOwner) {
+            return res.json(await treeAsUser(treeOwner, treeRoot, treeDepth));
         }
 
         // Check if path exists

@@ -47,6 +47,9 @@ export interface ChatMessage {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  /** Harness-injected content (skill payload / synthetic context) — shown as an
+   *  injected-context chip on the assistant side, never as a user bubble. */
+  isInjected?: boolean;
   isSystemNotice?: boolean;
   systemLevel?: string;
   isSubagentContainer?: boolean;

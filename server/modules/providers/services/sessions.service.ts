@@ -68,6 +68,15 @@ function deriveOpenTurn(events: unknown[]): { turnStartedAt: string; turnStartCo
     if (Array.isArray(content) && content.some((p) => (p as Record<string, unknown>)?.type === 'tool_result')) {
       continue;
     }
+    // Local-command RECORD rows (`<command-name>`, `<local-command-*>`) are appended
+    // AFTER their turn's result — /clear leaves one as the newest user row, which
+    // read as an open turn forever (stuck working loader / clear-time timer anchor).
+    const text = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? String((content.find((p) => (p as Record<string, unknown>)?.type === 'text') as Record<string, unknown> | undefined)?.text ?? '')
+        : '';
+    if (/^\s*<(?:command-name|local-command-)/.test(text)) continue;
     const ts = e.created_at || e.timestamp;
     if (typeof ts !== 'string' || !ts) return null;
     // Baseline for the live "tokens this turn" counter: the context position of

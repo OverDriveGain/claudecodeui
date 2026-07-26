@@ -78,6 +78,9 @@ export interface Project {
   // Owning claude.ai account label — present only when >1 account is configured
   // (RC_ACCOUNTS). Used to badge which login the agent belongs to.
   remoteAccount?: string;
+  // Multi-host mode: origin of the CONNECTED PEER host this project came from
+  // (see utils/remoteHosts). Absent/undefined = the primary host (page origin).
+  __hostUrl?: string;
   [key: string]: unknown;
 }
 

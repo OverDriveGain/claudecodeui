@@ -22,6 +22,12 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export interface UserContext {
   /** null = unrestricted (admin). Otherwise: only agents whose name matches one. */
   agentAllow: string[] | null;
+  /**
+   * The linux user this account maps to (one-instance-per-host). Local projects
+   * under /home/<linuxUser>/ are theirs BY PATH regardless of naming. null =
+   * unrestricted (owner) or unmapped.
+   */
+  linuxUser: string | null;
 }
 
 const storage = new AsyncLocalStorage<UserContext>();
@@ -62,8 +68,66 @@ export function isNameAllowedForUser(name: string): boolean {
 }
 
 /** Run `fn` with the given user's agent-visibility context active. */
-export function runWithUserContext<T>(agentAllowRaw: string | null | undefined, fn: () => T): T {
-  return storage.run({ agentAllow: parseAgentAllow(agentAllowRaw) }, fn);
+export function runWithUserContext<T>(
+  agentAllowRaw: string | null | undefined,
+  fn: () => T,
+  linuxUser: string | null = null,
+): T {
+  return storage.run({ agentAllow: parseAgentAllow(agentAllowRaw), linuxUser }, fn);
+}
+
+/** The linux user the CURRENT request's account maps to (null = owner/unmapped). */
+export function currentLinuxUser(): string | null {
+  return storage.getStore()?.linuxUser ?? null;
+}
+
+/**
+ * Which linux user a account maps to for PATH-based visibility. Owners are
+ * unrestricted (null); everyone else maps to linux_user, defaulting to their
+ * username. Pure companion of effectiveAgentAllowRaw.
+ */
+export function effectiveLinuxUser(user: VisibilityUser | null | undefined): string | null {
+  if (!user) return null;
+  if (user.account_owner) return null;
+  const lu = (user.linux_user ?? user.username ?? '').trim();
+  return lu || null;
+}
+
+/** Is `projectPath` inside the given linux user's home? The path-ownership rule. */
+export function isPathOwnedByLinuxUser(projectPath: string, linuxUser: string | null | undefined): boolean {
+  if (!linuxUser) return false;
+  return projectPath === `/home/${linuxUser}` || projectPath.startsWith(`/home/${linuxUser}/`);
+}
+
+/** The user fields the visibility rule reads (subset of the users row). */
+export interface VisibilityUser {
+  username?: string | null;
+  agent_allow?: string | null;
+  linux_user?: string | null;
+  account_owner?: number | boolean | null;
+}
+
+/**
+ * One-instance-per-host mapping rule (Manar, 2026-07-25). Resolves the RAW
+ * allow string to run a user's context with:
+ *   1. `account_owner` → null (unrestricted): sees every agent the deployment
+ *      surfaces (RC_AGENT_ALLOW/DENY still apply — that is the host's scope).
+ *   2. explicit `agent_allow` → wins as before (hand-tuned scoping).
+ *   3. otherwise DERIVE from the linux user this account maps to
+ *      (`linux_user`, defaulting to the username — aliases like wael→bti are
+ *      just a different linux_user): `<lu>` and `<lu>-*`. The account name maps
+ *      directly to its agents; no per-user pattern maintenance.
+ * Legacy note: agent_allow-NULL users used to mean "admin". The migration
+ * stamps those with account_owner=1, so old deployments keep exact behavior.
+ */
+export function effectiveAgentAllowRaw(user: VisibilityUser | null | undefined): string | null {
+  if (!user) return null;
+  if (user.account_owner) return null;
+  const explicit = (user.agent_allow ?? '').trim();
+  if (explicit) return explicit;
+  const lu = (user.linux_user ?? user.username ?? '').trim();
+  if (!lu) return null;
+  return `${lu},${lu}-*`;
 }
 
 /**

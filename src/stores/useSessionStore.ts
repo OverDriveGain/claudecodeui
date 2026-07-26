@@ -16,6 +16,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { authenticatedFetch } from '../utils/api';
+import { hostForSession } from '../utils/remoteHosts';
 import type { LLMProvider } from '../types/app';
 import {
   deriveLog,
@@ -210,7 +211,7 @@ export function useSessionStore() {
 
       const qs = params.toString();
       const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
-      const response = await authenticatedFetch(url);
+      const response = await authenticatedFetch(url, {}, hostForSession(resolvedSessionId));
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -273,7 +274,7 @@ export function useSessionStore() {
     const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
 
     try {
-      const response = await authenticatedFetch(url);
+      const response = await authenticatedFetch(url, {}, hostForSession(resolvedSessionId));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const olderMessages: NormalizedMessage[] = data.messages || [];
@@ -341,8 +342,23 @@ export function useSessionStore() {
     const slot = getSlot(resolvedSessionId);
     const fetchSeq = (slot._fetchSeq += 1);
     try {
-      const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages`;
-      const response = await authenticatedFetch(url);
+      // Refresh only the window the view has already loaded (plus headroom for
+      // new tail messages) instead of the whole transcript. Pagination is
+      // end-anchored, so limit=N always returns the LATEST N — new messages are
+      // included, older unloaded history stays unloaded. Refreshing a 20-message
+      // window used to pull in the full transcript, inserting hundreds of rows
+      // above the user's reading position mid-scroll.
+      // Units note: server pagination counts RAW transcript rows while the
+      // store counts normalized messages; slot.offset is the row budget the
+      // pagination scheme has consumed so far, so it is the right window size.
+      const params = new URLSearchParams();
+      if (slot.hasMore && slot.offset > 0) {
+        params.append('limit', String(Math.max(slot.offset, 20)));
+        params.append('offset', '0');
+      }
+      const qs = params.toString();
+      const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
+      const response = await authenticatedFetch(url, {}, hostForSession(resolvedSessionId));
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();

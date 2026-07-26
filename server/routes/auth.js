@@ -1,6 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+
 import { userDb } from '../modules/database/index.js';
 import { getConnection } from '../modules/database/connection.js';
 import { generateToken, authenticateToken, JWT_SECRET } from '../middleware/auth.js';
@@ -56,9 +57,13 @@ router.post('/register', async (req, res) => {
       const saltRounds = 12;
       const passwordHash = await bcrypt.hash(password, saltRounds);
       
-      // Create user
+      // Create user. The first (setup) user is the operator — stamp
+      // account_owner so they see every agent the deployment surfaces (under
+      // the one-instance-per-host model a plain user is scoped to the linux
+      // user their account maps to).
       const user = userDb.createUser(username, passwordHash);
-      
+      db.prepare('UPDATE users SET account_owner = 1 WHERE id = ?').run(user.id);
+
       // Generate token
       const token = generateToken(user);
       

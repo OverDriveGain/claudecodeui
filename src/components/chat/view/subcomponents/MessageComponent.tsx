@@ -15,7 +15,34 @@ import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../share
 
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
-import { splitInjectedContent, InjectedSegmentChip } from './InjectedContentNote';
+import {
+  splitInjectedContent,
+  injectedLabelFor,
+  InjectedSegmentChip,
+  InjectedContextRow,
+  type InjectedSegment,
+} from './InjectedContentNote';
+
+/**
+ * Open a data: URL attachment in a new tab. Browsers block top-frame navigation
+ * to data: URLs (window.open(dataUrl) silently does nothing), so the bytes are
+ * converted to a Blob and opened via an object URL instead.
+ */
+function openDataUrlAttachment(dataUrl: string): void {
+  try {
+    const [head, b64] = dataUrl.split(',', 2);
+    const mime = head.match(/^data:([^;]+)/)?.[1] || 'application/octet-stream';
+    const bytes = atob(b64 || '');
+    const buf = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([buf], { type: mime }));
+    window.open(url, '_blank', 'noopener');
+    // Give the new tab time to load the blob before releasing it.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    window.open(dataUrl, '_blank');
+  }
+}
 
 type DiffLine = {
   type: string;
@@ -73,6 +100,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
   );
   const userDisplayText = message.type === 'user' ? userInjected.text : userCopyContent;
   const userIsPureInjection = message.type === 'user' && userInjected.segments.length > 0 && userInjected.text === '';
+  // A user-role row the person did NOT type: either the server flagged it as
+  // harness-injected (`isInjected`), or the client heuristics reduced it to
+  // nothing but injected segments. Render on the agent side as collapsed
+  // context — a right-side bubble here reads as "I sent this", which is wrong.
+  const injectedSegments = useMemo<InjectedSegment[]>(() => {
+    if (message.type !== 'user') return [];
+    if (message.isInjected) {
+      return [{ kind: 'injected', label: injectedLabelFor(userCopyContent), body: userCopyContent }];
+    }
+    return userIsPureInjection ? userInjected.segments : [];
+  }, [message.type, message.isInjected, userCopyContent, userIsPureInjection, userInjected.segments]);
+  const isInjectedUserMessage = injectedSegments.length > 0;
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
@@ -117,9 +156,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
-      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
+      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' && !isInjectedUserMessage ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
-      {message.type === 'user' ? (
+      {isInjectedUserMessage ? (
+        <InjectedContextRow segments={injectedSegments} timestamp={formattedTime} />
+      ) : message.type === 'user' ? (
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
           <div className="group flex-1 rounded-2xl rounded-br-md bg-[#2e2e2e] px-3 py-2 text-gray-100 shadow-sm sm:flex-initial sm:px-4">
@@ -144,15 +185,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
                       src={img.data}
                       alt={img.name}
                       title={img.name}
-                      className="h-16 w-16 cursor-pointer rounded-lg border border-border/40 object-cover transition-opacity hover:opacity-80"
-                      onClick={() => window.open(img.data, '_blank')}
+                      className="max-h-48 w-auto max-w-full cursor-pointer rounded-lg border border-border/40 object-contain transition-opacity hover:opacity-80"
+                      onClick={() => openDataUrlAttachment(img.data)}
                     />
                   ) : (
                     <button
                       key={img.name || idx}
                       type="button"
                       title={img.name}
-                      onClick={() => window.open(img.data, '_blank')}
+                      onClick={() => openDataUrlAttachment(img.data)}
                       className="flex max-w-[220px] items-center gap-2 rounded-lg border border-border/40 bg-black/20 px-2.5 py-2 text-left text-xs transition-colors hover:bg-black/30"
                     >
                       <svg className="h-4 w-4 shrink-0 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

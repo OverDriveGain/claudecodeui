@@ -76,6 +76,14 @@ const RC_TOPUP_EMIT_MAX = 200;
 // flushed `result` shows up, and recycle the demonstrably-stale socket.
 const RC_STALL_CHECK_MS = Math.max(2000, Number.parseInt(process.env.RC_STALL_CHECK_MS || '', 10) || 10 * 1000);
 const RC_STALL_QUIET_MS = Math.max(5000, Number.parseInt(process.env.RC_STALL_QUIET_MS || '', 10) || 20 * 1000);
+// The turnOpen-gated check above has a blind spot: turnOpen only opens from events
+// the socket itself delivers or from OUR OWN send. A socket that went silently stale
+// while the agent was idle forwards nothing when the next turn is started OUTSIDE
+// the GUI (agent's terminal, another driver) — so the watchdog never engaged and the
+// view froze until a manual refresh. While subscribers are watching, also probe on a
+// slower cadence when NO turn is open; the same cursor top-up is the discriminator
+// (idle agent → nothing new → no-op; stale socket → missed events → emit + recycle).
+const RC_IDLE_SYNC_MS = Math.max(10 * 1000, Number.parseInt(process.env.RC_IDLE_SYNC_MS || '', 10) || 60 * 1000);
 // Cap of remembered live-delivered event uuids per session (staleness discriminator:
 // a topped-up event we already streamed is NOT evidence the socket missed anything).
 const RC_SEEN_UUIDS_MAX = 2000;
@@ -387,6 +395,14 @@ function isWorkerRunning(s) {
   if (s.worker_status !== 'running') return false;
   if (s.connection_status !== 'connected') return false;
   if (s.status === 'archived') return false;
+  // A subscribed upstream's live turn state beats the idle heuristic: a long
+  // silent tool call (a 2-minute build emits nothing) tripped the 90s staleness
+  // cutoff and flipped the sidebar dot off mid-turn, then on again at the next
+  // event. turnOpen is maintained by the live socket + stall watchdog, so when we
+  // hold a subscription we KNOW the turn is open — the cutoff is only for
+  // sessions nobody here is subscribed to.
+  const entry = activeRemoteSessions.get(s.id);
+  if (entry && entry.turnOpen) return true;
   const last = Date.parse(s.last_event_at || s.created_at || '');
   return Number.isFinite(last) && Date.now() - last < RUNNING_MAX_IDLE_MS;
 }
@@ -807,6 +823,20 @@ export async function attachSession(sessionId, ws, normalize) {
         try { ws.send(frame); } catch { /* writer race — next reconnect retries */ }
       }
     }
+    // A returning viewer may be looking at a gap the replay buffer doesn't cover
+    // (buffer cleared at turn end, or the socket went stale while nobody watched).
+    // Run one events-API sync now: emits anything the socket demonstrably missed and
+    // recycles the socket if it did (single-flight; a healthy quiet stream is one
+    // cursor GET returning nothing). This also makes the client's periodic
+    // re-subscribe an active liveness probe instead of a pure no-op.
+    // Quiet-gated: a rebind also happens on SEND (driveRemoteSession re-attaches),
+    // where the just-POSTed user event can hit the events API before the socket
+    // streams it back — an unconditional probe counts that as "missed" and recycles
+    // a healthy socket right at turn start. A recently-speaking upstream is
+    // demonstrably alive, and the replay-buffer flush above already covers it.
+    if (Date.now() - (existing.lastUpstreamAt || 0) >= RC_STALL_QUIET_MS) {
+      void syncStalledUpstream(sessionId, existing);
+    }
     return existing;
   }
   // replayBuffer holds the meaningful frames of (roughly) the current turn so a
@@ -830,6 +860,7 @@ export async function attachSession(sessionId, ws, normalize) {
     lastUpstreamAt: 0,
     stallTimer: null,
     stallSyncInFlight: false,
+    lastStallSyncAt: 0,
     seenEventUuids: new Set(),
     // Every live subscriber (multiple GUI views of the same agent) — see liveWriters.
     writers: new Set([ws]),
@@ -839,6 +870,19 @@ export async function attachSession(sessionId, ws, normalize) {
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
 
   await openRemoteUpstream(sessionId, entry);
+  // Fresh attach ≠ complete view: only the RECONNECT path topped up missed events,
+  // so a subscription rebuilt from scratch (previous entry exhausted its retries
+  // during a relay/DNS outage and was dropped) silently lost the whole gap, and a
+  // mid-turn open missed whatever flushed between the history fetch and this attach.
+  // Bridge it in the background (off the send path — the pre-count itself can be a
+  // full page-through on a cold cache): emit events the relay has that we never
+  // streamed. The client upserts by id, so overlap with history/live collapses.
+  void (async () => {
+    try {
+      const preAttachCount = (await getSessionEventsCached(sessionId, { topUp: false })).length;
+      await emitMissedEventsAfterReconnect(sessionId, entry, preAttachCount);
+    } catch { /* watchdog / next subscribe covers it */ }
+  })();
   return entry;
 }
 
@@ -860,6 +904,46 @@ async function emitMissedEventsAfterReconnect(sessionId, entry, preDropCount) {
 }
 
 /**
+ * Local-command RECORD events (/clear and friends) are appended AFTER the turn's
+ * `result`: a synthetic caveat row, a `<command-name>` user row, and an assistant
+ * "(no content)" ack. They document the command — they are not work. Counting one
+ * as mid-turn evidence re-opened turnOpen right after the result closed it, and
+ * since nothing follows a /clear, the session read as "running" forever (stuck
+ * working loader on every client until the next real turn).
+ */
+function isCommandRecordEvent(m) {
+  const content = m?.message?.content;
+  if (m?.type === 'user') {
+    const text = typeof content === 'string'
+      ? content
+      : Array.isArray(content) ? (content.find((p) => p?.type === 'text')?.text || '') : '';
+    return /^\s*<(?:command-name|local-command-)/.test(text);
+  }
+  if (m?.type === 'assistant') {
+    return Array.isArray(content) && content.length === 1
+      && content[0]?.type === 'text' && content[0].text === '(no content)';
+  }
+  return false;
+}
+
+/**
+ * Retain a frame for reconnect replay. Invariant: a buffered `complete` is only
+ * meaningful as the LAST frame (it tells a viewer that rebinds after turn end to
+ * clear its loader). The moment any newer frame is buffered the turn has moved on,
+ * and replaying that stale `complete` on a rebind — every 45s client keepalive, and
+ * the attach inside a send — cleared the working loader mid-turn on phones. So a
+ * non-complete push evicts any buffered `complete` first.
+ */
+function pushReplayFrame(entry, frame) {
+  if (!Array.isArray(entry.replayBuffer)) entry.replayBuffer = [];
+  if (frame?.kind !== 'complete' && entry.replayBuffer.some((f) => f?.kind === 'complete')) {
+    entry.replayBuffer = entry.replayBuffer.filter((f) => f?.kind !== 'complete');
+  }
+  entry.replayBuffer.push(frame);
+  if (entry.replayBuffer.length > RC_REPLAY_BUFFER_MAX) entry.replayBuffer.shift();
+}
+
+/**
  * Emit a slice of RAW relay events to the current writer through the normalizer —
  * the shared tail of both gap-recovery paths (post-reconnect top-up and the stall
  * watchdog). The normalizer produces NOTHING for a raw `result` event (the live
@@ -877,8 +961,7 @@ function emitRawEvents(sessionId, entry, rawEvents) {
     let frames = [];
     try { frames = entry.normalize ? entry.normalize(raw, sessionId) : []; } catch { continue; }
     for (const frame of frames) {
-      target.replayBuffer.push(frame);
-      if (target.replayBuffer.length > RC_REPLAY_BUFFER_MAX) target.replayBuffer.shift();
+      pushReplayFrame(target, frame);
       fanOut(target, frame);
       emitted += 1;
     }
@@ -902,6 +985,7 @@ function emitRawEvents(sessionId, entry, rawEvents) {
 async function syncStalledUpstream(sessionId, entry) {
   if (entry.stallSyncInFlight) return;
   entry.stallSyncInFlight = true;
+  entry.lastStallSyncAt = Date.now();
   try {
     const before = (await getSessionEventsCached(sessionId, { topUp: false })).length;
     const all = await getSessionEventsCached(sessionId);
@@ -913,6 +997,14 @@ async function syncStalledUpstream(sessionId, entry) {
       .slice(Math.max(0, before))
       .filter((e) => !(e && e.uuid && entry.seenEventUuids.has(e.uuid)));
     if (missed.length === 0) return;
+    // Missed events with no `result` yet = a turn is in flight that the socket never
+    // told us about (started outside the GUI on a stale socket). Open it so the
+    // watchdog switches to the fast mid-turn cadence until its result arrives.
+    // (emitRawEvents flips it back off when the batch does contain a result.)
+    // A batch of only local-command records is a turn that already ENDED — its
+    // result streamed live and only the trailing records landed in the cache.
+    if (!missed.some((e) => e?.type === 'result')
+        && missed.some((e) => !isCommandRecordEvent(e))) entry.turnOpen = true;
     console.log('[rc] stalled upstream: recovering missed events via events API', {
       sessionId,
       missed: missed.length,
@@ -1004,8 +1096,22 @@ async function openRemoteUpstream(sessionId, entry) {
       entry.stallTimer = null;
       return;
     }
-    if (!entry.turnOpen) return;
-    if (Date.now() - (entry.lastUpstreamAt || 0) < RC_STALL_QUIET_MS) return;
+    const now = Date.now();
+    if (entry.turnOpen) {
+      // Mid-turn: a working agent emits constantly, so a quiet socket past the
+      // threshold is suspect — cross-check the events API (original behaviour).
+      if (now - (entry.lastUpstreamAt || 0) < RC_STALL_QUIET_MS) return;
+    } else {
+      // Idle: quiet is normal, so quiet-time proves nothing — instead probe the
+      // events API on a slow cadence to catch a turn started OUTSIDE the GUI on a
+      // silently-stale socket (the turnOpen-gated check never fires for those).
+      // Only while someone is actually watching; a viewer-less entry can wait for
+      // the rebind sync in attachSession. Healthy+idle cost: one cursor GET
+      // returning nothing per interval. Recent socket delivery defers the probe.
+      if (liveWriters(entry).length === 0) return;
+      const lastSignal = Math.max(entry.lastUpstreamAt || 0, entry.lastStallSyncAt || 0);
+      if (now - lastSignal < RC_IDLE_SYNC_MS) return;
+    }
     void syncStalledUpstream(sessionId, entry);
   }, RC_STALL_CHECK_MS);
 
@@ -1024,7 +1130,7 @@ async function openRemoteUpstream(sessionId, entry) {
       }
     }
     if (m.type === 'result') entry.turnOpen = false;
-    else if (m.type !== 'control_response') entry.turnOpen = true;
+    else if (m.type !== 'control_response' && !isCommandRecordEvent(m)) entry.turnOpen = true;
     // Always write to the CURRENT subscriber set (rebound/extended on reconnect),
     // never just the writer captured when this upstream first opened.
     const e0 = activeRemoteSessions.get(sessionId) || entry;
@@ -1032,8 +1138,7 @@ async function openRemoteUpstream(sessionId, entry) {
     // buffer so a reconnecting client recovers it. Transient per-token thinking
     // frames are sent but NOT buffered (the client re-derives the indicator).
     const emit = (frame) => {
-      e0.replayBuffer.push(frame);
-      if (e0.replayBuffer.length > RC_REPLAY_BUFFER_MAX) e0.replayBuffer.shift();
+      pushReplayFrame(e0, frame);
       fanOut(e0, frame);
     };
 
@@ -1213,8 +1318,7 @@ export async function emitOutstandingPermission(sessionId, ws) {
   });
   const entry = activeRemoteSessions.get(sessionId);
   if (entry) {
-    entry.replayBuffer.push(frame);
-    if (entry.replayBuffer.length > RC_REPLAY_BUFFER_MAX) entry.replayBuffer.shift();
+    pushReplayFrame(entry, frame);
   }
   try { ws.send(frame); } catch { /* writer race — next subscribe retries */ }
   return true;
@@ -1289,6 +1393,13 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
   // Announce the session id so the GUI binds its view to it (it opened the agent
   // leaf with no session id yet).
   ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: sessionId, sessionId, provider: 'claude' }));
+  // The buffered turn-end `complete` of the PREVIOUS turn must not replay into a
+  // view that is about to start a new one — it landed ~200ms after the tap and
+  // cleared the just-armed loader. Purge before attach flushes the replay buffer.
+  const pre = activeRemoteSessions.get(sessionId);
+  if (pre && Array.isArray(pre.replayBuffer)) {
+    pre.replayBuffer = pre.replayBuffer.filter((f) => f?.kind !== 'complete');
+  }
   await attachSession(sessionId, ws, normalize);
   const content = toUserContent(command, images);
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;

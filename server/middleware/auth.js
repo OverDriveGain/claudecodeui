@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 
 import { userDb, appConfigDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
-import { runWithUserContext } from '../services/user-context.js';
+import { runWithUserContext, effectiveAgentAllowRaw, effectiveLinuxUser } from '../services/user-context.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -32,7 +32,7 @@ const authenticateToken = async (req, res, next) => {
       }
       req.user = user;
       // Carry the user's per-agent visibility for the rest of the request.
-      return runWithUserContext(user.agent_allow, next);
+      return runWithUserContext(effectiveAgentAllowRaw(user), next, effectiveLinuxUser(user));
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -86,8 +86,11 @@ const authenticateToken = async (req, res, next) => {
     }
 
     req.user = user;
-    // Carry the user's per-agent visibility for the rest of the request.
-    return runWithUserContext(user.agent_allow, next);
+    // Carry the user's per-agent visibility for the rest of the request
+    // (account_owner → unrestricted; explicit agent_allow → as set; else
+    // derived from the linux user this account maps to). The linux user also
+    // grants PATH-based visibility of local projects under /home/<lu>/.
+    return runWithUserContext(effectiveAgentAllowRaw(user), next, effectiveLinuxUser(user));
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
@@ -113,7 +116,17 @@ const authenticateWebSocket = (token) => {
     try {
       const user = userDb.getFirstUser();
       if (user) {
-        return { id: user.id, userId: user.id, username: user.username, agent_allow: user.agent_allow };
+        // Full visibility fields — effectiveAgentAllowRaw reads account_owner
+        // and linux_user; omitting them silently DEMOTES an owner to a derived
+        // scope and every send is dropped as out-of-scope.
+        return {
+          id: user.id,
+          userId: user.id,
+          username: user.username,
+          agent_allow: user.agent_allow,
+          linux_user: user.linux_user,
+          account_owner: user.account_owner,
+        };
       }
       return null;
     } catch (error) {
@@ -143,9 +156,27 @@ const authenticateWebSocket = (token) => {
     if (!user) {
       return null;
     }
-    return { userId: user.id, username: user.username, agent_allow: user.agent_allow };
+    return {
+      userId: user.id,
+      username: user.username,
+      agent_allow: user.agent_allow,
+      linux_user: user.linux_user,
+      account_owner: user.account_owner,
+    };
   } catch (error) {
     console.error('WebSocket token verification error:', error);
+    // Diagnostics for signature failures: decode WITHOUT verifying to see who
+    // minted the token (multi-host clients can pair a token with the wrong
+    // host — this names the culprit instead of an anonymous retry loop).
+    try {
+      const unverified = jwt.decode(token);
+      if (unverified) {
+        console.error('[ws-auth] rejected token claims:', JSON.stringify({
+          userId: unverified.userId, username: unverified.username,
+          iat: unverified.iat, exp: unverified.exp,
+        }));
+      }
+    } catch { /* decode failed — nothing to report */ }
     return null;
   }
 };

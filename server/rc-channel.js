@@ -14,6 +14,7 @@ import {
   emitOutstandingPermission,
 } from './remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from './services/rc.service.js';
+import { landAttachments, fileReferralText } from './services/incoming-files.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 
 // The engine is provider-agnostic; this adapter supplies the claude normalizer so a
@@ -41,9 +42,20 @@ export async function queryRemoteChannel(command, options, writer) {
   // Enforce the server-side capture policy: refuse to drive an agent this deployment
   // isn't allowed to surface (can't be bypassed with a crafted frame).
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return;
-  // Forward composer attachments (options.images, upload-images shape) so files
-  // attached to a live agent are folded into the message as content blocks.
-  return driveRemoteSession({ ws: writer, sessionId, command, images: opts.images, normalize: normalizeClaude });
+  // Attachments land as REAL FILES on the agent's host (same-host write, or
+  // shipped to the owning peer via /api/federation/upload) and the message just
+  // refers the agent to the saved paths — any file type works and the agent
+  // reads it from disk like everything else. Only when no host can take the
+  // bytes (no peer owns the session, e.g. an agent on a CCUI-less machine) do
+  // we fall back to the old content-block embedding so nothing regresses.
+  let outCommand = command;
+  let outImages = opts.images;
+  const landed = await landAttachments(sessionId, opts.images);
+  if (landed && landed.length > 0) {
+    outCommand = [command || '', fileReferralText(landed)].filter(Boolean).join('\n\n');
+    outImages = undefined;
+  }
+  return driveRemoteSession({ ws: writer, sessionId, command: outCommand, images: outImages, normalize: normalizeClaude });
 }
 
 /**

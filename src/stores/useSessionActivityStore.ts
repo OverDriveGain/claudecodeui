@@ -13,10 +13,13 @@ import { useSyncExternalStore } from 'react';
  * useSyncExternalStore, so components re-render only when their own session's
  * running boolean flips.
  */
-// Server-inferred running set (transcript file-watcher). This is authoritative for
-// sessions the web UI does not own, but it lags — the watcher only sees a turn once
-// the CLI flushes a transcript write, and a 90s idle-timeout keeps stale entries.
-let runningSessionIds: Set<string> = new Set<string>();
+// Server-inferred running sets (transcript file-watcher), one per SOURCE HOST
+// (multi-host mode: `null` = the primary host, a URL = a connected peer). Each
+// host's session_activity push replaces only its own scope; queries union all
+// scopes. Authoritative for sessions the web UI does not own, but it lags — the
+// watcher only sees a turn once the CLI flushes a transcript write, and a 90s
+// idle-timeout keeps stale entries.
+const runningByScope = new Map<string | null, Set<string>>();
 
 // Locally-known running set: the session the user has OPEN in chat, keyed to that
 // view's live websocket `isLoading`. The chat stream flips this instantly, so
@@ -34,8 +37,8 @@ function emit(): void {
 }
 
 export const sessionActivityStore = {
-  setRunning(ids: string[]): void {
-    runningSessionIds = new Set(ids);
+  setRunning(ids: string[], scope: string | null = null): void {
+    runningByScope.set(scope, new Set(ids));
     emit();
   },
   /** Record the open chat view's live running state so the sidebar mirrors it at once. */
@@ -48,10 +51,18 @@ export const sessionActivityStore = {
     emit();
   },
   isRunning(sessionId: string): boolean {
-    return runningSessionIds.has(sessionId) || localRunningSessionIds.has(sessionId);
+    if (localRunningSessionIds.has(sessionId)) return true;
+    for (const ids of runningByScope.values()) {
+      if (ids.has(sessionId)) return true;
+    }
+    return false;
   },
   getRunningIds(): Set<string> {
-    return runningSessionIds;
+    const union = new Set<string>();
+    for (const ids of runningByScope.values()) {
+      for (const id of ids) union.add(id);
+    }
+    return union;
   },
   subscribe(listener: () => void): () => void {
     listeners.add(listener);

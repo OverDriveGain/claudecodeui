@@ -15,6 +15,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { mappedForeignUsers, sessionRegistryForUserSync } from './user-fs.js';
+
 // Claude's live-session registry. `CLAUDE_SESSIONS_DIR` overrides the default
 // for relocated ~/.claude layouts (and lets a test instance point at an empty
 // dir to force cross-host federation).
@@ -34,6 +36,8 @@ export interface LocalSession {
   name?: string;
   status?: string;
   pid?: number;
+  /** Linux user whose registry claimed this session (one-instance-per-host). */
+  owner?: string;
 }
 
 type Cache = { at: number; map: Map<string, LocalSession> };
@@ -90,7 +94,45 @@ function loadLocalSessions(): Map<string, LocalSession> {
     }
   }
 
+  // One-instance-per-host: fold in every mapped FOREIGN linux user's registry
+  // (read via sudo as that user), so agents run by other users on this host
+  // resolve too — that's what lights up their files/projects for their CCUI
+  // accounts. Cached longer than our own dir (sudo+python per user is ~100ms).
+  for (const [suffix, session] of loadForeignSessions()) {
+    if (!map.has(suffix)) map.set(suffix, session);
+  }
+
   cache = { at: now, map };
+  return map;
+}
+
+const FOREIGN_CACHE_TTL_MS = 15_000;
+let foreignCache: Cache | null = null;
+
+function loadForeignSessions(): Map<string, LocalSession> {
+  const now = Date.now();
+  if (foreignCache && now - foreignCache.at < FOREIGN_CACHE_TTL_MS) {
+    return foreignCache.map;
+  }
+  const map = new Map<string, LocalSession>();
+  for (const user of mappedForeignUsers()) {
+    for (const raw of sessionRegistryForUserSync(user)) {
+      const parsed = raw as { bridgeSessionId?: unknown; cwd?: unknown; name?: unknown; status?: unknown; pid?: unknown };
+      const bsid = parsed.bridgeSessionId;
+      const cwd = parsed.cwd;
+      if (typeof bsid === 'string' && bsid && typeof cwd === 'string' && cwd) {
+        map.set(sessionSuffix(bsid), {
+          sessionId: bsid,
+          cwd,
+          name: typeof parsed.name === 'string' ? parsed.name : undefined,
+          status: typeof parsed.status === 'string' ? parsed.status : undefined,
+          pid: typeof parsed.pid === 'number' ? parsed.pid : undefined,
+          owner: user,
+        });
+      }
+    }
+  }
+  foreignCache = { at: now, map };
   return map;
 }
 

@@ -11,4 +11,5 @@ export { scanStateDb } from '@/modules/database/repositories/scan-state.db.js';
 export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';
 export { userHiddenAgentsDb } from '@/modules/database/repositories/user-hidden-agents.js';
+export { agentHostAssignmentsDb } from '@/modules/database/repositories/agent-host-assignments.js';
 export { vapidKeysDb } from '@/modules/database/repositories/vapid-keys.js';

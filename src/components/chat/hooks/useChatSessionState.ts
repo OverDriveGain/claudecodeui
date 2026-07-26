@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MutableRefObject } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { hostForProject } from '../../../utils/remoteHosts';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, Provider } from '../types/types';
@@ -229,6 +230,11 @@ export function useChatSessionState({
   // seeded the real server start (see fetchFromServer below), which must win. Turn
   // end (true→false) clears everything so a completed turn shows no stale timer.
   const prevIsLoadingRef = useRef(false);
+  // Render-time mirror of isLoading for effects that must read the CURRENT
+  // value without re-running when it flips (e.g. the background staleness
+  // refresh in the session-load effect).
+  const isLoadingRef = useRef(false);
+  isLoadingRef.current = isLoading;
   useEffect(() => {
     const was = prevIsLoadingRef.current;
     prevIsLoadingRef.current = isLoading;
@@ -333,6 +339,17 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
+  }, []);
+
+  // Claude-app style follow: a short glide to the bottom instead of an instant
+  // snap — used when a message lands while the user is riding the bottom (their
+  // own send, or a new reply). Long jumps (the ↓ pill, view resets) stay
+  // instant. The browser cancels the glide on user interaction, so it can never
+  // fight someone scrolling up.
+  const scrollToBottomSmooth = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }, []);
 
   const scrollToBottomAndReset = useCallback(() => {
@@ -523,8 +540,21 @@ export function useChatSessionState({
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
     const sessionKey = `${selectedSession.id}:${selectedProject.projectId}:${provider}`;
 
-    // Skip if already loaded and fresh
-    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
+    // Already-loaded session. This effect re-runs on every `selectedProject`
+    // OBJECT identity change — i.e. every projects_updated push — so it MUST
+    // never reset pagination/scroll for the session the user is reading (that
+    // was the "chat refreshes itself and jumps to the bottom" bug). If the slot
+    // has merely gone stale, freshen it in the background with an upsert-only
+    // refresh: unchanged messages keep their object identity, so nothing
+    // re-renders and the reading position is untouched.
+    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id)) {
+      if (sessionStore.isStale(selectedSession.id) && !isLoadingRef.current) {
+        void sessionStore.refreshFromServer(selectedSession.id, {
+          provider: (selectedSession.__provider || provider) as LLMProvider,
+          projectId: selectedProject.projectId,
+          projectPath: selectedProject.fullPath || selectedProject.path || '',
+        });
+      }
       return;
     }
 
@@ -627,7 +657,7 @@ export function useChatSessionState({
             typeof window !== 'undefined' &&
             (window.getSelection?.()?.toString().trim().length ?? 0) > 0;
           if (Boolean(autoScrollToBottom) && isNearBottom() && !hasSelection) {
-            setTimeout(() => scrollToBottom(), 200);
+            setTimeout(() => scrollToBottomSmooth(), 200);
           }
         }
       } catch (error) {
@@ -640,7 +670,7 @@ export function useChatSessionState({
     autoScrollToBottom,
     externalMessageUpdate,
     isNearBottom,
-    scrollToBottom,
+    scrollToBottomSmooth,
     selectedProject,
     selectedSession,
     sessionStore,
@@ -761,7 +791,7 @@ export function useChatSessionState({
         // Token usage endpoint is now keyed by the DB projectId.
         const params = new URLSearchParams({ provider: sessionProvider });
         const url = `/api/projects/${selectedProject.projectId}/sessions/${selectedSession.id}/token-usage?${params.toString()}`;
-        const response = await authenticatedFetch(url);
+        const response = await authenticatedFetch(url, {}, hostForProject(selectedProject.projectId));
         if (response.ok) {
           setTokenBudget(await response.json());
         } else {
@@ -809,7 +839,7 @@ export function useChatSessionState({
       // otherwise be dragged back to the bottom when this timer fires.
       if (grew && !isUserScrolledUp && !hasSelection && !isMediaPlaying()) {
         setTimeout(() => {
-          if (!isUserScrolledUpRef.current && !isMediaPlaying()) scrollToBottom();
+          if (!isUserScrolledUpRef.current && !isMediaPlaying()) scrollToBottomSmooth();
         }, 50);
       }
       return;
@@ -821,7 +851,7 @@ export function useChatSessionState({
     const newHeight = container.scrollHeight;
     const heightDiff = newHeight - prevHeight;
     if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom, isMediaPlaying]);
+  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottomSmooth, isMediaPlaying]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -953,6 +983,7 @@ export function useChatSessionState({
     createDiff,
     scrollContainerRef,
     scrollToBottom,
+    scrollToBottomSmooth,
     scrollToBottomAndReset,
     isNearBottom,
     handleScroll,

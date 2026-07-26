@@ -61,6 +61,9 @@ export interface NormalizedMessage {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  /** Harness-injected content shipped as a user-role row (skill payloads,
+   *  synthetic context) — rendered as injected context, never as a user bubble. */
+  isInjected?: boolean;
   /** system-notice severity (compact_boundary/informational): 'info' | 'warning' | 'error' */
   level?: string;
   isSystemNotice?: boolean;

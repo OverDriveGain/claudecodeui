@@ -9,7 +9,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
+import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon, SquareIcon } from 'lucide-react';
 
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 import type { QueuedMessage } from '../../hooks/useChatComposerState';
@@ -57,6 +57,7 @@ interface ChatComposerProps {
   externalRunning?: boolean;
   turnStartedAt?: number | null;
   turnTokens?: number | null;
+  turnActivity?: string | null;
   messageQueue?: QueuedMessage[];
   onRemoveQueuedMessage?: (id: string) => void;
   onAbortSession: () => void;
@@ -116,6 +117,7 @@ export default function ChatComposer({
   externalRunning,
   turnStartedAt,
   turnTokens,
+  turnActivity,
   messageQueue,
   onRemoveQueuedMessage,
   onAbortSession,
@@ -190,6 +192,7 @@ export default function ChatComposer({
           externalRunning={externalRunning}
           turnStartedAt={turnStartedAt}
           turnTokens={turnTokens}
+          activity={turnActivity}
           onAbort={onAbortSession}
           provider={provider}
         />
@@ -435,13 +438,26 @@ export default function ChatComposer({
             >
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
+            {/* Dedicated STOP control: always reachable while the agent works,
+                independent of whether text is drafted/queued. Previously stop and
+                send shared one button, so typing (or queueing) hid the stop — you
+                could queue but not cancel. Now the submit button is a pure
+                send/queue control and this button owns aborting the running turn. */}
+            {isLoading && (
+              <PromptInputButton
+                tooltip={{ content: t('composer.stop', { defaultValue: 'Stop' }), shortcut: 'Esc' }}
+                onClick={onAbortSession}
+                aria-label={t('composer.stop', { defaultValue: 'Stop' })}
+                className="h-10 w-10 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive"
+              >
+                <SquareIcon className="h-3.5 w-3.5 fill-current" />
+              </PromptInputButton>
+            )}
             <PromptInputSubmit
-              // While the agent is busy: if you've typed something, the button
-              // is a SEND button that queues it; only when the box is empty does
-              // it act as the stop/abort button. Idle behaves as a normal send.
-              status={isLoading && !input.trim() ? 'streaming' : 'ready'}
-              onClick={isLoading && !input.trim() ? onAbortSession : undefined}
-              disabled={!isLoading && !input.trim()}
+              // Pure send/queue: while the agent is busy a typed message is
+              // queued; the STOP button (left) handles aborting the turn.
+              status="ready"
+              disabled={!input.trim()}
               className="h-10 w-10 sm:h-10 sm:w-10"
             />
           </div>

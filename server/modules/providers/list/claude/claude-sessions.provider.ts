@@ -7,8 +7,30 @@ import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
 import { sessionsDb } from '@/modules/database/index.js';
+import { ownerForPath, readFileAsUser, listDirNamesAsUser } from '@/services/user-fs.js';
 
 const PROVIDER = 'claude';
+
+/**
+ * One-instance-per-host: transcripts of a mapped FOREIGN linux user live in
+ * that user's home. Returns the file's lines read AS that user, or null when
+ * the path is service-user territory (callers keep their streaming reader).
+ */
+async function jsonlLinesMaybeSudo(filePath: string): Promise<string[] | null> {
+  const owner = ownerForPath(filePath);
+  if (!owner) return null;
+  const buf = await readFileAsUser(owner, filePath);
+  return buf.toString('utf8').split('\n');
+}
+
+/** readdir that transparently escalates for mapped foreign users' directories. */
+async function readdirMaybeSudo(dir: string): Promise<string[]> {
+  const owner = ownerForPath(dir);
+  if (owner) {
+    try { return await listDirNamesAsUser(owner, dir); } catch { return []; }
+  }
+  try { return await fsp.readdir(dir); } catch { return []; }
+}
 
 type ClaudeToolResult = {
   content: unknown;
@@ -39,13 +61,20 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   const tools: AnyRecord[] = [];
 
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity,
-    });
+    // Foreign-owned transcript: whole-buffer read as the owner; otherwise stream.
+    const sudoLines = await jsonlLinesMaybeSudo(filePath);
+    let lineSource: Iterable<string> | AsyncIterable<string>;
+    if (sudoLines) {
+      lineSource = sudoLines;
+    } else {
+      const fileStream = fs.createReadStream(filePath);
+      lineSource = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity,
+      });
+    }
 
-    for await (const line of rl) {
+    for await (const line of lineSource) {
       if (!line.trim()) {
         continue;
       }
@@ -119,6 +148,21 @@ async function readSessionTailEntries(
   sessionId: string,
   minEntries: number,
 ): Promise<{ entries: AnyRecord[]; reachedStart: boolean }> {
+  // Foreign-owned transcript: no fd access as the service user — read the whole
+  // file as the owner and emulate the tail semantics on the buffer.
+  const sudoLines = await jsonlLinesMaybeSudo(jsonLPath);
+  if (sudoLines) {
+    const all: AnyRecord[] = [];
+    for (const line of sudoLines) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as AnyRecord;
+        if (entry.sessionId === sessionId) all.push(entry);
+      } catch { /* skip malformed */ }
+    }
+    const tail = all.slice(-minEntries);
+    return { entries: tail, reachedStart: tail.length === all.length };
+  }
   const CHUNK = 256 * 1024;
   const handle = await fsp.open(jsonLPath, 'r');
   try {
@@ -233,7 +277,7 @@ async function getSessionTail(
   }
 
   const projectDir = path.dirname(jsonLPath);
-  const files = await fsp.readdir(projectDir);
+  const files = await readdirMaybeSudo(projectDir);
   const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
   const { entries, reachedStart } = await readSessionTailEntries(jsonLPath, sessionId, minEntries);
@@ -254,19 +298,25 @@ async function getSessionMessages(
     }
 
     const projectDir = path.dirname(jsonLPath);
-    const files = await fsp.readdir(projectDir);
+    const files = await readdirMaybeSudo(projectDir);
     const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
     const messages: AnyRecord[] = [];
     const agentToolsCache = new Map<string, AnyRecord[]>();
 
-    const fileStream = fs.createReadStream(jsonLPath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity,
-    });
+    const sudoLines = await jsonlLinesMaybeSudo(jsonLPath);
+    let lineSource: Iterable<string> | AsyncIterable<string>;
+    if (sudoLines) {
+      lineSource = sudoLines;
+    } else {
+      const fileStream = fs.createReadStream(jsonLPath);
+      lineSource = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity,
+      });
+    }
 
-    for await (const line of rl) {
+    for await (const line of lineSource) {
       if (!line.trim()) {
         continue;
       }
@@ -480,6 +530,101 @@ function stripAnsiFormatting(text: string): string {
   return text.replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
+/**
+ * Normalize one user-authored (or user-role) text payload into chat rows.
+ *
+ * Claude serializes several NON-typed artifacts as user text — slash-command
+ * wrappers, local command stdout, task notifications, harness-injected skill
+ * payloads — and ships them BOTH as string content and as array text parts
+ * (the relay always uses parts). This single path handles every shape so an
+ * injected payload can never fall through and render as if the person typed it.
+ *
+ * `injected` marks harness-injected context (relay `isSynthetic` / non-human
+ * `origin`): the row keeps role=user for transcript fidelity but carries
+ * `isInjected` so clients render it as injected context, not a user bubble.
+ */
+function normalizeUserTextRow(
+  text: string,
+  id: string,
+  sessionId: string | null,
+  ts: string,
+  injected: boolean,
+): NormalizedMessage[] {
+  const localCommandPayload = parseLocalCommandPayload(text);
+  if (localCommandPayload) {
+    const displayText = buildLocalCommandDisplayText(localCommandPayload);
+    // /clear leaves no visible trace in the CLI (the screen just resets),
+    // and on relay sessions this row duplicates the typed "/clear" echo —
+    // suppress it instead of rendering a stray user bubble.
+    if (!displayText || displayText === '/clear') {
+      return [];
+    }
+    return [createNormalizedMessage({
+      id,
+      sessionId,
+      timestamp: ts,
+      provider: PROVIDER,
+      kind: 'text',
+      role: 'user',
+      content: displayText,
+      commandName: localCommandPayload.commandName,
+      commandMessage: localCommandPayload.commandMessage,
+      commandArgs: localCommandPayload.commandArgs,
+      isLocalCommand: true,
+    })];
+  }
+
+  // Local command stdout is terminal output produced in response to the
+  // command — re-label it as assistant text so the flow reads correctly.
+  const localCommandStdout = extractTaggedContent(text, 'local-command-stdout');
+  if (localCommandStdout !== null) {
+    const stdoutText = stripAnsiFormatting(localCommandStdout).trim();
+    if (!stdoutText) {
+      return [];
+    }
+    return [createNormalizedMessage({
+      id,
+      sessionId,
+      timestamp: ts,
+      provider: PROVIDER,
+      kind: 'text',
+      role: 'assistant',
+      content: stdoutText,
+      isLocalCommandStdout: true,
+    })];
+  }
+
+  // Background task status updates — a proper message type, not raw XML.
+  const taskNotif = parseTaskNotification(text);
+  if (taskNotif) {
+    return [createNormalizedMessage({
+      id,
+      sessionId,
+      timestamp: ts,
+      provider: PROVIDER,
+      kind: 'task_notification',
+      content: taskNotif.summary,
+      status: taskNotif.taskStatus,
+      summary: taskNotif.summary,
+    })];
+  }
+
+  const cleaned = stripImageSizeNotes(stripSystemReminders(text));
+  if (!cleaned || isInternalContent(cleaned)) {
+    return [];
+  }
+  return [createNormalizedMessage({
+    id,
+    sessionId,
+    timestamp: ts,
+    provider: PROVIDER,
+    kind: 'text',
+    role: 'user',
+    content: cleaned,
+    ...(injected ? { isInjected: true } : {}),
+  })];
+}
+
 type TaskNotificationPayload = {
   taskId: string;
   taskStatus: string;
@@ -641,6 +786,15 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     };
 
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
+      // Harness-injected content rides in as user-role rows. The relay marks it:
+      // `isSynthetic: true` (e.g. a loaded skill's full payload), or an `origin`
+      // whose kind is not "human". Real user sends carry origin.kind === 'human'
+      // or `client_platform`, or no marker at all (older transcripts) — only an
+      // explicit non-human marker flags injection.
+      const originKind = (raw.origin as AnyRecord | undefined)?.kind;
+      const injected =
+        raw.isSynthetic === true
+        || (typeof originKind === 'string' && originKind !== 'human');
       const userImages = Array.isArray(raw.message.content)
         ? extractMessageImages(raw.message.content)
         : [];
@@ -661,18 +815,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
-            const cleaned = stripImageSizeNotes(stripSystemReminders(part.text || ''));
-            if (cleaned && !isInternalContent(cleaned)) {
-              messages.push(createNormalizedMessage({
-                id: `${baseId}_text_${partIndex}`,
-                sessionId,
-                timestamp: ts,
-                provider: PROVIDER,
-                kind: 'text',
-                role: 'user',
-                content: cleaned,
-              }));
-            }
+            messages.push(
+              ...normalizeUserTextRow(part.text || '', `${baseId}_text_${partIndex}`, sessionId, ts, injected),
+            );
           }
         }
 
@@ -682,18 +827,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n');
-          const cleanedParts = stripImageSizeNotes(stripSystemReminders(textParts));
-          if (cleanedParts && !isInternalContent(cleanedParts)) {
-            messages.push(createNormalizedMessage({
-              id: `${baseId}_text`,
-              sessionId,
-              timestamp: ts,
-              provider: PROVIDER,
-              kind: 'text',
-              role: 'user',
-              content: cleanedParts,
-            }));
-          }
+          messages.push(...normalizeUserTextRow(textParts, `${baseId}_text`, sessionId, ts, injected));
         }
       } else if (typeof raw.message.content === 'string') {
         const text = raw.message.content;
@@ -720,91 +854,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        /**
-         * Local slash commands are serialized as tagged text even though they
-         * are semantically a user action. Expose the parsed fields to the
-         * frontend and emit a plain user-visible command string so the command
-         * no longer disappears from history.
-         */
-        const localCommandPayload = parseLocalCommandPayload(text);
-        if (localCommandPayload) {
-          const displayText = buildLocalCommandDisplayText(localCommandPayload);
-          // /clear leaves no visible trace in the CLI (the screen just resets),
-          // and on relay sessions this row duplicates the typed "/clear" echo —
-          // suppress it instead of rendering a stray user bubble.
-          if (displayText && displayText !== '/clear') {
-            messages.push(createNormalizedMessage({
-              id: baseId,
-              sessionId,
-              timestamp: ts,
-              provider: PROVIDER,
-              kind: 'text',
-              role: 'user',
-              content: displayText,
-              commandName: localCommandPayload.commandName,
-              commandMessage: localCommandPayload.commandMessage,
-              commandArgs: localCommandPayload.commandArgs,
-              isLocalCommand: true,
-            }));
-          }
-          return messages;
-        }
-
-        /**
-         * Local command stdout is also written as a "user" row in Claude's
-         * transcript, but it is terminal output produced in response to the
-         * command. Re-label it as assistant text so the chat transcript matches
-         * the actual conversational flow seen by the user.
-         */
-        const localCommandStdout = extractTaggedContent(text, 'local-command-stdout');
-        if (localCommandStdout !== null) {
-          const stdoutText = stripAnsiFormatting(localCommandStdout).trim();
-          if (stdoutText) {
-            messages.push(createNormalizedMessage({
-              id: baseId,
-              sessionId,
-              timestamp: ts,
-              provider: PROVIDER,
-              kind: 'text',
-              role: 'assistant',
-              content: stdoutText,
-              isLocalCommandStdout: true,
-            }));
-          }
-          return messages;
-        }
-
-        /**
-         * Task notifications are background task status updates emitted by Claude.
-         * Parse them into a proper message type instead of rendering raw XML.
-         */
-        const taskNotif = parseTaskNotification(text);
-        if (taskNotif) {
-          messages.push(createNormalizedMessage({
-            id: baseId,
-            sessionId,
-            timestamp: ts,
-            provider: PROVIDER,
-            kind: 'task_notification',
-            content: taskNotif.summary,
-            status: taskNotif.taskStatus,
-            summary: taskNotif.summary,
-          }));
-          return messages;
-        }
-
-        const cleaned = stripImageSizeNotes(stripSystemReminders(text));
-        if (cleaned && !isInternalContent(cleaned)) {
-          messages.push(createNormalizedMessage({
-            id: baseId,
-            sessionId,
-            timestamp: ts,
-            provider: PROVIDER,
-            kind: 'text',
-            role: 'user',
-            content: cleaned,
-          }));
-        }
+        // Slash commands, local stdout, task notifications, injected payloads,
+        // and plain text all route through the shared user-text normalizer so
+        // string- and array-shaped transcripts render identically.
+        messages.push(...normalizeUserTextRow(text, baseId, sessionId, ts, injected));
       }
 
       // Attach any sent images to the user's text message (or emit a standalone

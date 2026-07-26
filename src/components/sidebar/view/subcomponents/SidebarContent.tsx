@@ -11,6 +11,7 @@ import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 import { getAllSessions } from '../../utils/utils';
+import { useAgentAccountErrors } from '../../../../stores/agentHealthStore';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
   const parts: ReactNode[] = [];
@@ -182,6 +183,7 @@ export default function SidebarContent({
   projectListProps,
   t,
 }: SidebarContentProps) {
+  const rosterErrors = useAgentAccountErrors();
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
   const groupedArchivedSessions = groupArchivedSessionsByProject(archivedSessions);
@@ -211,6 +213,19 @@ export default function SidebarContent({
       />
 
       <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
+        {searchMode === 'agents' && rosterErrors.length > 0 && (
+          // Roster-reader failure (expired/wiped claude.ai login on the server):
+          // without this the Agents tab just shows a stale-or-empty list with no
+          // hint that anything is wrong (the 2026-07-22 silent outage).
+          <div className="mx-2 mb-2 rounded-lg border border-red-300/60 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+            <span className="font-medium">{t('agents.rosterError', 'Agent list may be stale')}</span>
+            {rosterErrors.map((e) => (
+              <div key={e.label} className="mt-0.5 opacity-80">
+                {e.label}: {e.status || 'error'} {e.message}
+              </div>
+            ))}
+          </div>
+        )}
         {showConversationSearch ? (
           isSearching && !hasPartialResults ? (
             <div className="px-4 py-12 text-center md:py-8">

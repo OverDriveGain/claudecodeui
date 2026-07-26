@@ -10,7 +10,31 @@ type ClaudeStatusProps = {
   turnStartedAt?: number | null;
   /** Tokens the context has grown this turn — the live "tokens this turn" counter. */
   turnTokens?: number | null;
+  /** What the agent is doing right now ("Running a command", "Thinking", …). */
+  activity?: string | null;
 };
+
+/** Human activity label for a tool the agent is currently using. */
+export function activityLabelForTool(toolName?: string): string {
+  switch (toolName) {
+    case 'Bash': return 'Running a command';
+    case 'Read': return 'Reading files';
+    case 'Edit':
+    case 'Write':
+    case 'ApplyPatch':
+    case 'NotebookEdit': return 'Editing files';
+    case 'Grep':
+    case 'Glob': return 'Searching the code';
+    case 'WebFetch':
+    case 'WebSearch': return 'Browsing the web';
+    case 'Task':
+    case 'Agent': return 'Running a subagent';
+    case 'TodoWrite': return 'Planning';
+    case 'SendUserFile': return 'Sending a file';
+    case 'AskUserQuestion': return 'Asking a question';
+    default: return toolName ? `Using ${toolName}` : 'Working';
+  }
+}
 
 /** "412" / "4.2k" / "112k" — tokens generated this turn, CLI-style. */
 function tokensLabel(n: number): string {
@@ -42,7 +66,7 @@ const HIDE_GRACE_MS = 1500;
  * turn lives on the composer's send button, which becomes a stop control while
  * the agent is busy.
  */
-export default function ClaudeStatus({ isLoading, externalRunning = false, turnStartedAt, turnTokens }: ClaudeStatusProps) {
+export default function ClaudeStatus({ isLoading, externalRunning = false, turnStartedAt, turnTokens, activity }: ClaudeStatusProps) {
   const active = isLoading || externalRunning;
   // Debounced visibility: rise immediately, fall after a grace period (see above).
   const [visible, setVisible] = useState(active);
@@ -94,10 +118,20 @@ export default function ClaudeStatus({ isLoading, externalRunning = false, turnS
         <span>M</span>
         <span>u</span>
       </div>
-      {(showElapsed || showTokens) && (
-        <span className="font-mono text-xs text-muted-foreground">
-          {showElapsed && elapsedLabel(now - (turnStartedAt as number))}
-          {showTokens && `${showElapsed ? ' · ' : ''}${tokensLabel(turnTokens as number)} tokens`}
+      {(activity || showElapsed || showTokens) && (
+        <span className="flex items-baseline gap-1.5 text-xs text-muted-foreground">
+          {activity && (
+            // Live activity, not a frozen "Processing": what the agent is doing
+            // right now, derived from the newest transcript frame.
+            <span className="font-medium text-foreground/80" aria-live="polite">{activity}…</span>
+          )}
+          {(showElapsed || showTokens) && (
+            <span className="font-mono">
+              {activity ? '· ' : ''}
+              {showElapsed && elapsedLabel(now - (turnStartedAt as number))}
+              {showTokens && `${showElapsed ? ' · ' : ''}${tokensLabel(turnTokens as number)} tokens`}
+            </span>
+          )}
         </span>
       )}
     </div>

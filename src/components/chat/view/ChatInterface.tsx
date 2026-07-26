@@ -16,6 +16,7 @@ import { useIsSessionRunning, sessionActivityStore } from '../../../stores/useSe
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 import CommandResultModal from './subcomponents/CommandResultModal';
+import { activityLabelForTool } from './subcomponents/ClaudeStatus';
 
 
 type PendingViewSession = {
@@ -122,7 +123,7 @@ function ChatInterface({
     setClaudeStatus,
     createDiff,
     scrollContainerRef,
-    scrollToBottom,
+    scrollToBottomSmooth,
     scrollToBottomAndReset,
     handleScroll,
   } = useChatSessionState({
@@ -138,6 +139,29 @@ function ChatInterface({
     pendingViewSessionRef,
     sessionStore,
   });
+
+  // Live activity for the working loader: what the agent is doing RIGHT NOW,
+  // derived from the newest frame of the transcript ("Running a command",
+  // "Thinking", "Writing", …). A specific status pushed by the backend (e.g.
+  // "Waiting for permission") wins over the transcript-derived label.
+  const turnActivity = useMemo(() => {
+    if (!isLoading) return null;
+    const statusText = claudeStatus?.text?.trim();
+    if (statusText && statusText !== 'Processing' && statusText !== 'Working...') return statusText;
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const m = chatMessages[i];
+      if (m.type === 'user') break; // turn just started, nothing emitted yet
+      if (m.isToolUse) {
+        // A tool with its result already attached is done — the agent is now
+        // deciding what to do next.
+        return m.toolResult ? 'Working' : activityLabelForTool(m.toolName);
+      }
+      if (m.isThinking) return 'Thinking';
+      if (m.isStreaming) return 'Writing';
+      if (m.type === 'assistant') return 'Working';
+    }
+    return 'Working';
+  }, [isLoading, claudeStatus, chatMessages]);
 
   const {
     input,
@@ -208,7 +232,8 @@ function ChatInterface({
     onFileOpen,
     onShowSettings,
     pendingViewSessionRef,
-    scrollToBottom,
+    // Sending glides to the bottom (Claude-app feel) instead of snapping.
+    scrollToBottom: scrollToBottomSmooth,
     addMessage,
     setIsLoading,
     setCanAbortSession,
@@ -435,6 +460,7 @@ function ChatInterface({
           externalRunning={externalRunning}
           turnStartedAt={turnStartedAt}
           turnTokens={turnTokens}
+          turnActivity={turnActivity}
           messageQueue={messageQueue}
           onRemoveQueuedMessage={removeQueuedMessage}
           onAbortSession={handleAbortSession}

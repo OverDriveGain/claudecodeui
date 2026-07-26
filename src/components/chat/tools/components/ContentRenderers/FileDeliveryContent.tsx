@@ -3,6 +3,7 @@ import { Download, FileText, ExternalLink, Loader2 } from 'lucide-react';
 
 import { api } from '../../../../../utils/api';
 import { AUTH_TOKEN_STORAGE_KEY } from '../../../../auth/constants';
+import { hostForProject } from '../../../../../utils/remoteHosts';
 
 type FileDeliveryContentProps = {
   /** Absolute file paths the agent delivered (SendUserFile `files`). */
@@ -37,10 +38,13 @@ const kindOf = (p: string): MediaKind => {
  * with no manual blob download. Same approach the file-tree VideoViewer uses.
  */
 function streamUrl(projectId: string, path: string): string {
-  const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '';
+  // Multi-host: an agent surfaced by a connected peer host streams from THAT
+  // host (absolute URL + its token) — the bytes live on the peer's disk.
+  const host = hostForProject(projectId);
+  const token = host ? host.token : localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '';
   const params = new URLSearchParams({ path });
   if (token) params.set('token', token);
-  return `/api/projects/${encodeURIComponent(projectId)}/delivered-file?${params.toString()}`;
+  return `${host ? host.url : ''}/api/projects/${encodeURIComponent(projectId)}/delivered-file?${params.toString()}`;
 }
 
 /**

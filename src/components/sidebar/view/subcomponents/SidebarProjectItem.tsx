@@ -1,5 +1,5 @@
-import type { MouseEvent } from 'react';
-import { Check, ChevronDown, ChevronRight, Edit3, Eye, EyeOff, SquareTerminal, Star, Trash2, X } from 'lucide-react';
+import { useState, type MouseEvent } from 'react';
+import { Check, ChevronDown, ChevronRight, Edit3, Eye, EyeOff, Server, SquareTerminal, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -9,6 +9,13 @@ import type { Project, ProjectSession, LLMProvider } from '../../../../types/app
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
 import { useIsSessionRunning } from '../../../../stores/useSessionActivityStore';
+import { useRemoteHosts } from '../../../../utils/remoteHosts';
+import {
+  assignAgentHost,
+  clearAgentHost,
+  useAgentHostAssignments,
+} from '../../../../utils/agentHostAssignments';
+import { agentDisplayKey } from '../../../../utils/agentKey';
 
 import TaskIndicator from './TaskIndicator';
 import SidebarProjectSessions from './SidebarProjectSessions';
@@ -113,7 +120,12 @@ export default function SidebarProjectItem({
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
 
   // Locked deployment: project removal is disabled (cosmetic hide stays).
-  const { lockdown } = useAuth();
+  const { lockdown, user } = useAuth();
+  // Agent → host assignment (admin-only): pins the agent to the connected host
+  // it runs on so sends and file landing route there.
+  const remoteHosts = useRemoteHosts();
+  const hostAssignments = useAgentHostAssignments();
+  const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const toggleProject = () => onToggleProject(project.projectId);
   const toggleStarProject = () => onToggleStarProject(project.projectId);
 
@@ -169,6 +181,26 @@ export default function SidebarProjectItem({
     const unhideAgent = (event: MouseEvent) => {
       event.stopPropagation();
       onUnhideAgent?.(project);
+    };
+    // Host pinning: admin assigns the CCUI host this agent runs on. When that
+    // host is connected (Hosts dialog), the client keeps ITS copy of the agent,
+    // so sends — and file landing — go to the agent's real machine.
+    const agentKey = agentDisplayKey(project);
+    const assignedHost = hostAssignments[agentKey] ?? null;
+    const isAccountOwner = Boolean((user as { account_owner?: unknown } | null)?.account_owner);
+    const showHostControl =
+      isAccountOwner && !isRemoteAgentHidden && (remoteHosts.length > 0 || assignedHost !== null);
+    const hostLabel = (url: string) => {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return url;
+      }
+    };
+    const chooseHost = (url: string | null) => {
+      setHostMenuOpen(false);
+      if (url === null) void clearAgentHost(agentKey);
+      else void assignAgentHost(agentKey, url);
     };
     return (
       <div className="group/agent relative md:space-y-1">
@@ -238,6 +270,78 @@ export default function SidebarProjectItem({
                 <EyeOff className="h-3.5 w-3.5" />
               </button>
             )}
+        {showHostControl && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setHostMenuOpen((open) => !open);
+            }}
+            title={
+              assignedHost
+                ? t('sidebar.agentHostAssigned', {
+                    defaultValue: 'Agent host: {{host}}',
+                    host: hostLabel(assignedHost),
+                  })
+                : t('sidebar.agentHostAssign', { defaultValue: 'Assign agent host' })
+            }
+            aria-label={t('sidebar.agentHostAssign', { defaultValue: 'Assign agent host' })}
+            className={cn(
+              'absolute right-9 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-background/80 shadow-sm transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover/agent:opacity-100',
+              assignedHost ? 'text-primary opacity-100' : 'text-muted-foreground opacity-0',
+              hostMenuOpen && 'opacity-100',
+            )}
+          >
+            <Server className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {hostMenuOpen && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setHostMenuOpen(false)} />
+            <div className="absolute right-2 top-full z-30 mt-1 min-w-[180px] rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-md">
+              <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t('sidebar.agentHostMenu', { defaultValue: 'Agent runs on' })}
+              </div>
+              <button
+                type="button"
+                onClick={() => chooseHost(null)}
+                className={cn(
+                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent',
+                  assignedHost === null && 'text-primary',
+                )}
+              >
+                {assignedHost === null && <Check className="h-3 w-3 flex-shrink-0" />}
+                <span className={cn(assignedHost !== null && 'pl-5')}>
+                  {t('sidebar.agentHostDefault', { defaultValue: 'This host (default)' })}
+                </span>
+              </button>
+              {remoteHosts.map((host) => (
+                <button
+                  key={host.url}
+                  type="button"
+                  onClick={() => chooseHost(host.url)}
+                  className={cn(
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent',
+                    assignedHost === host.url && 'text-primary',
+                  )}
+                >
+                  {assignedHost === host.url && <Check className="h-3 w-3 flex-shrink-0" />}
+                  <span className={cn(assignedHost !== host.url && 'pl-5', 'truncate')}>
+                    {hostLabel(host.url)}
+                  </span>
+                </button>
+              ))}
+              {assignedHost !== null && remoteHosts.every((h) => h.url !== assignedHost) && (
+                <div className="px-3 py-1.5 text-[10px] text-muted-foreground">
+                  {t('sidebar.agentHostDisconnected', {
+                    defaultValue: 'Assigned: {{host}} (not connected — routing falls back to this host)',
+                    host: hostLabel(assignedHost),
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
     );
   }
