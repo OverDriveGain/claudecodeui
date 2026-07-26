@@ -131,10 +131,13 @@ export default function SidebarProjectList({
   const showProjects = !isLoading && projects.length > 0 && filteredProjects.length > 0;
 
   // React key + per-project state lookups all use the DB `projectId` so they remain
-  // stable across renames and session changes.
+  // stable across renames and session changes. The key is HOST-qualified because
+  // multi-host copies of one agent share `remote:<sid>` project ids — when both
+  // transiently coexist (dedupe races a slow peer fetch), duplicate keys corrupt
+  // sibling component state (the host-pinning menu opened on the wrong row).
   const renderItem = (project: Project, agentHidden = false) => (
     <SidebarProjectItem
-      key={project.projectId}
+      key={`${((project as { __hostUrl?: string }).__hostUrl ?? '') as string}|${project.projectId}`}
       isRemoteAgentHidden={agentHidden}
       onHideAgent={onHideAgent}
       onUnhideAgent={onUnhideAgent}

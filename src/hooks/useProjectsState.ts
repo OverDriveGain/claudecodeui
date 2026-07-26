@@ -80,42 +80,40 @@ const fetchHostProjects = async (host: RemoteHost): Promise<Project[] | null> =>
  * their ownership entries cleared so routing always favors the primary copy.
  */
 const dedupeAgainstPrimary = (combined: Project[]): Project[] => {
-  const primarySessionIds = new Set(
-    combined
-      .filter((p) => projectHostUrl(p) === null && p.isRemoteAgent && p.remoteSessionId)
-      .map((p) => p.remoteSessionId as string),
-  );
-  // Assigned-host preference (Manar, 2026-07-26): an agent PINNED to a
-  // connected peer host keeps the PEER copy — its ownership registration then
-  // routes sends and file landing to the machine the agent runs on. Only peer
-  // copies whose host matches the admin assignment qualify; everything else
-  // keeps the primary-wins rule.
-  const preferredPeerHostBySession = new Map<string, string>(); // sessionId -> host url
+  // ONE winner per live session id, chosen by precedence:
+  //   1. the copy from the agent's admin-ASSIGNED host (routing follows it) —
+  //      sends and file landing then go to the machine the agent runs on;
+  //   2. the primary (untagged) copy;
+  //   3. the first peer copy, deterministically.
+  // Rule 3 matters: the same session can arrive from TWO connected peer hosts
+  // with no primary copy at all (e.g. two domains of one deployment, or two
+  // same-account hosts). The old peer-vs-primary-only rule let both peer
+  // copies through — duplicate rows sharing one `remote:<sid>` React key,
+  // which corrupted sibling sidebar state and made host-pinning feel flaky.
+  const bySession = new Map<string, Project[]>();
   for (const p of combined) {
-    const h = projectHostUrl(p);
-    if (
-      h !== null &&
-      p.isRemoteAgent &&
-      p.remoteSessionId &&
-      assignedHostFor(agentDisplayKey(p)) === h
-    ) {
-      preferredPeerHostBySession.set(p.remoteSessionId as string, h);
-    }
+    if (!p.isRemoteAgent || !p.remoteSessionId) continue;
+    const sid = p.remoteSessionId as string;
+    const copies = bySession.get(sid);
+    if (copies) copies.push(p);
+    else bySession.set(sid, [p]);
+  }
+  const winners = new Map<string, Project>();
+  for (const [sid, copies] of bySession) {
+    let winner = copies.find((p) => {
+      const h = projectHostUrl(p);
+      return h !== null && assignedHostFor(agentDisplayKey(p)) === h;
+    });
+    winner ??= copies.find((p) => projectHostUrl(p) === null);
+    winner ??= copies[0];
+    winners.set(sid, winner);
   }
   const dropped: Project[] = [];
   const kept = combined.filter((p) => {
     if (!p.isRemoteAgent || !p.remoteSessionId) return true;
-    const sid = p.remoteSessionId as string;
-    const h = projectHostUrl(p);
-    const preferredPeer = preferredPeerHostBySession.get(sid);
-    if (preferredPeer) {
-      const keep = h === preferredPeer;
-      if (!keep) dropped.push(p);
-      return keep;
-    }
-    const dup = h !== null && primarySessionIds.has(sid);
-    if (dup) dropped.push(p);
-    return !dup;
+    const keep = winners.get(p.remoteSessionId as string) === p;
+    if (!keep) dropped.push(p);
+    return keep;
   });
   if (dropped.length > 0) {
     // Both hosts' copies share ids (`remote:<sessionId>`), so never unregister
@@ -470,9 +468,23 @@ export function useProjectsState({
   }, [fetchProjects]);
 
   // An admin (re)assigning an agent's host must re-run the dedupe so the kept
-  // copy — and with it all routing — switches hosts immediately.
+  // copy — and with it all routing — switches hosts immediately. The dedupe is
+  // applied to the CURRENT roster synchronously: the background refetch below
+  // waits on every connected host, and a slow peer (box on a degraded uplink)
+  // left the admin watching a click that visibly did nothing.
   useEffect(
-    () => subscribeAgentHostAssignments(() => void fetchProjects({ showLoadingState: false })),
+    () =>
+      subscribeAgentHostAssignments(() => {
+        setProjects((prev) => {
+          const kept = dedupeAgainstPrimary(prev);
+          for (const host of listRemoteHosts()) {
+            const segment = kept.filter((p) => projectHostUrl(p) === host.url);
+            registerHostOwnership(host.url, segment.map((p) => p.projectId), allSessionIdsOf(segment));
+          }
+          return projectsHaveChanges(prev, kept, true) ? kept : prev;
+        });
+        void fetchProjects({ showLoadingState: false });
+      }),
     [fetchProjects],
   );
 
