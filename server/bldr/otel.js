@@ -4,14 +4,15 @@
  * - OFF unless BLDR_OTEL=1 (systemd drop-in otel.conf) — and even then it
  *   no-ops gracefully if the OTel libs aren't installed or the collector is
  *   unreachable. Tracing must never break or slow production.
- * - Ships OTLP/HTTP to the shared collector → Tempo on the monitoring network
- *   (BLDR_OTEL_ENDPOINT, default http://10.10.0.1:4318).
+ * - Ships OTLP/HTTP to OUR Tempo on the kikhia.ae monitoring stack, WG-only
+ *   ingest (BLDR_OTEL_ENDPOINT, default http://10.10.0.8:4318). Traces are
+ *   browsable in grafana.kikhia.ae (Tempo datasource, service.name bti-bldr).
  * - Span attributes are METADATA ONLY (model, tokens, latency, brief hash).
  *   Full prompt/brief text is attached only when BLDR_OTEL_DEBUG=1.
  */
 
 const ENABLED = process.env.BLDR_OTEL === '1';
-const ENDPOINT = process.env.BLDR_OTEL_ENDPOINT || 'http://10.10.0.1:4318';
+const ENDPOINT = process.env.BLDR_OTEL_ENDPOINT || 'http://10.10.0.8:4318';
 export const OTEL_DEBUG_TEXT = process.env.BLDR_OTEL_DEBUG === '1';
 
 let initPromise = null;

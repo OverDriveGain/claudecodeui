@@ -21,10 +21,10 @@ backend reports usage), `bldr.latency_ms`, and span status = error on failures.
 ## Wiring
 
 - Code: `server/bldr/otel.js` (init/no-op) + spans in `server/bldr/generate.js`.
-- Transport: OTLP/HTTP to `BLDR_OTEL_ENDPOINT` (default `http://10.10.0.1:4318`,
-  the shared collector → Tempo, reachable from box over WireGuard).
+- Transport: OTLP/HTTP to `BLDR_OTEL_ENDPOINT` (default `http://10.10.0.8:4318` —
+  OUR Tempo on the kikhia.ae monitoring stack; WG-only ingest, 14-day retention).
 - Enable: copy `otel.conf` to
   `~/.config/systemd/user/bti-webapp-ccui-dev.service.d/otel.conf`, then
   `systemctl --user daemon-reload && systemctl --user restart bti-webapp-ccui-dev`
   (don't restart while a generation is running — jobs are in-memory).
-- Service name in Tempo: **`bti-bldr`**.
+- Service name in Tempo: **`bti-bldr`**. View: grafana.kikhia.ae → Explore → Tempo, or the "Explore traces" link on the BTI BLDR generations dashboard.
