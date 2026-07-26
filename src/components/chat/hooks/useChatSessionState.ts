@@ -5,6 +5,7 @@ import { authenticatedFetch } from '../../../utils/api';
 import { hostForProject } from '../../../utils/remoteHosts';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { sessionActivityStore } from '../../../stores/useSessionActivityStore';
 import type { ChatMessage, Provider } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 
@@ -225,29 +226,61 @@ export function useChatSessionState({
   /*  Derive chatMessages from the store                              */
   /* ---------------------------------------------------------------- */
 
-  // Anchor/clear the turn clock off the loading transition. A fresh send flips
-  // isLoading false→true here and we stamp "now" — UNLESS a mid-turn reopen already
-  // seeded the real server start (see fetchFromServer below), which must win. Turn
-  // end (true→false) clears everything so a completed turn shows no stale timer.
+  // Anchor/clear the turn clock off the loading transition. Turn end (true→false)
+  // clears everything so a completed turn shows no stale timer. On turn start
+  // (false→true) an anchor may already be in place — a fresh send stamps its exact
+  // moment via noteLocalTurnStart, a mid-turn reopen adopts the server's start (see
+  // fetchFromServer below) — and must be kept; otherwise stamp a provisional "now".
   const prevIsLoadingRef = useRef(false);
   // Render-time mirror of isLoading for effects that must read the CURRENT
   // value without re-running when it flips (e.g. the background staleness
   // refresh in the session-load effect).
   const isLoadingRef = useRef(false);
   isLoadingRef.current = isLoading;
+  // Render-time mirror of turnStartedAt, same idiom as isLoadingRef.
+  const turnStartedAtRef = useRef<number | null>(null);
+  turnStartedAtRef.current = turnStartedAt;
+  // True while the running turn was started HERE by a send — its anchor is the
+  // exact send moment and must never be overwritten by server-derived starts
+  // (which can lag, or worse, point at a stale never-completed older turn).
+  const turnAnchoredBySendRef = useRef(false);
   useEffect(() => {
     const was = prevIsLoadingRef.current;
     prevIsLoadingRef.current = isLoading;
     if (isLoading && !was) {
-      setTurnStartedAt((cur) => cur ?? Date.now());
-      turnStartContextRef.current = null;
-      setTurnTokens(null);
+      if (turnStartedAtRef.current == null) {
+        setTurnStartedAt(Date.now());
+        turnStartContextRef.current = null;
+        setTurnTokens(null);
+      }
     } else if (!isLoading && was) {
       setTurnStartedAt(null);
       setTurnTokens(null);
       turnStartContextRef.current = null;
+      turnAnchoredBySendRef.current = false;
     }
   }, [isLoading]);
+
+  // The send path calls this at the send moment — the authoritative start of a
+  // locally-initiated turn. A message queued while a turn is already running must
+  // NOT restart the clock (the turn is the same one).
+  const noteLocalTurnStart = useCallback(() => {
+    if (isLoadingRef.current) return;
+    turnAnchoredBySendRef.current = true;
+    setTurnStartedAt(Date.now());
+    turnStartContextRef.current = null;
+    setTurnTokens(null);
+  }, []);
+
+  // Turn-end paths that never armed isLoading (a turn watched via externalRunning
+  // ends with isLoading already false, so the transition effect above can't fire)
+  // call this so the anchor can't linger and inflate the NEXT turn's timer.
+  const clearTurnTimer = useCallback(() => {
+    turnAnchoredBySendRef.current = false;
+    setTurnStartedAt(null);
+    setTurnTokens(null);
+    turnStartContextRef.current = null;
+  }, []);
 
   // Assistant frames carry the absolute context position; diff it against the
   // turn-start baseline for a live "tokens this turn" count (replay/dedup safe).
@@ -586,6 +619,7 @@ export function useChatSessionState({
       setTurnStartedAt(null);
       setTurnTokens(null);
       turnStartContextRef.current = null;
+      turnAnchoredBySendRef.current = false;
     }
 
     setCurrentSessionId(selectedSession.id);
@@ -614,13 +648,30 @@ export function useChatSessionState({
         setTotalMessages(slot.total);
         if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
         // Reopening a mid-turn conversation: adopt the REAL server turn start +
-        // token baseline. Only when the server reports an open turn (truthy) — a
-        // null here means the last turn completed and must not clobber a turn the
-        // user just started locally in this same session.
+        // token baseline. The server's "open turn" can be STALE — an aborted or
+        // interrupted turn never writes a `result` event, so its old prompt reads
+        // as open forever. Blindly adopting that anchored the elapsed timer
+        // minutes/hours in the past ("timer shows longer than we waited"). Trust
+        // it only while the session is actually running, and never over a turn
+        // the user just started here (the send moment is authoritative).
         if (slot.turnStartedAt) {
           const parsed = Date.parse(slot.turnStartedAt);
-          if (!Number.isNaN(parsed)) setTurnStartedAt(parsed);
-          turnStartContextRef.current = slot.turnStartContextTokens ?? turnStartContextRef.current ?? null;
+          // "Actually running" per surface: this view's own stream, the local
+          // transcript watcher (local sessions), or the agent-status poll's
+          // worker state (remote agents — the watcher never carries cse_ ids).
+          const running =
+            isLoadingRef.current ||
+            sessionActivityStore.isRunning(selectedSession.id) ||
+            (selectedProject.remoteSessionId === selectedSession.id &&
+              selectedProject.remoteRunning === true);
+          if (!Number.isNaN(parsed) && running && !turnAnchoredBySendRef.current) {
+            setTurnStartedAt(parsed);
+            turnStartContextRef.current = slot.turnStartContextTokens ?? turnStartContextRef.current ?? null;
+          }
+        } else if (!isLoadingRef.current) {
+          // Server says no open turn and nothing is running here: drop any
+          // leftover anchor so it can't inflate the next turn's timer.
+          clearTurnTimer();
         }
       }
       setIsLoadingSessionMessages(false);
@@ -628,6 +679,7 @@ export function useChatSessionState({
       setIsLoadingSessionMessages(false);
     });
   }, [
+    clearTurnTimer,
     pendingViewSessionRef,
     resetStreamingState,
     selectedProject,
@@ -970,6 +1022,8 @@ export function useChatSessionState({
     turnStartedAt,
     turnTokens,
     noteTurnContextTokens,
+    noteLocalTurnStart,
+    clearTurnTimer,
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,

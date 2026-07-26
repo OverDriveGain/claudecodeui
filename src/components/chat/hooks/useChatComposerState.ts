@@ -55,6 +55,8 @@ interface UseChatComposerStateArgs {
   scrollToBottom: () => void;
   addMessage: (msg: ChatMessage) => void;
   setIsLoading: (loading: boolean) => void;
+  /** Anchors the turn timer to the exact send moment (no-op for queued mid-turn sends). */
+  noteLocalTurnStart?: () => void;
   setCanAbortSession: (canAbort: boolean) => void;
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
@@ -192,6 +194,7 @@ export function useChatComposerState({
   scrollToBottom,
   addMessage,
   setIsLoading,
+  noteLocalTurnStart,
   setCanAbortSession,
   setClaudeStatus,
   setIsUserScrolledUp,
@@ -659,6 +662,9 @@ export function useChatComposerState({
       };
 
       addMessage(userMessage);
+      // The send moment is the true start of a turn initiated here — stamp it
+      // before arming isLoading so no stale/derived anchor can outrank it.
+      noteLocalTurnStart?.();
       setIsLoading(true); // Processing banner starts
       setCanAbortSession(true);
       setClaudeStatus({
@@ -834,6 +840,7 @@ export function useChatComposerState({
       addMessage,
       setClaudeStatus,
       setIsLoading,
+      noteLocalTurnStart,
       setIsUserScrolledUp,
       slashCommands,
     ],

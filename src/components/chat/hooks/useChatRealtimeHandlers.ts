@@ -63,6 +63,12 @@ interface UseChatRealtimeHandlersArgs {
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
   /** Feed an assistant frame's absolute context position to the live turn counter. */
   noteTurnContextTokens?: (contextTokens: number) => void;
+  /**
+   * Drop the turn timer anchor. Turn-end frames must call this even when
+   * isLoading is already false (a turn watched via externalRunning never armed
+   * it), or the anchor lingers and inflates the next turn's elapsed clock.
+   */
+  clearTurnTimer?: () => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   streamTimerRef: MutableRefObject<number | null>;
@@ -92,6 +98,7 @@ export function useChatRealtimeHandlers({
   setClaudeStatus,
   setTokenBudget,
   noteTurnContextTokens,
+  clearTurnTimer,
   setPendingPermissionRequests,
   pendingViewSessionRef,
   streamTimerRef,
@@ -174,6 +181,7 @@ export function useChatRealtimeHandlers({
           onSessionNotProcessing?.(statusSessionId);
           if (isCurrentSession) {
             setIsLoading(false);
+            clearTurnTimer?.();
             setCanAbortSession(false);
             setClaudeStatus(null);
           }
@@ -314,6 +322,7 @@ export function useChatRealtimeHandlers({
           accumulatedStreamRef.current = '';
 
           setIsLoading(false);
+          clearTurnTimer?.();
           setCanAbortSession(false);
           setClaudeStatus(null);
         } else if (sid) {
@@ -384,6 +393,7 @@ export function useChatRealtimeHandlers({
       case 'error': {
         if (drivesActiveView) {
           setIsLoading(false);
+          clearTurnTimer?.();
           setCanAbortSession(false);
           setClaudeStatus(null);
           pendingViewSessionRef.current = null;
@@ -460,6 +470,7 @@ export function useChatRealtimeHandlers({
     setClaudeStatus,
     setTokenBudget,
     noteTurnContextTokens,
+    clearTurnTimer,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamTimerRef,

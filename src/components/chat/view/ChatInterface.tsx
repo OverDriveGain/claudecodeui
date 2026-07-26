@@ -111,6 +111,8 @@ function ChatInterface({
     turnStartedAt,
     turnTokens,
     noteTurnContextTokens,
+    noteLocalTurnStart,
+    clearTurnTimer,
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
@@ -236,6 +238,7 @@ function ChatInterface({
     scrollToBottom: scrollToBottomSmooth,
     addMessage,
     setIsLoading,
+    noteLocalTurnStart,
     setCanAbortSession,
     setClaudeStatus,
     setIsUserScrolledUp,
@@ -305,8 +308,9 @@ function ChatInterface({
       projectPath: selectedProject.fullPath || selectedProject.path || '',
     });
     setIsLoading(false);
+    clearTurnTimer();
     setCanAbortSession(false);
-  }, [selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession]);
+  }, [selectedProject, selectedSession, sessionStore, setIsLoading, clearTurnTimer, setCanAbortSession]);
 
   useChatRealtimeHandlers({
     latestMessage,
@@ -320,6 +324,7 @@ function ChatInterface({
     setClaudeStatus,
     setTokenBudget,
     noteTurnContextTokens,
+    clearTurnTimer,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamTimerRef,
