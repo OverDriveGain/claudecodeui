@@ -51,6 +51,11 @@ final class RelayClient: ObservableObject {
     @Published var context: ContextUsage?
 
     private let token: String
+    /// Host this conversation talks to (agent→host pinning); nil = active host.
+    /// The pinned host lands file attachments on the agent's own disk — the
+    /// relay mirrors the turn to every attached host, so viewing works anywhere
+    /// but SENDING must hit the agent's machine.
+    private let origin: String?
     private(set) var sessionId: String
     private let isRemote: Bool
     /// Remote agent sessions accept messages MID-TURN (the relay routes them
@@ -65,11 +70,12 @@ final class RelayClient: ObservableObject {
     private var reconnectAttempts = 0
     private var intentionalClose = false
 
-    init(token: String, sessionId: String, isRemote: Bool, projectPath: String? = nil) {
+    init(token: String, sessionId: String, isRemote: Bool, projectPath: String? = nil, origin: String? = nil) {
         self.token = token
         self.sessionId = sessionId
         self.isRemote = isRemote
         self.projectPath = projectPath
+        self.origin = origin
     }
 
     // MARK: Lifecycle
@@ -81,7 +87,7 @@ final class RelayClient: ObservableObject {
 
     private func openSocket() {
         guard task == nil else { return }
-        let ws = URLSession.shared.webSocketTask(with: Config.webSocketURL(token: token))
+        let ws = URLSession.shared.webSocketTask(with: Config.webSocketURL(token: token, origin: origin))
         task = ws
         ws.resume()
         connected = true
@@ -140,12 +146,18 @@ final class RelayClient: ObservableObject {
     func send(_ text: String, attachments: [[String: String]] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        // Images render inline in the bubble; only non-image files fall back to a
+        // "📎 name" chip line.
+        let imageURLs = attachments.compactMap { $0["data"] }.filter { $0.hasPrefix("data:image/") }
+        let otherFiles = attachments.filter { !($0["data"]?.hasPrefix("data:image/") ?? false) }
         var shown = trimmed
-        if !attachments.isEmpty {
-            let names = attachments.compactMap { $0["name"] }.map { "📎 \($0)" }.joined(separator: "\n")
+        if !otherFiles.isEmpty {
+            let names = otherFiles.compactMap { $0["name"] }.map { "📎 \($0)" }.joined(separator: "\n")
             shown = shown.isEmpty ? names : shown + "\n" + names
         }
-        appendOrReplace(ChatMessage(id: "local-\(nextSeq())", kind: "text", role: "user", content: shown))
+        var localMsg = ChatMessage(id: "local-\(nextSeq())", kind: "text", role: "user", content: shown)
+        if !imageURLs.isEmpty { localMsg.images = imageURLs }
+        appendOrReplace(localMsg)
         isLoading = true
         // A turn started HERE is anchored exactly by the send moment; a mid-turn
         // queued message must NOT restart the timer (isLoading was already true).
@@ -256,7 +268,7 @@ final class RelayClient: ObservableObject {
         guard !isLoading else { return }
         Task { [weak self] in
             guard let self else { return }
-            if let h = try? await APIClient(token: self.token).history(sessionId: self.sessionId) {
+            if let h = try? await APIClient(token: self.token, origin: self.origin).history(sessionId: self.sessionId) {
                 if !self.isLoading { self.setHistory(h.messages) }
                 if let ctx = h.context { self.context = ctx }
             }

@@ -8,6 +8,8 @@ struct FilesView: View {
     let projectId: String
     let token: String
     let title: String
+    /// Host override for conversations routed to the agent's assigned host.
+    var origin: String? = nil
 
     @State private var nodes: [FileNode] = []
     @State private var loading = true
@@ -22,7 +24,7 @@ struct FilesView: View {
             } else if nodes.isEmpty {
                 EmptyStateView(text: "No files.")
             } else {
-                FileBrowser(title: "Files", projectId: projectId, token: token, preloaded: nodes)
+                FileBrowser(title: "Files", projectId: projectId, token: token, origin: origin, preloaded: nodes)
             }
         }
         .background(Theme.background)
@@ -37,7 +39,7 @@ struct FilesView: View {
         do {
             // Shallow load: two levels render instantly; deeper folders fetch on
             // demand when opened (the old whole-tree call was multi-MB and slow).
-            let tree = try await APIClient(token: token).files(projectId: projectId, depth: 2)
+            let tree = try await APIClient(token: token, origin: origin).files(projectId: projectId, depth: 2)
             nodes = tree.sorted {
                 if $0.isDir != $1.isDir { return $0.isDir && !$1.isDir }
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -58,6 +60,7 @@ struct FileBrowser: View {
     let title: String
     let projectId: String
     let token: String
+    var origin: String? = nil
     /// Preloaded children, or nil → fetch `fetchPath` on appear.
     var preloaded: [FileNode]? = nil
     var fetchPath: String? = nil
@@ -100,7 +103,7 @@ struct FileBrowser: View {
         .task {
             guard preloaded == nil, fetched == nil, let fetchPath else { return }
             do {
-                let tree = try await APIClient(token: token).files(projectId: projectId, path: fetchPath, depth: 2)
+                let tree = try await APIClient(token: token, origin: origin).files(projectId: projectId, path: fetchPath, depth: 2)
                 fetched = tree.sorted {
                     if $0.isDir != $1.isDir { return $0.isDir && !$1.isDir }
                     return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -116,14 +119,14 @@ struct FileBrowser: View {
         if node.isDir {
             NavigationLink {
                 if node.needsFetch {
-                    FileBrowser(title: node.name, projectId: projectId, token: token, fetchPath: node.path)
+                    FileBrowser(title: node.name, projectId: projectId, token: token, origin: origin, fetchPath: node.path)
                 } else {
-                    FileBrowser(title: node.name, projectId: projectId, token: token, preloaded: node.sortedChildren)
+                    FileBrowser(title: node.name, projectId: projectId, token: token, origin: origin, preloaded: node.sortedChildren)
                 }
             } label: { label(node) }
         } else {
             NavigationLink {
-                FilePreviewView(name: node.name, path: node.path, projectId: projectId, token: token)
+                FilePreviewView(name: node.name, path: node.path, projectId: projectId, token: token, origin: origin)
             } label: { label(node) }
         }
     }
@@ -147,6 +150,7 @@ struct FilePreviewView: View {
     let path: String
     let projectId: String
     let token: String
+    var origin: String? = nil
 
     @State private var text: String?
     @State private var loading = true
@@ -187,7 +191,7 @@ struct FilePreviewView: View {
 
     @ViewBuilder
     private var media: some View {
-        if let url = Config.fileStreamURL(projectId: projectId, path: path, token: token, delivered: false) {
+        if let url = Config.fileStreamURL(projectId: projectId, path: path, token: token, delivered: false, origin: origin) {
             if isImage {
                 RemoteImage(url: url) {
                     Label(name, systemImage: "photo").font(.caption).foregroundColor(Theme.mutedText)
@@ -203,7 +207,7 @@ struct FilePreviewView: View {
 
     private func load() async {
         do {
-            text = try await APIClient(token: token).fileText(projectId: projectId, filePath: path)
+            text = try await APIClient(token: token, origin: origin).fileText(projectId: projectId, filePath: path)
         } catch {
             self.error = "Can’t preview this file."
         }

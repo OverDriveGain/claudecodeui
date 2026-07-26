@@ -76,6 +76,54 @@ enum RemoteImageCache {
     }()
 }
 
+/// Renders an inline image from a `data:image/...;base64,...` URL — used for
+/// photos the user attached to their own message (decoded once, off the main
+/// thread, and downsampled so a full-res photo can't spike memory).
+struct DataURLImage: View {
+    let dataURL: String
+
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else if failed {
+                Image(systemName: "photo").foregroundColor(Theme.mutedText)
+            } else {
+                ProgressView()
+            }
+        }
+        .task { await decode() }
+    }
+
+    private func decode() async {
+        guard image == nil else { return }
+        let src = dataURL
+        let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
+            guard let comma = src.firstIndex(of: ","), src.hasPrefix("data:"),
+                  let data = Data(base64Encoded: String(src[src.index(after: comma)...])) else { return nil }
+            return downsampledImage(data)
+        }.value
+        if let decoded { image = decoded } else { failed = true }
+    }
+}
+
+/// Decode `data` at a bounded pixel size (shared by RemoteImage-style loaders).
+func downsampledImage(_ data: Data, maxPixel: Int = 1600) -> UIImage? {
+    guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return UIImage(data: data) }
+    let opts: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+    ]
+    guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+        return UIImage(data: data)
+    }
+    return UIImage(cgImage: cg)
+}
+
 /// Inline preview of a file an agent delivered (SendUserFile). Streams from the
 /// authenticated delivered-file endpoint (token in the query — media elements
 /// can't set headers). Range is supported server-side so video/audio seek.
@@ -83,9 +131,10 @@ struct DeliveredMediaView: View {
     let path: String
     let projectId: String
     let token: String
+    var origin: String? = nil
 
     private var url: URL? {
-        Config.fileStreamURL(projectId: projectId, path: path, token: token, delivered: true)
+        Config.fileStreamURL(projectId: projectId, path: path, token: token, delivered: true, origin: origin)
     }
     private var ext: String { (path as NSString).pathExtension.lowercased() }
     private var name: String { (path as NSString).lastPathComponent }

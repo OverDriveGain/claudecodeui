@@ -8,6 +8,9 @@ struct MessageRow: View, Equatable {
     let message: ChatMessage
     let projectId: String
     let token: String
+    /// Host override for routed conversations (delivered files stream from the
+    /// agent's assigned host).
+    var origin: String? = nil
     /// Visible action row (Copy) — only the newest assistant message gets one,
     /// like the Claude/ChatGPT apps; long-press covers every other message.
     var showActions = false
@@ -67,16 +70,33 @@ struct MessageRow: View, Equatable {
 
     @ViewBuilder
     private var textBody: some View {
-        if isUser {
+        if message.isInjected == true {
+            // Harness-injected context (skill payloads etc.) rides in as a
+            // user-role row — but the person never typed it. A right-side bubble
+            // reads as "I sent this", so it renders as a dimmed, collapsed chip
+            // on the agent side instead (matching the web client).
+            InjectedContextChip(body: trimmedBody)
+        } else if isUser {
             HStack {
                 Spacer(minLength: 32)
-                MarkdownView(text: trimmedBody)
-                    .foregroundColor(Theme.text)
-                    .frame(maxWidth: 310, alignment: .leading)
-                    .padding(.horizontal, 15)
-                    .padding(.vertical, 11)
-                    .background(Theme.userBubble)
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let images = message.images, !images.isEmpty {
+                        ForEach(images, id: \.self) { url in
+                            DataURLImage(dataURL: url)
+                                .frame(maxWidth: 260, maxHeight: 260, alignment: .trailing)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                        }
+                    }
+                    if !trimmedBody.isEmpty {
+                        MarkdownView(text: trimmedBody)
+                            .foregroundColor(Theme.text)
+                            .frame(maxWidth: 310, alignment: .leading)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 11)
+                            .background(Theme.userBubble)
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                    }
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -152,13 +172,26 @@ struct MessageRow: View, Equatable {
                 Text(caption).font(.caption).foregroundColor(Theme.mutedText)
             }
             ForEach(files, id: \.self) { f in
-                DeliveredMediaView(path: f, projectId: projectId, token: token)
+                DeliveredMediaView(path: f, projectId: projectId, token: token, origin: origin)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: helpers
+
+    static func injectedLabel(for body: String) -> String {
+        // First markdown heading if there is one, else the first line, clipped.
+        let heading = body
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .first { $0.hasPrefix("#") }?
+            .drop { $0 == "#" || $0 == " " }
+        let source = heading.map(String.init)
+            ?? String(body.drop { $0.isWhitespace }.prefix { !$0.isNewline })
+        let trimmed = source.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return "Injected instructions" }
+        return trimmed.count > 56 ? String(trimmed.prefix(56)).trimmingCharacters(in: .whitespaces) + "…" : trimmed
+    }
 
     private func icon(for tool: String?) -> String {
         switch tool ?? "" {
@@ -172,5 +205,53 @@ struct MessageRow: View, Equatable {
         case "SendUserFile": return "paperclip"
         default: return "wrench.and.screwdriver"
         }
+    }
+}
+
+/// Collapsed "Context added automatically" chip for harness-injected content.
+/// Tap to expand the full payload; long-press the expanded text to copy.
+private struct InjectedContextChip: View {
+    let body_: String
+    @State private var expanded = false
+
+    init(body: String) { self.body_ = body }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                    Image(systemName: "gearshape")
+                        .font(.caption2)
+                    Text("Context · \(MessageRow.injectedLabel(for: body_))")
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .foregroundColor(Theme.mutedText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Theme.surface)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
+            }
+            if expanded {
+                ScrollView {
+                    Text(body_)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(Theme.mutedText)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(maxHeight: 260)
+                .background(Theme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

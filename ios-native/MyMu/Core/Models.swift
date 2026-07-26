@@ -86,19 +86,75 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var requestId: String? = nil
     var isError: Bool? = nil
     var timestamp: String? = nil
+    /// Harness-injected content shipped as a user-role row (skill payloads,
+    /// synthetic context) — the person did NOT type it; rendered as a collapsed
+    /// context chip on the agent side, never as a user bubble.
+    var isInjected: Bool? = nil
     /// Arbitrary tool input / result / permission payload (rendered richly later).
     var toolInput: AnyCodable? = nil
     var input: AnyCodable? = nil
     var toolResult: AnyCodable? = nil
+    /// Images attached to this message, as `data:` URLs — set for a user message
+    /// that carried photos/screenshots so the bubble shows them, not just a chip.
+    var images: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, role, content, text, displayText, toolName, toolId
-        case status, summary, requestId, isError, timestamp, toolInput, input, toolResult
+        case status, summary, requestId, isError, timestamp, isInjected, toolInput, input, toolResult, images
     }
 
     /// The human-visible body for a simple text bubble.
     var bodyText: String {
         displayText ?? content ?? text ?? ""
+    }
+}
+
+// Tolerant decoding: one message whose field arrives in an unexpected shape (a
+// `content` array of blocks, a null where a string was expected, a stray type)
+// must NEVER throw and blank the entire transcript. Every field decodes with a
+// fallback; text-bearing fields also flatten block arrays into their text.
+extension ChatMessage {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? "text"
+        role = try? c.decode(String.self, forKey: .role)
+        content = ChatMessage.looseText(c, .content)
+        text = ChatMessage.looseText(c, .text)
+        displayText = ChatMessage.looseText(c, .displayText)
+        toolName = try? c.decode(String.self, forKey: .toolName)
+        toolId = try? c.decode(String.self, forKey: .toolId)
+        status = try? c.decode(String.self, forKey: .status)
+        summary = ChatMessage.looseText(c, .summary)
+        requestId = try? c.decode(String.self, forKey: .requestId)
+        isError = try? c.decode(Bool.self, forKey: .isError)
+        timestamp = try? c.decode(String.self, forKey: .timestamp)
+        isInjected = try? c.decode(Bool.self, forKey: .isInjected)
+        toolInput = try? c.decode(AnyCodable.self, forKey: .toolInput)
+        input = try? c.decode(AnyCodable.self, forKey: .input)
+        toolResult = try? c.decode(AnyCodable.self, forKey: .toolResult)
+        images = try? c.decode([String].self, forKey: .images)
+    }
+
+    /// A string field that may instead arrive as blocks (`[{type:"text",text:…}]`)
+    /// or an object — flatten to text rather than throwing.
+    private static func looseText(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> String? {
+        if let s = try? c.decode(String.self, forKey: key) { return s }
+        if let any = try? c.decode(AnyCodable.self, forKey: key) { return flattenText(any.value) }
+        return nil
+    }
+
+    private static func flattenText(_ v: Any) -> String? {
+        if let s = v as? String { return s }
+        if let arr = v as? [Any] {
+            let parts = arr.compactMap { flattenText($0) }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
+        }
+        if let d = v as? [String: Any] {
+            if let t = d["text"] as? String { return t }
+            if let inner = d["content"] { return flattenText(inner) }
+        }
+        return nil
     }
 }
 
@@ -146,6 +202,23 @@ struct HistoryResponse: Codable {
     /// Context position (tokens) just before the open turn started — baseline
     /// for the live "tokens this turn" counter.
     let turnStartContextTokens: Int?
+}
+
+// Tolerant decoding: a wrong-typed meta field (e.g. total as a string, an
+// unexpected context shape) must not sink the whole transcript. Messages already
+// decode leniently per-element; everything else falls back to nil.
+extension HistoryResponse {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        messages = (try? c.decode([ChatMessage].self, forKey: .messages)) ?? []
+        total = try? c.decode(Int.self, forKey: .total)
+        hasMore = try? c.decode(Bool.self, forKey: .hasMore)
+        offset = try? c.decode(Int.self, forKey: .offset)
+        limit = try? c.decode(Int.self, forKey: .limit)
+        context = try? c.decode(ContextUsage.self, forKey: .context)
+        turnStartedAt = try? c.decode(String.self, forKey: .turnStartedAt)
+        turnStartContextTokens = try? c.decode(Int.self, forKey: .turnStartContextTokens)
+    }
 }
 
 // MARK: - AnyCodable — hold arbitrary JSON for tool payloads

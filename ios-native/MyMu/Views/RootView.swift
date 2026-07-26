@@ -5,7 +5,11 @@ struct RootView: View {
 
     var body: some View {
         if appState.isAuthenticated {
-            MainTabView()
+            // Re-id on account switch: the whole tab tree (stores, relay
+            // sockets) rebuilds against the newly-active server + token.
+            MainTabView().id(appState.accountEpoch)
+        } else if appState.isDemo {
+            MainTabView(store: .demo())
         } else {
             LoginView()
         }

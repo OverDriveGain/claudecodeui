@@ -16,6 +16,14 @@ struct ChatView: View {
     let projectId: String
     let isRemote: Bool
     let title: String
+    /// Agent→host pinning: host origin + token this conversation is routed to
+    /// (nil = active account's host). Set when the agent is assigned to another
+    /// host the app has a saved login for.
+    let origin: String?
+    private let chatToken: String
+    /// Pinned to a host with NO saved login: label shown by the composer's
+    /// file warning ("log in to <host> to share files"). nil = files work.
+    let pinnedHostNeedingLogin: String?
 
     @EnvironmentObject var appState: AppState
     @StateObject private var relay: RelayClient
@@ -30,13 +38,24 @@ struct ChatView: View {
     @State private var followMode = true
     // Phantom-gap guard: the content bottom may never REST above the viewport
     // bottom (that's the "conversation looks blank until I scroll" bug — content
-    // shrinks after we pinned the bottom: end-of-turn history reconcile, media
-    // rows resizing, keyboard dismissal). We watch where the bottom sentinel
-    // actually sits; if it rests well above the fold for ~½s, re-pin.
-    @State private var sentinelBottom: CGFloat = .greatestFiniteMagnitude
+    // shrinks after we pinned the bottom, or an animated pin overshoots into
+    // LazyVStack estimated space: end-of-turn reconcile, media rows resizing,
+    // keyboard open/close). Measured from the WHOLE content block's frame — the
+    // old bottom-sentinel row could be dropped by the lazy container exactly in
+    // the over-scrolled state, which cancelled the repair and left the chat
+    // blank until a manual scroll (the "chat disappears after I send" bug).
+    @State private var contentBottom: CGFloat = .greatestFiniteMagnitude
     @State private var viewportHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var gapRepair: Task<Void, Never>?
+    /// Bumped by the composer right before a send — the transcript pins itself
+    /// to the bottom across the frames the send mutation needs to lay out.
+    @State private var sendPin = 0
+    /// While set (send + ~0.6s), the instant revision/viewport pins stand down so
+    /// the one animated glide to the bottom is actually visible — the Claude-app
+    /// send feel: the new bubble lands, then the view glides down, no teleport.
+    @State private var glideUntil = Date.distantPast
+    @State private var revisionScrollPending = false
     /// False until the opening transcript is pinned to the bottom — content is
     /// hidden (loader shown) so the settling scroll is never visible.
     @State private var revealed = false
@@ -44,14 +63,19 @@ struct ChatView: View {
     private let previewMessages: [ChatMessage]?
 
     init(sessionId: String, projectId: String, isRemote: Bool, title: String, token: String,
-         projectPath: String? = nil, previewMessages: [ChatMessage]? = nil) {
+         projectPath: String? = nil, previewMessages: [ChatMessage]? = nil,
+         origin: String? = nil, pinnedHostNeedingLogin: String? = nil) {
         self.sessionId = sessionId
         self.projectId = projectId
         self.isRemote = isRemote
         self.title = title
         self.previewMessages = previewMessages
+        self.origin = origin
+        self.chatToken = token
+        self.pinnedHostNeedingLogin = pinnedHostNeedingLogin
         _relay = StateObject(wrappedValue: RelayClient(token: token, sessionId: sessionId,
-                                                       isRemote: isRemote, projectPath: projectPath))
+                                                       isRemote: isRemote, projectPath: projectPath,
+                                                       origin: origin))
     }
 
     var body: some View {
@@ -65,7 +89,8 @@ struct ChatView: View {
                 // whole chat re-rendered per keystroke, the visible-message filter
                 // walked every message's content — typing crawled in conversations
                 // with megabyte transcripts.
-                ChatComposer(relay: relay, onWillSend: { followMode = true })
+                ChatComposer(relay: relay, pinnedHostNeedingLogin: pinnedHostNeedingLogin,
+                             onWillSend: { followMode = true; sendPin += 1 })
             }
         }
         .navigationTitle(title)
@@ -79,7 +104,7 @@ struct ChatView: View {
                         ContextMeter(usage: ctx)
                     }
                     NavigationLink {
-                        FilesView(projectId: projectId, token: appState.token ?? "", title: title)
+                        FilesView(projectId: projectId, token: chatToken, title: title, origin: origin)
                     } label: {
                         Image(systemName: "folder").foregroundColor(Theme.primary)
                     }
@@ -96,7 +121,7 @@ struct ChatView: View {
         .task {
             guard isRemote else { return }
             while !Task.isCancelled {
-                await relay.syncRunningState(appState.api)
+                await relay.syncRunningState(APIClient(token: chatToken, origin: origin))
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }
@@ -106,7 +131,7 @@ struct ChatView: View {
         .onChange(of: scenePhase) { phase in
             guard phase == .active, previewMessages == nil else { return }
             relay.ensureConnected()
-            Task { await relay.syncRunningState(appState.api) }
+            Task { await relay.syncRunningState(APIClient(token: chatToken, origin: origin)) }
         }
         .onDisappear { relay.disconnect() }
     }
@@ -115,7 +140,17 @@ struct ChatView: View {
         GeometryReader { outer in
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                // NON-lazy on purpose (Manar's diagnosis, 2026-07-25): LazyVStack
+                // only ESTIMATES unmeasured row heights, and bash/tool rows are
+                // far taller than the estimate — at certain scroll offsets it
+                // decided a visible message was off-screen and un-rendered it
+                // ("messages hide when I scroll"), and every scrollTo landed in
+                // estimated space (the overshoot family of bugs). A plain VStack
+                // measures ALL rows up front: nothing hides, every scroll targets
+                // real layout. History is capped (~200 rows) and MessageRow is
+                // .equatable(), so the one-time layout cost is small and masked
+                // by the reveal loader.
+                VStack(alignment: .leading, spacing: 18) {
                     if loadingHistory {
                         MyMuLoader().frame(maxWidth: .infinity).padding(.top, 24)
                     }
@@ -123,51 +158,44 @@ struct ChatView: View {
                         Text(loadError).font(.footnote).foregroundColor(Theme.danger)
                     }
                     ForEach(visibleMessages) { m in
-                        MessageRow(message: m, projectId: projectId, token: appState.token ?? "",
-                                   showActions: m.id == lastAssistantTextId)
+                        MessageRow(message: m, projectId: projectId, token: chatToken,
+                                   origin: origin, showActions: m.id == lastAssistantTextId)
                             .equatable()
                             .id(m.id)
                     }
-                    // Bottom sentinel: visible ⇒ the viewport is at the bottom. Drives
-                    // the ↓ pill, re-arms follow-mode, and feeds the gap guard.
+                    // Bottom anchor for scrollTo. Its onAppear/onDisappear no longer
+                    // mean anything in a NON-lazy VStack (every row "appears" once
+                    // and never disappears), so bottom-ness is derived from the
+                    // content frame geometry in onPreferenceChange below.
                     Color.clear.frame(height: 1).id("bottom")
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: SentinelBottomKey.self,
-                                                   value: g.frame(in: .named("chatScroll")).maxY)
-                        })
-                        .onAppear { atBottom = true; followMode = true }
-                        .onDisappear {
-                            atBottom = false
-                            // Offscreen sentinel ⇒ no visible gap; a stale small value
-                            // must never yank a user who scrolled up to read.
-                            sentinelBottom = .greatestFiniteMagnitude
-                            gapRepair?.cancel()
-                        }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
-                // Anchor the transcript to the BOTTOM: force the content to be at
-                // least as tall as the viewport and bottom-align it (the iMessage/
-                // ChatGPT layout). When the transcript is shorter than the screen —
-                // or SHRINKS after we pinned the bottom (loader row removed at turn
-                // end, history reconcile swapping in a shorter transcript, keyboard
-                // dismissal) — the last message stays glued to the composer instead
-                // of leaving a blank strip above it. Taller-than-screen transcripts
-                // exceed minHeight, so normal scrolling + follow-mode take over.
+                // Bottom-align SHORT transcripts: force the content at least as tall
+                // as the viewport and bottom-align it, so a few messages rest on the
+                // composer instead of floating at the top. defaultScrollAnchor alone
+                // does not do this — it only positions OVERFLOWING content.
                 .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .bottomLeading)
+                // The whole content block's frame in scroll-viewport space: its
+                // height (short-transcript alignment) AND where its bottom edge
+                // sits (the gap guard). Always measured — unlike a lazy row, this
+                // background can't be recycled away in the over-scrolled state.
                 .background(GeometryReader { g in
-                    Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                    Color.clear.preference(key: ContentFrameKey.self,
+                                           value: g.frame(in: .named("chatScroll")))
                 })
             }
+            // Native bottom anchoring for LONG transcripts: the scroll rests at the
+            // true bottom on open and sticks there as content grows or shrinks, which
+            // is what the manual scrollTo/settle timers were approximating.
+            .defaultScrollAnchor(.bottom)
             .coordinateSpace(name: "chatScroll")
             .onAppear { viewportHeight = outer.size.height }
             .onChange(of: outer.size.height) { h in
                 let delta = h - viewportHeight
                 viewportHeight = h
-                // Only keyboard-scale changes (composer line-wraps are ~20pt and
-                // settling on those made typing trigger scroll storms).
-                guard followMode, abs(delta) > 60 else { return }
-                if delta < 0 {
+                guard followMode, abs(delta) > 8 else { return }
+                if delta < -60 {
                     // Keyboard OPENING: ride the system animation with ONE
                     // animated pin — repeated instant snaps mid-animation yanked
                     // the transcript up "in a flaky way". A silent correction
@@ -176,31 +204,95 @@ struct ChatView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                         if followMode { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
-                } else {
+                } else if delta > 60 {
                     // Keyboard DISMISSING (viewport grows): a single scrollTo
                     // loses the race against the inset animation and the view
                     // settles over-scrolled (blank strip below the last message,
                     // "have to scroll up") — re-pin across the animation frames.
                     settleToBottom(proxy)
+                } else {
+                    // Composer grew/shrank a line or two (typing wraps, clearing
+                    // on send, attachment chips). These small deltas used to be
+                    // ignored, hiding the transcript's last lines behind the
+                    // composer — one instant pin plus a settle correction keeps
+                    // the bottom flush without animation storms. During a send
+                    // glide, stand down: the glide (+ its correction) owns this.
+                    guard Date() >= glideUntil else { return }
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        if followMode { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
                 }
             }
-            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-            .onPreferenceChange(SentinelBottomKey.self) { v in
-                sentinelBottom = v
+            .onPreferenceChange(ContentFrameKey.self) { frame in
+                contentHeight = frame.height
+                contentBottom = frame.maxY
+                // Geometry-derived bottom-ness (replaces the lazy sentinel's
+                // appear/disappear): at bottom ⇔ the content's bottom edge sits
+                // at/inside the viewport. Reaching it re-arms follow-mode, same
+                // as the sentinel's onAppear used to.
+                let nearBottom = frame.maxY <= viewportHeight + 24
+                if nearBottom != atBottom {
+                    atBottom = nearBottom
+                    if nearBottom { followMode = true }
+                }
                 scheduleGapRepair(proxy)
+            }
+            // Send = one smooth glide (Claude-app feel): a beat for the new bubble
+            // to lay out, then a short eased scroll — never an instant teleport.
+            // A silent correction at the end catches composer-collapse/keyboard
+            // drift; the gap guard backstops any overshoot beyond that.
+            .onChange(of: sendPin) { _ in
+                glideUntil = Date().addingTimeInterval(0.6)
+                // 0.16s (was 0.08): the optimistic bubble AND the composer
+                // collapse need a beat to lay out — gliding earlier targets a
+                // bottom that still moves, overshooting past the conversation.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                    withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                // The eased glide over a LazyVStack overshoots into ESTIMATED row
+                // space — a blank strip under the new bubble. Correct silently the
+                // moment the animation lands (0.16 + 0.3 = 0.46s), again shortly
+                // after, and once more when composer collapse + keyboard insets
+                // have fully settled.
+                for delay in [0.5, 0.7, 0.95] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        if followMode { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                }
             }
             .scrollDismissesKeyboard(.interactively)
             // An explicit upward drag is the ONE gesture that means "stop following".
+            // 24pt: a real "scroll up to read" clears it instantly, but the finger
+            // wobble of a tap or an interactive keyboard-dismiss drag doesn't —
+            // a 12pt trigger disarmed following almost every touch, so replies
+            // streamed in below the fold ("chat scrolled away after I sent").
             .simultaneousGesture(
                 DragGesture().onChanged { v in
-                    if v.translation.height > 12 { followMode = false }
+                    if v.translation.height > 24 { followMode = false }
                 }
             )
-            // Follow every content mutation (stream chunks included) WITHOUT animation:
-            // animated jumps over a LazyVStack overshoot into estimated space — that
-            // was the "big empty gap below the last message".
+            // Follow content mutations (stream chunks included) with a SHORT DELAY,
+            // never instantly: an immediate scrollTo fires before the just-appended
+            // row has real layout, so it lands in LazyVStack ESTIMATED space and
+            // overshoots past the conversation — worst with tall bash/tool blocks.
+            // The 0.12s beat lets the row lay out first; bursts coalesce into one
+            // scheduled scroll; a 0.35s silent correction catches late resizes.
+            // During a send glide the follow stands down (the glide owns it).
             .onChange(of: relay.revision) { _ in
-                if followMode { proxy.scrollTo("bottom", anchor: .bottom) }
+                guard followMode, Date() >= glideUntil else { return }
+                if revisionScrollPending { return }
+                revisionScrollPending = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    revisionScrollPending = false
+                    guard followMode, Date() >= glideUntil else { return }
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        if followMode, Date() >= glideUntil {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                }
             }
             // Initial jump after history load: lazy row heights settle over several
             // frames, so re-pin the bottom a few times, non-animated. The transcript
@@ -231,11 +323,18 @@ struct ChatView: View {
             // turn end (one of the blank-gap causes). An overlay shifts nothing.
             .overlay(alignment: .bottom) {
                 if relay.isLoading && !loadingHistory && revealed {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         MyMuLoader()
+                        // Live activity — what the agent is doing right now,
+                        // derived from the newest transcript frame. A long turn
+                        // reads as motion, not a frozen loader.
+                        Text(turnActivity + "…")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Theme.text.opacity(0.75))
+                            .lineLimit(1)
                         if let t = relay.turnStartedAt {
                             TimelineView(.periodic(from: t, by: 1)) { ctx in
-                                Text(Self.elapsedLabel(from: t, to: ctx.date))
+                                Text("· " + Self.elapsedLabel(from: t, to: ctx.date))
                                     .font(.system(size: 12, design: .monospaced))
                                     .foregroundColor(Theme.mutedText)
                             }
@@ -246,6 +345,10 @@ struct ChatView: View {
                                 .foregroundColor(Theme.mutedText)
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Theme.background.opacity(0.85))
+                    .clipShape(Capsule())
                     .padding(.bottom, 8)
                     .transition(.opacity)
                     .allowsHitTesting(false)
@@ -279,11 +382,13 @@ struct ChatView: View {
     }
 
     /// True when the transcript's bottom edge is resting visibly above the fold
-    /// while there is enough content to fill the screen — a phantom blank strip.
+    /// while there is enough content to fill the screen — a phantom blank strip
+    /// (over-scrolled past the end). Reading history puts the bottom BELOW the
+    /// fold (maxY > viewport), so this can never fire on a user who scrolled up.
     private var hasPhantomGap: Bool {
         viewportHeight > 0
             && contentHeight > viewportHeight + 1
-            && sentinelBottom < viewportHeight - 48
+            && contentBottom < viewportHeight - 8
     }
 
     /// Debounced repair: rubber-band bounces and in-flight layout put the
@@ -318,7 +423,7 @@ struct ChatView: View {
         return relay.messages.filter { m in
             switch m.kind {
             case "text":
-                return !isBlank(m.bodyText)
+                return !isBlank(m.bodyText) || (m.images?.isEmpty == false)
             case "tool_use", "error":
                 return true
             case "tool_result":
@@ -333,6 +438,42 @@ struct ChatView: View {
     /// action row (the apps keep older messages clean; long-press still copies).
     private var lastAssistantTextId: String? {
         relay.messages.last(where: { $0.kind == "text" && $0.role != "user" })?.id
+    }
+
+    /// What the agent is doing right now, from the newest transcript frame.
+    /// A specific backend status ("Waiting for permission") wins over it.
+    private var turnActivity: String {
+        if let s = relay.statusText, !s.isEmpty, s != "Processing", s != "Working..." { return s }
+        for m in relay.messages.reversed() {
+            switch m.kind {
+            case "tool_use":
+                return Self.activityLabel(for: m.toolName)
+            case "tool_result", "error":
+                return "Working"     // last tool finished — deciding the next step
+            case "text":
+                return m.role == "user" ? "Working" : "Writing"
+            default:
+                continue
+            }
+        }
+        return "Working"
+    }
+
+    /// Human activity label for a tool in use (mirrors the web client's map).
+    static func activityLabel(for tool: String?) -> String {
+        switch tool ?? "" {
+        case "Bash": return "Running a command"
+        case "Read": return "Reading files"
+        case "Edit", "Write", "ApplyPatch", "MultiEdit", "NotebookEdit": return "Editing files"
+        case "Grep", "Glob": return "Searching the code"
+        case "WebFetch", "WebSearch": return "Browsing the web"
+        case "Task", "Agent": return "Running a subagent"
+        case "TodoWrite": return "Planning"
+        case "SendUserFile": return "Sending a file"
+        case "AskUserQuestion": return "Asking a question"
+        case "": return "Working"
+        case let t: return "Using \(t)"
+        }
     }
 
     /// Pin the viewport to the bottom across the frames a LazyVStack needs to
@@ -409,7 +550,7 @@ struct ChatView: View {
         let sid = relay.sessionId
         if !sid.isEmpty {
             do {
-                let h = try await appState.api.history(sessionId: sid)
+                let h = try await APIClient(token: chatToken, origin: origin).history(sessionId: sid)
                 relay.setHistory(h.messages)
                 if let ctx = h.context { relay.context = ctx }
                 // If a stream frame already flipped the loader on, anchor the
@@ -424,16 +565,12 @@ struct ChatView: View {
     }
 }
 
-/// Bottom edge of the transcript's last row, in the scroll view's own
-/// coordinate space (so it's directly comparable to the viewport height).
-private struct SentinelBottomKey: PreferenceKey {
-    static var defaultValue: CGFloat = .greatestFiniteMagnitude
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-private struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+/// Frame of the whole transcript block in the scroll view's own coordinate
+/// space — height drives short-transcript alignment, maxY (the content's bottom
+/// edge, directly comparable to the viewport height) drives the gap guard.
+private struct ContentFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
 /// The message composer, isolated so DRAFT-TEXT keystrokes re-render only this
@@ -441,6 +578,11 @@ private struct ContentHeightKey: PreferenceKey {
 /// keystroke made typing crawl in conversations with large histories).
 private struct ChatComposer: View {
     @ObservedObject var relay: RelayClient
+    /// The agent is pinned to this host but the app has no saved login for it —
+    /// arbitrary/binary files can't reach the agent (only image/PDF/text embed
+    /// through the relay). Attaching an unsupported type warns instead of
+    /// silently dropping it server-side.
+    let pinnedHostNeedingLogin: String?
     /// Parent hook fired right before a send (re-arms follow-mode).
     let onWillSend: () -> Void
 
@@ -583,6 +725,20 @@ private struct ChatComposer: View {
             isImage: true))
     }
 
+    /// Types the relay can EMBED as content blocks (server toUserContent):
+    /// image/PDF/text reach any agent; everything else needs the file to LAND on
+    /// the agent's host — impossible without a login there.
+    private static let embeddableTextExts: Set<String> = [
+        "txt", "md", "markdown", "json", "csv", "tsv", "xml", "yaml", "yml", "toml", "ini", "cfg",
+        "conf", "env", "log", "js", "jsx", "ts", "tsx", "mjs", "cjs", "py", "rb", "go", "rs", "java",
+        "c", "cpp", "cc", "h", "hpp", "cs", "php", "sh", "bash", "zsh", "sql", "html", "htm", "css",
+        "scss", "less", "vue", "svelte", "svg", "dockerfile", "gitignore", "lua", "r", "kt", "swift",
+    ]
+    private static func embedsWithoutLanding(mime: String, name: String) -> Bool {
+        if mime.hasPrefix("image/") || mime.hasPrefix("text/") || mime == "application/pdf" { return true }
+        return embeddableTextExts.contains((name as NSString).pathExtension.lowercased())
+    }
+
     private func addFileAttachment(_ url: URL) {
         attachError = nil
         let scoped = url.startAccessingSecurityScopedResource()
@@ -596,6 +752,13 @@ private struct ChatComposer: View {
             return
         }
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        // Agent pinned to a host we're not logged into: this file type can't
+        // reach it (would be dropped server-side with a placeholder note).
+        if let host = pinnedHostNeedingLogin,
+           !Self.embedsWithoutLanding(mime: mime, name: url.lastPathComponent) {
+            attachError = "Can’t share this file: the agent runs on \(host), which you’re not signed in to. Add that account (profile → Add account) to send files."
+            return
+        }
         attachments.append(PendingAttachment(
             name: url.lastPathComponent,
             dataURL: "data:\(mime);base64,\(data.base64EncodedString())",

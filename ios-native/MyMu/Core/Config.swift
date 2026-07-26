@@ -3,7 +3,7 @@ import Foundation
 /// Server the app talks to. The native client uses the exact same REST + `/ws`
 /// API the MyMu web client does, just pointed at a user-configurable origin.
 enum Config {
-    static let defaultServerOrigin = "https://code.kaxtus.com"
+    static let defaultServerOrigin = "https://demo.proagenten.de"
     private static let originKey = "mymu.serverOrigin"
 
     static var serverOrigin: String {
@@ -27,8 +27,10 @@ enum Config {
     static var apiBaseURL: URL { URL(string: serverOrigin) ?? URL(string: defaultServerOrigin)! }
 
     /// wss://host/ws  — the single chat/live WebSocket the web client uses.
-    static func webSocketURL(token: String) -> URL {
-        let wsOrigin = serverOrigin
+    /// `origin` overrides the active server for a conversation routed to the
+    /// agent's assigned host (agent→host pinning); nil = active account's host.
+    static func webSocketURL(token: String, origin: String? = nil) -> URL {
+        let wsOrigin = (origin ?? serverOrigin)
             .replacingOccurrences(of: "https://", with: "wss://")
             .replacingOccurrences(of: "http://", with: "ws://")
         var comps = URLComponents(string: wsOrigin + "/ws")!
@@ -38,10 +40,12 @@ enum Config {
 
     /// Authenticated streaming URL for a delivered/preview file (media can't set
     /// an Authorization header, so the token rides as ?token= — the server accepts it).
-    static func fileStreamURL(projectId: String, path: String, token: String, delivered: Bool) -> URL? {
+    /// `origin` overrides the host for routed conversations (files live on the
+    /// agent's assigned host, not the active account's).
+    static func fileStreamURL(projectId: String, path: String, token: String, delivered: Bool, origin: String? = nil) -> URL? {
         let route = delivered ? "delivered-file" : "files/content"
         let encodedId = projectId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectId
-        var comps = URLComponents(string: serverOrigin + "/api/projects/\(encodedId)/\(route)")
+        var comps = URLComponents(string: (origin ?? serverOrigin) + "/api/projects/\(encodedId)/\(route)")
         comps?.queryItems = [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "token", value: token),

@@ -2,6 +2,9 @@ import SwiftUI
 
 struct LoginView: View {
     @EnvironmentObject var appState: AppState
+    /// Set when presented as a SHEET ("Add account") — called after a successful
+    /// login so the presenter can dismiss. Root-level usage leaves it nil.
+    var onSuccess: (() -> Void)? = nil
     @State private var serverOrigin = Config.serverOrigin
     @State private var username = ""
     @State private var password = ""
@@ -20,11 +23,15 @@ struct LoginView: View {
                         field("Username", text: $username, icon: "person")
                         secureField("Password", text: $password, icon: "lock")
                     }
+                    Text("Point MyMu at your own Claude Code UI server, or explore the demo.")
+                        .font(.caption).foregroundColor(Theme.mutedText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     if let error {
                         Text(error).foregroundColor(Theme.danger).font(.footnote)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     signInButton
+                    if onSuccess == nil { demoButton }
                     Spacer(minLength: 40)
                 }
                 .padding(24)
@@ -40,6 +47,9 @@ struct LoginView: View {
             Text("Drive your agents")
                 .font(.subheadline)
                 .foregroundColor(Theme.mutedText)
+            Text("v\(Bundle.main.appVersionLabel)")
+                .font(.caption2)
+                .foregroundColor(Theme.mutedText.opacity(0.7))
         }
     }
 
@@ -88,15 +98,35 @@ struct LoginView: View {
         .disabled(!canSubmit)
     }
 
+    private var demoButton: some View {
+        Button {
+            appState.enterDemo()
+        } label: {
+            Text("Try the demo")
+                .fontWeight(.medium)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .foregroundColor(Theme.primary)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+        }
+        .disabled(busy)
+    }
+
     private var canSubmit: Bool { !busy && !username.isEmpty && !password.isEmpty }
 
     private func doLogin() async {
         error = nil
         busy = true
+        // Point the global origin at the target server for the login call, but
+        // restore it on failure — an "Add account" attempt must not hijack the
+        // still-active environment when the password was wrong.
+        let previousOrigin = Config.serverOrigin
         Config.serverOrigin = serverOrigin
         do {
             try await appState.login(username: username, password: password)
+            onSuccess?()
         } catch {
+            Config.serverOrigin = previousOrigin
             self.error = error.localizedDescription
         }
         busy = false

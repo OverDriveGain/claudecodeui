@@ -48,18 +48,74 @@ struct EmptyStateView: View {
     }
 }
 
-/// Account / server / sign-out menu (MyMu keeps this in a menu, not a tab).
+/// Account switcher menu — Gmail-style multiple logins. Each saved account is a
+/// (server, user) pair; tapping one switches the WHOLE environment to it. "Add
+/// account" opens the same login screen pointed at any server.
 struct ProfileMenu: View {
     @EnvironmentObject var appState: AppState
+    @State private var showAddAccount = false
+    @State private var serverVersion: String?
     var body: some View {
         Menu {
-            if let u = appState.user { Text("Signed in as \(u.username)") }
-            Text(Config.serverOrigin)
+            ForEach(appState.accounts) { acct in
+                Button {
+                    appState.switchTo(acct)
+                } label: {
+                    if acct.id == appState.activeAccountId {
+                        Label("\(acct.username) · \(acct.hostLabel)", systemImage: "checkmark")
+                    } else {
+                        Text("\(acct.username) · \(acct.hostLabel)")
+                    }
+                }
+            }
             Divider()
+            Button {
+                showAddAccount = true
+            } label: {
+                Label("Add account", systemImage: "plus")
+            }
             Button("Sign out", role: .destructive) { appState.logout() }
+            Divider()
+            // Which build is on this phone — version from the marketing string,
+            // build stamped per dev install (CURRENT_PROJECT_VERSION on the CLI).
+            Text("App v\(Bundle.main.appVersionLabel)")
+            if let serverVersion {
+                Text("Server \(serverVersion)")
+            }
         } label: {
             Image(systemName: "person.crop.circle").foregroundColor(Theme.primary)
         }
+        .sheet(isPresented: $showAddAccount) {
+            LoginView(onSuccess: { showAddAccount = false })
+        }
+        .task(id: appState.accountEpoch) {
+            // Active host's backend build (/api/version, unauthenticated).
+            serverVersion = nil
+            guard let url = URL(string: Config.serverOrigin + "/api/version") else { return }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            var parts: [String] = []
+            if let v = obj["version"] as? String { parts.append("v\(v)") }
+            if let iso = obj["builtAt"] as? String {
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let d = f.date(from: iso) {
+                    let out = DateFormatter()
+                    out.dateFormat = "dd MMM HH:mm"
+                    parts.append("built \(out.string(from: d))")
+                }
+            }
+            serverVersion = parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+    }
+}
+
+extension Bundle {
+    /// "1.0.0 (250725.2114)" — marketing version + build number.
+    var appVersionLabel: String {
+        let v = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
     }
 }
 

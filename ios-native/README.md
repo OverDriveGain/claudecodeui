@@ -2,7 +2,7 @@
 
 A native SwiftUI client for MyMu (this CCUI product). **No webview** — it talks
 to the same REST + `/ws` API the web app uses, pointed at a configurable server
-(default `https://code.kaxtus.com`).
+(default `https://demo.proagenten.de`).
 
 Two shipping targets share this code:
 - **Standalone** MyMu app (this project).

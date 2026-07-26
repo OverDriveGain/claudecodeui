@@ -32,6 +32,9 @@ struct AgentsView: View {
         // publishes on real changes. .task cancels on tab switch automatically.
         .task {
             guard !store.isDemo else { return }
+            // Agent→host pinning map: loaded alongside the roster so opening a
+            // pinned agent routes its conversation to the right host.
+            await appState.refreshAgentHosts()
             while !Task.isCancelled {
                 if let st = try? await appState.api.agentStatus() {
                     store.applyAgentStatus(st)

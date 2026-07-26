@@ -19,9 +19,12 @@ enum APIError: LocalizedError {
 /// Thin REST client over the same endpoints the web app uses.
 struct APIClient {
     var token: String?
+    /// Per-conversation host override (agent→host pinning): requests go to this
+    /// origin instead of the active account's server. nil = active host.
+    var origin: String? = nil
 
     private func request(_ path: String, method: String = "GET", body: Data? = nil, auth: Bool = true) async throws -> Data {
-        guard let url = URL(string: Config.serverOrigin + path) else { throw APIError.badURL }
+        guard let url = URL(string: (origin ?? Config.serverOrigin) + path) else { throw APIError.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 30
@@ -100,5 +103,14 @@ struct APIClient {
         let sid = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId
         let data = try await request("/api/providers/sessions/\(sid)/messages?limit=\(limit)&offset=\(offset)")
         return try JSONDecoder().decode(HistoryResponse.self, from: data)
+    }
+
+    /// Agent → host assignments (admin-set on the server): agentKey → host
+    /// origin. Used to route a pinned agent's conversation through the saved
+    /// account matching its host, so file sends land on the agent's machine.
+    func agentHosts() async throws -> [String: String] {
+        struct R: Codable { let assignments: [String: String]? }
+        let data = try await request("/api/agent-hosts")
+        return (try JSONDecoder().decode(R.self, from: data)).assignments ?? [:]
     }
 }
