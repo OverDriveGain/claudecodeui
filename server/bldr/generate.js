@@ -238,16 +238,42 @@ function applyPane(workspacePath, id, result) {
 
 const CONCURRENCY = 2; // the provider effectively handles ~2 spawn sessions at once
 const jobs = new Map(); // workspacePath -> job
+const MAX_HISTORY = 30;
+const history = []; // finished job snapshots, newest first (admin Live activity)
+
+const snapshotJob = (workspacePath, j) => ({
+  workspace: path.basename(workspacePath),
+  running: j.running,
+  brief: j.brief,
+  panes: j.panes,
+  trace: j.trace,
+  endpoints: j.endpointLabels,
+  startedAt: j.startedAt,
+  finishedAt: j.finishedAt,
+});
 
 /** Current job status for a workspace (safe to serialize), or null. */
 export function getJob(workspacePath) {
   const j = jobs.get(workspacePath);
   if (!j) return null;
-  return { running: j.running, brief: j.brief, panes: j.panes, endpoints: j.endpointLabels, startedAt: j.startedAt, finishedAt: j.finishedAt };
+  return snapshotJob(workspacePath, j);
+}
+
+/** Admin view: every in-flight job + the last finished runs, all workspaces. */
+export function listJobs() {
+  const active = [];
+  for (const [wp, j] of jobs) if (j.running) active.push(snapshotJob(wp, j));
+  active.sort((a, b) => b.startedAt - a.startedAt);
+  return { active, recent: history.slice(0, MAX_HISTORY) };
 }
 
 const describeEndpoint = (ep) =>
   ep.label || (ep.backend === 'a2a' ? `${ep.provider}/${ep.skill}` : `${ep.model} @ ${ep.baseUrl}`);
+
+// One JSON line per event on stdout → journald → (optionally) Loki/Grafana.
+// Grep key: [bldr-trace]. Keep fields flat and stable — dashboards parse these.
+const logTrace = (event, fields) =>
+  console.log('[bldr-trace]', JSON.stringify({ event, ts: new Date().toISOString(), ...fields }));
 
 async function runJob(workspacePath, job, brief, wanted) {
   const manifest = JSON.parse(fs.readFileSync(path.join(workspacePath, MANIFEST_FILE), 'utf8'));
@@ -260,11 +286,16 @@ async function runJob(workspacePath, job, brief, wanted) {
       const ep = endpoints[id];
       const avail = endpointAvailability(ep);
       job.endpointLabels[id] = ep ? describeEndpoint(ep) : 'unconfigured';
+      const t = job.trace[id];
+      t.endpoint = job.endpointLabels[id];
       if (!avail.ok) {
-        job.panes[id] = 'skipped';
+        job.panes[id] = t.state = 'skipped';
+        t.error = avail.reason || 'endpoint unavailable';
         continue;
       }
-      job.panes[id] = 'working';
+      job.panes[id] = t.state = 'working';
+      t.startedAt = Date.now();
+      logTrace('pane_start', { workspace: path.basename(workspacePath), pane: id, endpoint: t.endpoint });
       try {
         // Dispatch by the pane's ENDPOINT: an image endpoint means a real
         // rendered drawing for any drawing pane; a text endpoint draws SVG.
@@ -274,19 +305,44 @@ async function runJob(workspacePath, job, brief, wanted) {
           : RENDER_PANES.has(id) || isImageEndpoint
             ? await genRenderPane(id, brief, ep)
             : await genImagePane(id, brief, ep);
-        if (r) { applyPane(workspacePath, id, r); job.panes[id] = 'done'; }
-        else job.panes[id] = 'failed';
+        if (r) { applyPane(workspacePath, id, r); job.panes[id] = t.state = 'done'; }
+        else {
+          job.panes[id] = t.state = 'failed';
+          t.error = 'endpoint replied, but the reply had no usable output (wrong/empty format)';
+        }
       } catch (err) {
         console.error('[bldr] pane', id, 'failed:', err?.message || err);
-        job.panes[id] = 'failed';
+        job.panes[id] = t.state = 'failed';
+        t.error = String(err?.message || err);
       }
+      t.finishedAt = Date.now();
+      t.ms = t.finishedAt - (t.startedAt || t.finishedAt);
+      logTrace('pane_end', {
+        workspace: path.basename(workspacePath),
+        pane: id,
+        state: t.state,
+        ms: t.ms,
+        endpoint: t.endpoint,
+        ...(t.error ? { error: t.error } : {}),
+      });
     }
   };
+  logTrace('job_start', { workspace: path.basename(workspacePath), brief, panes: wanted });
   try {
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, wanted.length) }, worker));
   } finally {
     job.running = false;
     job.finishedAt = Date.now();
+    const states = Object.values(job.panes);
+    logTrace('job_end', {
+      workspace: path.basename(workspacePath),
+      ms: job.finishedAt - job.startedAt,
+      done: states.filter((s) => s === 'done').length,
+      failed: states.filter((s) => s === 'failed' || s === 'skipped').length,
+      total: states.length,
+    });
+    history.unshift(snapshotJob(workspacePath, job));
+    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
   }
 }
 
@@ -304,6 +360,7 @@ export function startGeneration(workspacePath, brief, panes = GENERATED_PANES) {
     startedAt: Date.now(),
     finishedAt: null,
     panes: Object.fromEntries(wanted.map((id) => [id, 'pending'])),
+    trace: Object.fromEntries(wanted.map((id) => [id, { state: 'pending' }])),
     endpointLabels: {},
   };
   jobs.set(workspacePath, job);

@@ -9,7 +9,7 @@ import path from 'path';
 import { workspacePathFor } from '../bldr/workspace.js';
 import { seedWorkspace, MANIFEST_FILE } from '../bldr/seed.js';
 import { generateProposalPdf } from '../bldr/proposal.js';
-import { startGeneration, getJob, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
+import { startGeneration, getJob, listJobs, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
 import { loadEndpoints, saveEndpoints, endpointAvailability, PANE_IDS, PRESETS } from '../bldr/endpoints.js';
 import { listProjects, restoreProject, beginNewProject, MAX_PROJECTS } from '../bldr/gallery.js';
 
@@ -193,6 +193,12 @@ router.post('/projects/:id/restore', (req, res) => {
 // Whether the signed-in user may see the admin page at all.
 router.get('/admin/me', (req, res) => {
   res.json({ admin: isAdminUser(req.user) });
+});
+
+// Live activity: every in-flight generation + the last finished runs, across
+// all visitors — per-pane state, endpoint, duration, and error text.
+router.get('/admin/jobs', requireAdmin, (req, res) => {
+  res.json(listJobs());
 });
 
 // The full chain: per-pane endpoint config + live availability + presets.

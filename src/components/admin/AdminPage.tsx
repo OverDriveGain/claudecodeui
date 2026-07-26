@@ -28,13 +28,86 @@ type Endpoint = {
 type Preset = { id: string; label: string; endpoint: Endpoint };
 type Availability = { ok: boolean; reason?: string };
 
+// Same sheet names/codes the app panes show — one drawing set, one language.
 const PANE_NAMES: Record<string, string> = {
-  top_view: 'Top view',
-  section: 'Section',
-  elevations: 'Elevations',
-  front_view: 'Front view',
-  costs: 'Costs',
+  top_view: 'Floor plan · A-101',
+  section: 'Section · A-201',
+  elevations: 'Elevations · A-301',
+  front_view: 'Exterior render · R-401',
+  costs: 'Cost estimate · C-501',
 };
+
+type TraceEntry = {
+  state?: string;
+  endpoint?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  ms?: number;
+  error?: string;
+};
+
+type JobInfo = {
+  workspace: string;
+  running: boolean;
+  brief: string;
+  panes: Record<string, string>;
+  trace?: Record<string, TraceEntry>;
+  endpoints?: Record<string, string>;
+  startedAt: number;
+  finishedAt: number | null;
+};
+
+const fmtDur = (ms?: number) => (ms == null ? '' : ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`);
+const fmtTime = (t?: number | null) => (t ? new Date(t).toLocaleTimeString() : '');
+
+const STATE_BADGE: Record<string, string> = {
+  pending: 'text-muted-foreground',
+  working: 'text-amber-500',
+  done: 'text-green-500',
+  failed: 'text-red-500',
+  skipped: 'text-muted-foreground',
+};
+
+/** One generation run — per-pane state, endpoint, timing, and error text. */
+function JobCard({ job, now }: { job: JobInfo; now: number }) {
+  const elapsed = (job.finishedAt ?? now) - job.startedAt;
+  const states = Object.values(job.panes);
+  const done = states.filter((s) => s === 'done').length;
+  const failed = states.filter((s) => s === 'failed' || s === 'skipped').length;
+  return (
+    <div className="rounded-lg border border-border bg-card p-3 text-sm">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {job.running && (
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        )}
+        <span className="font-mono text-xs text-muted-foreground">{job.workspace}</span>
+        <span className="truncate font-medium" title={job.brief}>
+          {job.brief || '(no brief)'}
+        </span>
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+          {fmtTime(job.startedAt)} · {fmtDur(elapsed)} ·{' '}
+          {job.running ? `${done}/${states.length} done` : failed ? `${done}/${states.length} done, ${failed} failed` : 'completed'}
+        </span>
+      </div>
+      <div className="space-y-1">
+        {Object.entries(job.panes).map(([id, state]) => {
+          const t = job.trace?.[id] ?? {};
+          const running = state === 'working';
+          const dur = running && t.startedAt ? now - t.startedAt : t.ms;
+          return (
+            <div key={id} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+              <span className="w-40 shrink-0">{PANE_NAMES[id] || id}</span>
+              <span className={`w-16 shrink-0 font-semibold ${STATE_BADGE[state] || ''}`}>{state}</span>
+              <span className="w-14 shrink-0 tabular-nums text-muted-foreground">{fmtDur(dur)}</span>
+              <span className="truncate text-muted-foreground">{t.endpoint || job.endpoints?.[id] || ''}</span>
+              {t.error && <span className="basis-full pl-40 text-red-500">↳ {t.error}</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 const sameEndpoint = (a: Endpoint, b: Endpoint) =>
   a.backend === b.backend &&
@@ -55,7 +128,32 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [job, setJob] = useState<any>(null);
+  const [activity, setActivity] = useState<{ active: JobInfo[]; recent: JobInfo[] }>({ active: [], recent: [] });
+  const [showRecent, setShowRecent] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Live activity: what's generating right now (all visitors) + recent runs.
+  useEffect(() => {
+    if (!admin) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await api.bldr.admin.jobs();
+        if (!res.ok || cancelled) return;
+        setActivity(await res.json());
+        setNow(Date.now());
+      } catch {
+        /* transient */
+      }
+    };
+    void tick();
+    const interval = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [admin]);
 
   const load = useCallback(async () => {
     const meRes = await api.bldr.admin.me();
@@ -170,6 +268,43 @@ export default function AdminPage() {
           </Link>
         </div>
 
+        <div className="mb-8">
+          <h2 className="mb-1 text-base font-semibold">Live activity</h2>
+          <p className="mb-3 text-sm text-muted-foreground">
+            Every generation across all visitors — per pane: state, endpoint, duration, and the error when one fails.
+            Updates every 3s.
+          </p>
+          {activity.active.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
+              Nothing generating right now.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {activity.active.map((j) => (
+                <JobCard key={`${j.workspace}-${j.startedAt}`} job={j} now={now} />
+              ))}
+            </div>
+          )}
+          {activity.recent.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowRecent((v) => !v)}
+                className="text-sm text-muted-foreground underline-offset-2 hover:underline"
+              >
+                {showRecent ? '▾' : '▸'} Recent runs ({activity.recent.length}, since last restart)
+              </button>
+              {showRecent && (
+                <div className="mt-2 space-y-3">
+                  {activity.recent.map((j) => (
+                    <JobCard key={`${j.workspace}-${j.startedAt}`} job={j} now={now} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <h2 className="mb-3 text-base font-semibold">Pane endpoints</h2>
         <div className="space-y-4">
           {panes.map((pane) => {
             const ep = endpoints[pane];

@@ -101,6 +101,7 @@ export const api = {
     // Admin: the pane→endpoint chain (who generates each pane).
     admin: {
       me: () => authenticatedFetch('/api/bldr/admin/me'),
+      jobs: () => authenticatedFetch('/api/bldr/admin/jobs'),
       endpoints: () => authenticatedFetch('/api/bldr/admin/endpoints'),
       saveEndpoints: (endpoints) =>
         authenticatedFetch('/api/bldr/admin/endpoints', {
