@@ -1,0 +1,13 @@
+{
+  "name": "mymu-demo-server",
+  "version": "1.0.0",
+  "description": "Fake claudecodeui-compatible backend for the MyMu App Store demo (accepts any login, returns sample data).",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}
