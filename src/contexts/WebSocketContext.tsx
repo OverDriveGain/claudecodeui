@@ -188,6 +188,34 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     };
   }, []);
 
+  // A send that can't reach its socket must FAIL LOUDLY in the chat: the
+  // composer flips its loader on optimistically, so a silently dropped frame
+  // reads as "working" forever (bti-all ping case — peer socket down on a
+  // flaky uplink). Synthesize the same error+complete frames the server would
+  // send, scoped to the addressed session, so the error bubble shows and the
+  // loader clears.
+  const surfaceSendFailure = useCallback((message: any, hostLabel: string) => {
+    const sid =
+      (typeof message?.sessionId === 'string' && message.sessionId) ||
+      (typeof message?.options?.remoteControl === 'string' && message.options.remoteControl) ||
+      (typeof message?.options?.sessionId === 'string' && message.options.sessionId) ||
+      null;
+    if (!sid) return;
+    const stamp = new Date().toISOString();
+    setLatestMessage({
+      kind: 'error',
+      id: `send-fail-${Date.now()}`,
+      content: `Message not sent: no connection to ${hostLabel}. It will NOT be retried — check the Hosts dialog and send again.`,
+      sessionId: sid,
+      provider: 'claude',
+      timestamp: stamp,
+    });
+    // Follow with complete so the working loader clears (same order the server uses).
+    setTimeout(() => {
+      setLatestMessage({ kind: 'complete', exitCode: 1, sessionId: sid, provider: 'claude', timestamp: stamp });
+    }, 0);
+  }, []);
+
   const sendMessage = useCallback((message: any) => {
     // Multi-host routing: a message that addresses a session owned by a
     // connected peer host goes over THAT host's socket; everything else goes
@@ -199,6 +227,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         entry.ws.send(JSON.stringify(message));
       } else {
         console.warn(`WebSocket to ${target.url} not connected`);
+        surfaceSendFailure(message, new URL(target.url).hostname);
       }
       return;
     }
@@ -207,8 +236,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       socket.send(JSON.stringify(message));
     } else {
       console.warn('WebSocket not connected');
+      surfaceSendFailure(message, 'this server');
     }
-  }, []);
+  }, [surfaceSendFailure]);
 
   const value: WebSocketContextType = useMemo(() =>
   ({

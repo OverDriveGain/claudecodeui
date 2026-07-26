@@ -16,6 +16,7 @@ import {
 import { isAgentCaptureAllowed } from './services/rc.service.js';
 import { landAttachments, fileReferralText } from './services/incoming-files.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
+import { createNormalizedMessage } from './shared/utils.js';
 
 // The engine is provider-agnostic; this adapter supplies the claude normalizer so a
 // streamed bridge frame renders through the exact same path the local SDK uses.
@@ -40,8 +41,24 @@ export async function queryRemoteChannel(command, options, writer) {
   const opts = options || {};
   const sessionId = opts.remoteControl;
   // Enforce the server-side capture policy: refuse to drive an agent this deployment
-  // isn't allowed to surface (can't be bypassed with a crafted frame).
-  if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return;
+  // isn't allowed to surface (can't be bypassed with a crafted frame). The refusal
+  // must be LOUD: this used to return void, so a mis-routed send (e.g. a peer-host
+  // agent whose message landed on the primary that denies it) vanished while the
+  // client showed a working loader forever.
+  if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) {
+    console.warn('[rc-channel] refused out-of-scope drive', { sessionId: sessionId || null });
+    if (sessionId && writer) {
+      writer.send(createNormalizedMessage({
+        kind: 'error',
+        content: 'Message not delivered: this server is not allowed to drive this agent. '
+          + 'The agent likely runs on another host — check its host pin and that you are logged into that host.',
+        sessionId,
+        provider: 'claude',
+      }));
+      writer.send(createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId, provider: 'claude' }));
+    }
+    return;
+  }
   // Attachments land as REAL FILES on the agent's host (same-host write, or
   // shipped to the owning peer via /api/federation/upload) and the message just
   // refers the agent to the saved paths — any file type works and the agent
