@@ -14,7 +14,7 @@ import { AppError } from '@/shared/utils.js';
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
 import { deriveContextUsage, usageContextTokens } from '@/modules/providers/list/claude/claude-sessions.provider.js';
-import { currentAgentAllow, isNameAllowedForUser } from '@/services/user-context.js';
+import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isPathOwnedByLinuxUser } from '@/services/user-context.js';
 
 type ArchivedSessionListItem = {
   sessionId: string;
@@ -208,10 +208,15 @@ export const sessionsService = {
       });
     }
 
-    // Agent-restricted users (agent_allow set) may read history only for the local
-    // project that matches their agent name — the same scope the conversations list
-    // shows. Deny others rather than leak that the session exists.
-    if (currentAgentAllow()?.length && !isNameAllowedForUser(path.basename(session.project_path ?? ''))) {
+    // Agent-restricted users (agent_allow set) may read history for local projects
+    // that match their agent name OR live under their mapped linux user's home —
+    // the same scope the conversations list shows (path-ownership rule). Deny
+    // others rather than leak that the session exists.
+    if (
+      currentAgentAllow()?.length &&
+      !isNameAllowedForUser(path.basename(session.project_path ?? '')) &&
+      !isPathOwnedByLinuxUser(session.project_path ?? '', currentLinuxUser())
+    ) {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
