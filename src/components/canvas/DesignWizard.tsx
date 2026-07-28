@@ -99,8 +99,16 @@ export default function DesignWizard({ onComplete, onClose }: DesignWizardProps)
             />
           ))}
         </div>
-        <div className="px-5 pt-2 text-xs text-muted-foreground">
-          {step + 1} · {STEPS[step]}
+        <div className="flex flex-wrap items-center gap-1.5 px-5 pt-2 text-xs text-muted-foreground">
+          <span>
+            {step + 1} · {STEPS[step]}
+          </span>
+          {/* recap of choices made so far — tap a chip's step bar above to change */}
+          {[type, step > 1 ? `${area} m²` : null, style, finish].filter(Boolean).map((v) => (
+            <span key={String(v)} className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+              {v}
+            </span>
+          ))}
         </div>
 
         <div className="max-h-[55vh] overflow-y-auto p-5">
@@ -134,6 +142,23 @@ export default function DesignWizard({ onComplete, onClose }: DesignWizardProps)
                 <span>30 m²</span>
                 <span>1200 m²</span>
               </div>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                {[120, 200, 350, 500, 800].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setArea(v)}
+                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                      area === v ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary'
+                    }`}
+                  >
+                    {v} m²
+                  </button>
+                ))}
+              </div>
+              <p className="mt-4 text-center text-xs text-muted-foreground">
+                Typical family villa: 200–400 m² · you can fine-tune with the AI later
+              </p>
             </div>
           )}
 

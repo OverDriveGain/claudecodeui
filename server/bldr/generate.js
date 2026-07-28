@@ -11,6 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { DOMParser, onErrorStopParsing } from '@xmldom/xmldom';
 import { a2aCall } from './a2a.js';
 import { getOtel, flushOtel, OTEL_DEBUG_TEXT } from './otel.js';
 import { MANIFEST_FILE } from './seed.js';
@@ -115,6 +116,19 @@ function extractDataUrl(text) {
 
 const EXT_BY_MIME = { 'image/svg+xml': 'svg', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
+/** Reject malformed/truncated SVG so a bad drawing never replaces a good pane
+ * (the pane then reads 'failed' and keeps its previous version — the browser
+ * would only show a broken-image icon for these). */
+function isRenderableSvg(buffer) {
+  if (buffer.length < 300) return false;
+  try {
+    const doc = new DOMParser({ onError: onErrorStopParsing }).parseFromString(buffer.toString('utf8'), 'image/svg+xml');
+    return doc?.documentElement?.nodeName === 'svg';
+  } catch {
+    return false;
+  }
+}
+
 /** Pull the first balanced {...} JSON object out of a possibly-chatty reply. */
 function extractJson(text) {
   const s = String(text || '');
@@ -181,6 +195,7 @@ async function genImagePane(id, brief, ep, meta = null) {
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
   const buffer = Buffer.from(b64, 'base64');
   if (!buffer.length) return null;
+  if (ext === 'svg' && !isRenderableSvg(buffer)) return null;
   return { id, file: { name: `${id}.${ext}`, buffer }, sourcePatch: { type: 'image', path: `${id}.${ext}` } };
 }
 
@@ -214,7 +229,7 @@ async function genRenderPane(id, brief, ep, meta = null) {
   if (!dataUrl) return null;
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
   const buffer = Buffer.from(b64, 'base64');
-  if (!buffer.length) return null;
+  if (!buffer.length || !isRenderableSvg(buffer)) return null;
   return { id, file: { name: `${id}.svg`, buffer }, sourcePatch: { type: 'image', path: `${id}.svg` } };
 }
 

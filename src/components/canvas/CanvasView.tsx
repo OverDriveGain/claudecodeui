@@ -109,10 +109,12 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
 
   // Generation is driven from the CHAT (the assistant's generate_design tool).
   // The canvas just watches the workspace job and repaints panes as they land.
+  const [justFinished, setJustFinished] = useState(false);
   useEffect(() => {
     if (!conversationId) return;
     let cancelled = false;
     let wasRunning = false;
+    let flashTimer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
       try {
         const res = await api.bldr.generateJob();
@@ -126,6 +128,8 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           wasRunning = false;
           await refreshManifest();
           void refreshProjects(); // the previous design was archived when the run started
+          setJustFinished(true); // "your design is ready" moment
+          flashTimer = setTimeout(() => !cancelled && setJustFinished(false), 10000);
         }
       } catch {
         /* transient */
@@ -136,6 +140,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      if (flashTimer) clearTimeout(flashTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
@@ -202,16 +207,57 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden p-3">
       {wizardOpen && <DesignWizard onComplete={completeWizard} onClose={closeWizard} />}
+      {genJob?.running && (() => {
+        const states = Object.values(genJob.panes);
+        const settled = states.filter((s) => s === 'done' || s === 'failed' || s === 'skipped').length;
+        return (
+          <div className="mb-2 h-1 w-full shrink-0 overflow-hidden rounded-full bg-border">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-700"
+              style={{ width: `${Math.max(6, (settled / Math.max(1, states.length)) * 100)}%` }}
+            />
+          </div>
+        );
+      })()}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
         {SOURCE_META.map((meta) => {
           const source = canvas.sources[meta.id];
+          // Live per-sheet state while a generation runs (undefined for the map
+          // pane and when idle) — each sheet narrates its own progress.
+          const paneState = genJob?.running ? genJob.panes[meta.id] : undefined;
           return (
-            <div key={meta.id} className="min-h-[180px]">
+            <div key={meta.id} className="relative min-h-[180px]">
               <PaneErrorBoundary title={meta.title}>
                 {meta.type === 'image' && <ImagePane title={meta.title} code={meta.code} source={source} />}
                 {meta.type === 'cost-table' && <CostTablePane title={meta.title} code={meta.code} source={source} />}
                 {meta.type === 'map-cesium' && <LocationPane title={meta.title} code={meta.code} source={source} />}
               </PaneErrorBoundary>
+              {paneState === 'working' && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg bg-white/75 backdrop-blur-[1px]">
+                  <span className="h-7 w-7 animate-spin rounded-full border-[3px] border-[#D52027] border-t-transparent" />
+                  <span className="text-xs font-semibold uppercase tracking-wider text-[#D52027]">
+                    Drawing {meta.title}…
+                  </span>
+                </div>
+              )}
+              {paneState === 'pending' && (
+                <span className="absolute right-2 top-8 z-10 rounded-full bg-neutral-800/80 px-2 py-0.5 text-[10px] font-medium text-white">
+                  queued
+                </span>
+              )}
+              {paneState === 'done' && (
+                <span className="absolute right-2 top-8 z-10 rounded-full bg-green-600/90 px-2 py-0.5 text-[10px] font-bold text-white">
+                  ✓ ready
+                </span>
+              )}
+              {(paneState === 'failed' || paneState === 'skipped') && (
+                <span
+                  className="absolute right-2 top-8 z-10 rounded-full bg-[#D52027]/90 px-2 py-0.5 text-[10px] font-bold text-white"
+                  title="This sheet kept its previous version — ask the assistant to redo it"
+                >
+                  kept previous
+                </span>
+              )}
             </div>
           );
         })}
@@ -286,15 +332,25 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {genJob?.running ? (
             (() => {
-              const states = Object.values(genJob.panes);
-              const done = states.filter((s) => s === 'done' || s === 'failed').length;
+              const entries = Object.entries(genJob.panes);
+              const done = entries.filter(([, s]) => s === 'done' || s === 'failed' || s === 'skipped').length;
+              const drawing = entries
+                .filter(([, s]) => s === 'working')
+                .map(([id]) => SOURCE_META.find((m) => m.id === id)?.title || id);
               return (
-                <div className="inline-flex items-center gap-2 text-sm text-primary">
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Designing your building… {done}/{states.length} panes
+                <div className="inline-flex min-w-0 items-center gap-2 text-sm text-primary">
+                  <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  <span className="truncate">
+                    {drawing.length ? `Drawing ${drawing.join(' + ')}` : 'Designing your building'}
+                    <span className="text-muted-foreground"> · {done}/{entries.length} sheets ready · ~2 min</span>
+                  </span>
                 </div>
               );
             })()
+          ) : justFinished ? (
+            <div className="inline-flex items-center gap-2 text-sm font-medium text-green-600">
+              <span>✓</span> Your design set is ready — review the sheets, refine in the chat, or download the proposal.
+            </div>
           ) : (
             <div className="text-xs text-muted-foreground">
               {proposalState === 'working'
