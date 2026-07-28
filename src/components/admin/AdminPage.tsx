@@ -68,6 +68,127 @@ const STATE_BADGE: Record<string, string> = {
   skipped: 'text-muted-foreground',
 };
 
+type ArchitectCfg = { persona: string; knowledge: string; greeting: string };
+
+const ARCHITECT_FIELDS: { key: keyof ArchitectCfg; label: string; hint: string }[] = [
+  {
+    key: 'persona',
+    label: 'Persona — who the AI Architect is',
+    hint: 'Identity, voice, forbidden vocabulary. The customer-facing character.',
+  },
+  {
+    key: 'knowledge',
+    label: 'BTI knowledge — what it knows about the company',
+    hint: 'Company facts, rates, reference projects it may relate briefs to. Later fed by mnemosyne; curated here until then.',
+  },
+  {
+    key: 'greeting',
+    label: 'First contact — how it opens the conversation',
+    hint: 'The greeting protocol: introduce, brief the saved selections back, relate to a reference project, make details optional.',
+  },
+];
+
+/** Admin editor for the AI Architect briefing (injected every customer turn). */
+function ArchitectSection() {
+  const [cfg, setCfg] = useState<ArchitectCfg | null>(null);
+  const [defaults, setDefaults] = useState<ArchitectCfg | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.bldr.admin.architect();
+        if (!res.ok) return;
+        const data = await res.json();
+        setCfg(data.architect);
+        setDefaults(data.defaults);
+      } catch {
+        /* section stays hidden */
+      }
+    })();
+  }, []);
+
+  if (!cfg) return null;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await api.bldr.admin.saveArchitect(cfg);
+      const data = res.ok ? await res.json() : null;
+      if (data?.ok) {
+        setCfg(data.architect);
+        setDirty(false);
+        setNotice('Saved — applies to each customer’s next chat message.');
+      } else {
+        setNotice('Save failed.');
+      }
+    } catch {
+      setNotice('Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mb-8">
+      <h2 className="mb-1 text-base font-semibold">AI Architect</h2>
+      <p className="mb-3 text-sm text-muted-foreground">
+        Who the customer-facing assistant is: persona, BTI knowledge, and how it opens the chat. Injected into every
+        customer message (with their saved form selections), so edits apply immediately — no restart. The chat brain is
+        the bldr assistant; the drawing/costs endpoints are configured per pane below.
+      </p>
+      <button onClick={() => setOpen((v) => !v)} className="mb-2 text-sm text-muted-foreground underline-offset-2 hover:underline">
+        {open ? '▾ Hide editor' : '▸ Edit persona, knowledge & greeting'}
+      </button>
+      {open && (
+        <div className="space-y-4 rounded-lg border border-border bg-card p-4">
+          {ARCHITECT_FIELDS.map(({ key, label, hint }) => (
+            <label key={key} className="block text-sm">
+              <span className="font-medium">{label}</span>
+              <span className="block text-xs text-muted-foreground">{hint}</span>
+              <textarea
+                value={cfg[key]}
+                onChange={(e) => {
+                  setCfg({ ...cfg, [key]: e.target.value });
+                  setDirty(true);
+                  setNotice('');
+                }}
+                rows={8}
+                className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
+              />
+            </label>
+          ))}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={save}
+              disabled={!dirty || saving}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save AI Architect'}
+            </button>
+            {defaults && (
+              <button
+                onClick={() => {
+                  setCfg(defaults);
+                  setDirty(true);
+                  setNotice('Defaults loaded — Save to apply.');
+                }}
+                className="rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
+              >
+                Reset to defaults
+              </button>
+            )}
+            {notice && <span className="text-sm text-muted-foreground">{notice}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One generation run — per-pane state, endpoint, timing, and error text. */
 function JobCard({ job, now }: { job: JobInfo; now: number }) {
   const elapsed = (job.finishedAt ?? now) - job.startedAt;
@@ -303,6 +424,8 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+
+        <ArchitectSection />
 
         <h2 className="mb-3 text-base font-semibold">Pane endpoints</h2>
         <div className="space-y-4">

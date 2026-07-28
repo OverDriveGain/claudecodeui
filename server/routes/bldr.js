@@ -11,6 +11,7 @@ import { seedWorkspace, writeProjectParams, MANIFEST_FILE } from '../bldr/seed.j
 import { generateProposalPdf } from '../bldr/proposal.js';
 import { startGeneration, getJob, listJobs, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
 import { loadEndpoints, saveEndpoints, endpointAvailability, PANE_IDS, PRESETS } from '../bldr/endpoints.js';
+import { loadArchitect, saveArchitect, architectDefaults } from '../bldr/architect.js';
 import { listProjects, restoreProject, beginNewProject, resetProject, MAX_PROJECTS } from '../bldr/gallery.js';
 
 const router = express.Router();
@@ -241,6 +242,21 @@ router.get('/admin/me', (req, res) => {
 // all visitors — per-pane state, endpoint, duration, and error text.
 router.get('/admin/jobs', requireAdmin, (req, res) => {
   res.json(listJobs());
+});
+
+// The AI Architect: persona, BTI knowledge, greeting protocol. Applies to the
+// customer's NEXT chat message — the briefing is injected per turn.
+router.get('/admin/architect', requireAdmin, (req, res) => {
+  res.json({ architect: loadArchitect(), defaults: architectDefaults() });
+});
+
+router.put('/admin/architect', requireAdmin, express.json({ limit: '256kb' }), (req, res) => {
+  try {
+    res.json({ ok: true, architect: saveArchitect(req.body?.architect || {}) });
+  } catch (err) {
+    console.error('[bldr] admin architect save error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to save the AI Architect config.' });
+  }
 });
 
 // The full chain: per-pane endpoint config + live availability + presets.

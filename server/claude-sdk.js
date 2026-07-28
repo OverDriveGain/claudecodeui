@@ -29,6 +29,7 @@ import {
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { createCanvasMcpServer, isCustomerWorkspace } from './canvas/canvas-mcp.js';
+import { buildArchitectPrompt } from './bldr/architect.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -214,6 +215,17 @@ function mapCliOptionsToSDK(options = {}) {
     type: 'preset',
     preset: 'claude_code'  // Required to use CLAUDE.md
   };
+  // Customer studios: append the BTI AI Architect briefing (persona + BTI
+  // knowledge + greeting protocol + the customer's saved selections) on EVERY
+  // turn. Unlike CLAUDE.md (read once at session start), this stays current in
+  // resumed conversations — the wizard's selections are always visible.
+  if (isCustomerWorkspace(options.cwd)) {
+    try {
+      sdkOptions.systemPrompt.append = buildArchitectPrompt(options.cwd);
+    } catch (err) {
+      console.error('[bldr] architect briefing failed (using base prompt):', err?.message || err);
+    }
+  }
 
   // Map setting sources for CLAUDE.md loading
   // This loads CLAUDE.md from project, user (~/.config/claude/CLAUDE.md), and local directories

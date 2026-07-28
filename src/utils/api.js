@@ -108,6 +108,12 @@ export const api = {
     admin: {
       me: () => authenticatedFetch('/api/bldr/admin/me'),
       jobs: () => authenticatedFetch('/api/bldr/admin/jobs'),
+      architect: () => authenticatedFetch('/api/bldr/admin/architect'),
+      saveArchitect: (architect) =>
+        authenticatedFetch('/api/bldr/admin/architect', {
+          method: 'PUT',
+          body: JSON.stringify({ architect }),
+        }),
       endpoints: () => authenticatedFetch('/api/bldr/admin/endpoints'),
       saveEndpoints: (endpoints) =>
         authenticatedFetch('/api/bldr/admin/endpoints', {
