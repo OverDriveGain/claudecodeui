@@ -39,9 +39,10 @@ export type WizardParams = { type: string; area: number; style: string; finish: 
 interface DesignWizardProps {
   onComplete: (params: WizardParams) => void;
   onClose: () => void;
+  busy?: boolean;
 }
 
-export default function DesignWizard({ onComplete, onClose }: DesignWizardProps) {
+export default function DesignWizard({ onComplete, onClose, busy }: DesignWizardProps) {
   const [step, setStep] = useState(0);
   const [type, setType] = useState<string | null>(null);
   const [area, setArea] = useState(200);
@@ -205,10 +206,17 @@ export default function DesignWizard({ onComplete, onClose }: DesignWizardProps)
             <button
               type="button"
               onClick={finishWizard}
-              disabled={!finish}
-              className="rounded-md bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40"
+              disabled={!finish || busy}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40"
             >
-              ✨ Continue — chat with your AI architect
+              {busy ? (
+                <>
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Starting your project…
+                </>
+              ) : (
+                <>✨ Continue — chat with your AI architect</>
+              )}
             </button>
           )}
         </div>

@@ -72,24 +72,35 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const completeWizard = async (params: WizardParams) => {
     if (wizardBusy) return;
     setWizardBusy(true);
+    // Each step is best-effort: whatever happens, the visitor must land in the
+    // chat — a dead button is the worst outcome. Failures surface in the banner.
     try {
-      const resNew = await api.bldr.newProject();
-      if (resNew.ok) {
+      const resNew = await api.bldr.newProject?.();
+      if (resNew?.ok) {
         const data = (await resNew.json()) as { projects?: PastProject[] };
         setPastProjects(data.projects ?? []);
       }
-      const resParams = await api.bldr.saveParams(params);
-      if (resParams.ok) {
+    } catch {
+      /* keep going */
+    }
+    try {
+      const resParams = await api.bldr.saveParams?.(params);
+      if (resParams?.ok) {
         const data = (await resParams.json()) as { brief?: string };
         setSavedBrief(data.brief ?? null);
+      } else {
+        setSavedBrief(`${params.type}, ${params.area} m², ${params.style} style, ${params.finish} — (not saved yet: tell the AI these in the chat)`);
       }
-      await refreshManifest();
-      setWizardOpen(false);
     } catch {
-      /* keep the wizard open so the visitor can retry */
-    } finally {
-      setWizardBusy(false);
+      setSavedBrief(`${params.type}, ${params.area} m², ${params.style} style, ${params.finish} — (not saved yet: tell the AI these in the chat)`);
     }
+    try {
+      await refreshManifest();
+    } catch {
+      /* transient */
+    }
+    setWizardOpen(false);
+    setWizardBusy(false);
   };
 
   // Website handoff (?brief=): same flow, choices made on the website page.
@@ -253,7 +264,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden p-3">
-      {wizardOpen && <DesignWizard onComplete={completeWizard} onClose={closeWizard} />}
+      {wizardOpen && <DesignWizard onComplete={completeWizard} onClose={closeWizard} busy={wizardBusy} />}
       {genJob?.running && (() => {
         const states = Object.values(genJob.panes);
         const settled = states.filter((s) => s === 'done' || s === 'failed' || s === 'skipped').length;

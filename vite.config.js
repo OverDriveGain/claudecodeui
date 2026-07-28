@@ -30,6 +30,10 @@ export default defineConfig(({ mode }) => {
       port: parseInt(env.VITE_PORT) || 5173,
       // allow serving through the public vhost (build.kikhia.ae) + correct HMR
       allowedHosts: true,
+      // Dev modules live at stable unhashed .js URLs; without an explicit
+      // no-store, Cloudflare edge-caches them for hours and visitors run STALE
+      // code mixed with new (symptom: buttons that silently do nothing).
+      headers: { 'Cache-Control': 'no-store' },
       ...(env.VITE_HMR_HOST
         ? { hmr: { host: env.VITE_HMR_HOST, protocol: 'wss', clientPort: 443 } }
         : {}),
