@@ -44,6 +44,8 @@ type TraceEntry = {
   finishedAt?: number;
   ms?: number;
   error?: string;
+  prompt?: string;
+  reply?: string;
 };
 
 type JobInfo = {
@@ -222,6 +224,17 @@ function JobCard({ job, now }: { job: JobInfo; now: number }) {
               <span className="w-14 shrink-0 tabular-nums text-muted-foreground">{fmtDur(dur)}</span>
               <span className="truncate text-muted-foreground">{t.endpoint || job.endpoints?.[id] || ''}</span>
               {t.error && <span className="basis-full pl-40 text-red-500">↳ {t.error}</span>}
+              {(t.prompt || t.reply) && (
+                <details className="basis-full pl-40 text-muted-foreground">
+                  <summary className="cursor-pointer select-none">prompt & reply</summary>
+                  {t.prompt && (
+                    <div className="mt-1 whitespace-pre-wrap break-words border-l-2 border-border pl-2">→ {t.prompt}</div>
+                  )}
+                  {t.reply && (
+                    <div className="mt-1 whitespace-pre-wrap break-words border-l-2 border-border pl-2">← {t.reply}</div>
+                  )}
+                </details>
+              )}
             </div>
           );
         })}

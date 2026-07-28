@@ -162,7 +162,9 @@ const CALL_TIMEOUT_MS = 480000;
 async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS, meta = null) {
   if (meta) meta.prompt = message;
   if (ep.backend === 'a2a') {
-    return a2aCall({ provider: ep.provider, skill: ep.skill, mode: ep.mode, message, timeoutMs });
+    const reply = await a2aCall({ provider: ep.provider, skill: ep.skill, mode: ep.mode, message, timeoutMs });
+    if (meta) meta.reply = reply;
+    return reply;
   }
   if (ep.backend === 'openai') {
     const headers = { 'Content-Type': 'application/json' };
@@ -179,7 +181,9 @@ async function callEndpoint(ep, message, timeoutMs = CALL_TIMEOUT_MS, meta = nul
     if (meta && body?.usage) {
       meta.usage = { input: body.usage.prompt_tokens, output: body.usage.completion_tokens };
     }
-    return String(body?.choices?.[0]?.message?.content || '').trim();
+    const reply = String(body?.choices?.[0]?.message?.content || '').trim();
+    if (meta) meta.reply = reply;
+    return reply;
   }
   throw new Error(`unknown backend '${ep.backend}'`);
 }
@@ -216,6 +220,7 @@ async function genRenderPane(id, brief, ep, meta = null) {
       params: { prompt, size: '1536x1024' },
       timeoutMs: CALL_TIMEOUT_MS,
     });
+    if (meta) meta.reply = reply;
     // The exec skill returns the absolute PNG path (possibly with surrounding text).
     const m = String(reply || '').match(/\/\S+\.png/);
     const filePath = m?.[0];
@@ -351,7 +356,7 @@ async function runJob(workspacePath, job, brief, wanted) {
         // rendered drawing for any drawing pane; a text endpoint draws SVG.
         const isImageEndpoint = ep.backend === 'a2a' && ep.skill === 'generate_image';
         const r = ep.backend === 'mock'
-          ? await genMockPane(id, brief, ep)
+          ? await genMockPane(id, brief, ep, meta)
           : id === 'costs'
             ? await genCostsPane(brief, current, ep, meta)
             : RENDER_PANES.has(id) || isImageEndpoint
@@ -369,6 +374,14 @@ async function runJob(workspacePath, job, brief, wanted) {
       }
       t.finishedAt = Date.now();
       t.ms = t.finishedAt - (t.startedAt || t.finishedAt);
+      // Admin-visible request/response excerpt (Live activity → prompt & reply).
+      if (meta.prompt) t.prompt = String(meta.prompt).slice(0, 1500);
+      if (meta.reply) {
+        const rep = String(meta.reply);
+        t.reply = /^data:image\//.test(rep.trim())
+          ? `(image data-URL reply, ${rep.length} chars)`
+          : rep.slice(0, 600);
+      }
       if (span) {
         span.setAttributes({
           'bldr.state': t.state,

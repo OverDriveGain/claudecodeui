@@ -152,15 +152,19 @@ function mockCosts(brief) {
 }
 
 /** Emulate one pane end-to-end: realistic delay, then a locally-drawn result. */
-export async function genMockPane(id, brief, ep) {
+export async function genMockPane(id, brief, ep, meta = null) {
+  if (meta) meta.prompt = `[emulated ${id}] brief: ${brief}`;
   const r = seeded(brief, `delay:${id}`);
   const delay = Number.isFinite(ep.delayMs) ? ep.delayMs : 7000 + Math.round(r(0) * 8000); // 7–15 s
   await sleep(delay);
   if (id === 'costs') {
-    return { id, sourcePatch: { type: 'cost-table', name: 'Cost estimate', data: mockCosts(brief) } };
+    const data = mockCosts(brief);
+    if (meta) meta.reply = `emulated costs, total ${data.currency} ${data.total.toLocaleString('en-US')}`;
+    return { id, sourcePatch: { type: 'cost-table', name: 'Cost estimate', data } };
   }
   const builder = SVG_BUILDERS[id];
   if (!builder) return null;
   const buffer = Buffer.from(builder(brief), 'utf8');
+  if (meta) meta.reply = `emulated ${id}.svg drawn locally (${buffer.length} bytes)`;
   return { id, file: { name: `${id}.svg`, buffer }, sourcePatch: { type: 'image', path: `${id}.svg` } };
 }
