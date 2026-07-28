@@ -41,6 +41,11 @@ export const PRESETS = [
     label: 'Google Flash (gemini-flash via LiteLLM)',
     endpoint: { backend: 'openai', baseUrl: 'http://10.10.0.2:19081/v1', model: 'gemini-flash' },
   },
+  {
+    id: 'emulated',
+    label: 'Emulated (free, dev) — fake GPT, drawn locally',
+    endpoint: { backend: 'mock' },
+  },
 ];
 
 // Default chain: GPT for all panes — the four drawing panes through the IMAGE
@@ -66,6 +71,13 @@ function sanitizeEndpoint(raw) {
     const skill = typeof raw.skill === 'string' && raw.skill ? raw.skill : 'general_query';
     const mode = ['spawn', 'inject', 'exec'].includes(raw.mode) ? raw.mode : 'spawn';
     return { backend: 'a2a', provider: raw.provider, skill, mode, enabled, label };
+  }
+  if (raw.backend === 'mock') {
+    // Emulated endpoint: no external call at all — panes are drawn locally
+    // after a realistic delay. Free; for developing/testing the flow.
+    const out = { backend: 'mock', enabled, label: label || 'Emulated' };
+    if (Number.isFinite(raw.delayMs)) out.delayMs = Math.min(120000, Math.max(0, Math.floor(raw.delayMs)));
+    return out;
   }
   if (raw.backend === 'openai') {
     if (typeof raw.baseUrl !== 'string' || !/^https?:\/\//.test(raw.baseUrl)) return null;
@@ -124,5 +136,6 @@ export function endpointAvailability(ep) {
     if (ep.apiKeyEnv && !process.env[ep.apiKeyEnv]) return { ok: false, reason: `env ${ep.apiKeyEnv} not set` };
     return { ok: true };
   }
+  if (ep.backend === 'mock') return { ok: true };
   return { ok: false, reason: 'unknown backend' };
 }

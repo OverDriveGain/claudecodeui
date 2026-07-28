@@ -16,6 +16,7 @@ import { a2aCall } from './a2a.js';
 import { getOtel, flushOtel, OTEL_DEBUG_TEXT } from './otel.js';
 import { MANIFEST_FILE } from './seed.js';
 import { loadEndpoints, endpointAvailability, PANE_IDS } from './endpoints.js';
+import { genMockPane } from './mock.js';
 
 export const BLDR_GPT_PROVIDER = process.env.BLDR_GPT_PROVIDER || 'bti-bldr-gpt';
 
@@ -339,8 +340,8 @@ async function runJob(workspacePath, job, brief, wanted) {
             attributes: {
               'bldr.pane': id,
               'bldr.endpoint': t.endpoint,
-              'gen_ai.system': ep.backend === 'a2a' ? `a2a:${ep.provider}` : 'openai',
-              'gen_ai.request.model': ep.model || `${ep.provider || '?'}/${ep.skill || '?'}`,
+              'gen_ai.system': ep.backend === 'mock' ? 'emulated' : ep.backend === 'a2a' ? `a2a:${ep.provider}` : 'openai',
+              'gen_ai.request.model': ep.model || (ep.backend === 'mock' ? 'emulated' : `${ep.provider || '?'}/${ep.skill || '?'}`),
             },
           }, paneCtx)
         : null;
@@ -349,11 +350,13 @@ async function runJob(workspacePath, job, brief, wanted) {
         // Dispatch by the pane's ENDPOINT: an image endpoint means a real
         // rendered drawing for any drawing pane; a text endpoint draws SVG.
         const isImageEndpoint = ep.backend === 'a2a' && ep.skill === 'generate_image';
-        const r = id === 'costs'
-          ? await genCostsPane(brief, current, ep, meta)
-          : RENDER_PANES.has(id) || isImageEndpoint
-            ? await genRenderPane(id, brief, ep, meta)
-            : await genImagePane(id, brief, ep, meta);
+        const r = ep.backend === 'mock'
+          ? await genMockPane(id, brief, ep)
+          : id === 'costs'
+            ? await genCostsPane(brief, current, ep, meta)
+            : RENDER_PANES.has(id) || isImageEndpoint
+              ? await genRenderPane(id, brief, ep, meta)
+              : await genImagePane(id, brief, ep, meta);
         if (r) { applyPane(workspacePath, id, r); job.panes[id] = t.state = 'done'; }
         else {
           job.panes[id] = t.state = 'failed';
