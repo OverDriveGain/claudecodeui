@@ -6,6 +6,9 @@ import ReactDOM from 'react-dom/client'
 import { installNetworkShim } from './mobile/networkShim'
 installNetworkShim()
 import { initNativeShell } from './mobile/nativeShell'
+// Adopt a ?brief= handed over by the BTI website design wizard before the app
+// renders (stored once, stripped from the URL, prefills the chat composer).
+import { adoptUrlBrief } from './utils/incomingBrief'
 import App from './App.tsx'
 import './index.css'
 import 'katex/dist/katex.min.css'
@@ -15,6 +18,7 @@ import './i18n/config.js'
 
 // Native-only shell integration (status bar, keyboard, hardware back button).
 initNativeShell()
+adoptUrlBrief()
 
 // Register service worker for PWA + Web Push support.
 // When a new build ships, the new SW activates (skipWaiting) and takes control,

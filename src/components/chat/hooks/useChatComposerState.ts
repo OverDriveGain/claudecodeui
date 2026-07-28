@@ -12,6 +12,7 @@ import type {
 import { useDropzone } from 'react-dropzone';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { consumeIncomingBrief } from '../../../utils/incomingBrief';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type {
@@ -876,7 +877,11 @@ export function useChatComposerState({
     if (!selectedProjectId) {
       return;
     }
-    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProjectId}`) || '';
+    // A brief handed over by the website design wizard (?brief=) prefills the
+    // composer once and wins over any stale saved draft — the handoff is a
+    // deliberate fresh start. The visitor sends it as-is or adds details first.
+    const wizardBrief = consumeIncomingBrief();
+    const savedInput = wizardBrief || safeLocalStorage.getItem(`draft_input_${selectedProjectId}`) || '';
     setInput((previous) => {
       const next = previous === savedInput ? previous : savedInput;
       inputValueRef.current = next;
