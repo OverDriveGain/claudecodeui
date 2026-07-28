@@ -6,6 +6,7 @@ import { api } from '../../utils/api';
 import { canvasStore, useCanvasState } from '../../stores/useCanvasStore';
 
 import { SOURCE_META } from './dataSources';
+import DesignWizard from './DesignWizard';
 import type { BldrManifest } from './types';
 import ImagePane from './panes/ImagePane';
 import CostTablePane from './panes/CostTablePane';
@@ -39,6 +40,28 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const [pastProjects, setPastProjects] = useState<PastProject[]>([]);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  // The in-app design wizard: auto-opens once for new visitors (unless a brief
+  // was already handed over via ?brief=), reopenable via "New design".
+  const [wizardOpen, setWizardOpen] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      !localStorage.getItem('bldr-wizard-seen') &&
+      !sessionStorage.getItem('bldr-incoming-brief')
+  );
+
+  const closeWizard = () => {
+    try {
+      localStorage.setItem('bldr-wizard-seen', '1');
+    } catch {
+      /* private mode */
+    }
+    setWizardOpen(false);
+  };
+
+  const completeWizard = (brief: string) => {
+    window.dispatchEvent(new CustomEvent('bldr:brief', { detail: { brief } }));
+    closeWizard();
+  };
 
   // The visitor's retrievable past projects (server keeps at most 5).
   async function refreshProjects() {
@@ -178,6 +201,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden p-3">
+      {wizardOpen && <DesignWizard onComplete={completeWizard} onClose={closeWizard} />}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
         {SOURCE_META.map((meta) => {
           const source = canvas.sources[meta.id];
@@ -241,6 +265,14 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
             </div>
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => setWizardOpen(true)}
+          title="Start a new design from the options wizard"
+          className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
+        >
+          ✨ New design
+        </button>
         {pastProjects.length > 0 && (
           <button
             type="button"

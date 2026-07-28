@@ -873,6 +873,20 @@ export function useChatComposerState({
     inputValueRef.current = input;
   }, [input]);
 
+  // The in-app design wizard hands its composed brief over as a window event —
+  // prefill the composer and focus it so the visitor can send or add details.
+  useEffect(() => {
+    const onBrief = (e: Event) => {
+      const brief = (e as CustomEvent<{ brief?: string }>).detail?.brief;
+      if (!brief) return;
+      setInput(brief);
+      inputValueRef.current = brief;
+      textareaRef.current?.focus();
+    };
+    window.addEventListener('bldr:brief', onBrief);
+    return () => window.removeEventListener('bldr:brief', onBrief);
+  }, []);
+
   useEffect(() => {
     if (!selectedProjectId) {
       return;
