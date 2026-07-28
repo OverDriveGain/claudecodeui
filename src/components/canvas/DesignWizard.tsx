@@ -34,12 +34,10 @@ const FINISHES = [
 
 const STEPS = ['Project type', 'Built area', 'Style', 'Finish'] as const;
 
-export function composeBrief(type: string, area: number, style: string, finish: string) {
-  return `${type}, ${area} m², ${style} style, ${finish}.`;
-}
+export type WizardParams = { type: string; area: number; style: string; finish: string };
 
 interface DesignWizardProps {
-  onComplete: (brief: string) => void;
+  onComplete: (params: WizardParams) => void;
   onClose: () => void;
 }
 
@@ -58,7 +56,7 @@ export default function DesignWizard({ onComplete, onClose }: DesignWizardProps)
 
   const finishWizard = () => {
     if (!type || !style || !finish) return;
-    onComplete(composeBrief(type, area, style, finish));
+    onComplete({ type, area, style, finish });
   };
 
   const optionCard = (selected: boolean) =>
@@ -210,7 +208,7 @@ export default function DesignWizard({ onComplete, onClose }: DesignWizardProps)
               disabled={!finish}
               className="rounded-md bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40"
             >
-              ✨ Open the design studio
+              ✨ Continue — chat with your AI architect
             </button>
           )}
         </div>

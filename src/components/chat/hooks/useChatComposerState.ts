@@ -12,7 +12,6 @@ import type {
 import { useDropzone } from 'react-dropzone';
 
 import { authenticatedFetch } from '../../../utils/api';
-import { consumeIncomingBrief } from '../../../utils/incomingBrief';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type {
@@ -873,29 +872,12 @@ export function useChatComposerState({
     inputValueRef.current = input;
   }, [input]);
 
-  // The in-app design wizard hands its composed brief over as a window event —
-  // prefill the composer and focus it so the visitor can send or add details.
-  useEffect(() => {
-    const onBrief = (e: Event) => {
-      const brief = (e as CustomEvent<{ brief?: string }>).detail?.brief;
-      if (!brief) return;
-      setInput(brief);
-      inputValueRef.current = brief;
-      textareaRef.current?.focus();
-    };
-    window.addEventListener('bldr:brief', onBrief);
-    return () => window.removeEventListener('bldr:brief', onBrief);
-  }, []);
 
   useEffect(() => {
     if (!selectedProjectId) {
       return;
     }
-    // A brief handed over by the website design wizard (?brief=) prefills the
-    // composer once and wins over any stale saved draft — the handoff is a
-    // deliberate fresh start. The visitor sends it as-is or adds details first.
-    const wizardBrief = consumeIncomingBrief();
-    const savedInput = wizardBrief || safeLocalStorage.getItem(`draft_input_${selectedProjectId}`) || '';
+    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProjectId}`) || '';
     setInput((previous) => {
       const next = previous === savedInput ? previous : savedInput;
       inputValueRef.current = next;

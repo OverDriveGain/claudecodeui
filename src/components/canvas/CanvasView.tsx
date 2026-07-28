@@ -6,7 +6,8 @@ import { api } from '../../utils/api';
 import { canvasStore, useCanvasState } from '../../stores/useCanvasStore';
 
 import { SOURCE_META } from './dataSources';
-import DesignWizard from './DesignWizard';
+import DesignWizard, { type WizardParams } from './DesignWizard';
+import { consumeIncomingBrief } from '../../utils/incomingBrief';
 import type { BldrManifest } from './types';
 import ImagePane from './panes/ImagePane';
 import CostTablePane from './panes/CostTablePane';
@@ -16,6 +17,11 @@ import PaneErrorBoundary from './panes/PaneErrorBoundary';
 interface CanvasViewProps {
   selectedProject?: Project | null;
 }
+
+// The wizard fronts the funnel once per page load (like the website's /design
+// steps) — module-level so in-app navigation doesn't re-trigger it, a real
+// refresh does.
+let wizardShownThisLoad = false;
 
 // One retrievable past project in the visitor's gallery (see server/bldr/gallery.js).
 type PastProject = {
@@ -40,28 +46,69 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const [pastProjects, setPastProjects] = useState<PastProject[]>([]);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
-  // The in-app design wizard: auto-opens once for new visitors (unless a brief
-  // was already handed over via ?brief=), reopenable via "New design".
-  const [wizardOpen, setWizardOpen] = useState(
-    () =>
-      typeof window !== 'undefined' &&
-      !localStorage.getItem('bldr-wizard-seen') &&
-      !sessionStorage.getItem('bldr-incoming-brief')
-  );
-
-  const closeWizard = () => {
+  // The design wizard fronts every page load (Skip reveals the current design).
+  // A ?brief= handoff from the website replaces it — those visitors already
+  // went through the website's steps.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  useEffect(() => {
+    if (wizardShownThisLoad) return;
     try {
-      localStorage.setItem('bldr-wizard-seen', '1');
+      if (sessionStorage.getItem('bldr-incoming-brief')) return;
     } catch {
       /* private mode */
     }
-    setWizardOpen(false);
+    wizardShownThisLoad = true;
+    setWizardOpen(true);
+  }, []);
+  // The saved selections banner: shows the injected brief, makes "add details"
+  // clearly optional. Cleared on dismiss or when a generation starts.
+  const [savedBrief, setSavedBrief] = useState<string | null>(null);
+  const [wizardBusy, setWizardBusy] = useState(false);
+
+  const closeWizard = () => setWizardOpen(false);
+
+  // Complete = fresh start: blank the sheets, then inject the selections into
+  // the assistant's briefing (NOT the chat) — the customer talks details after.
+  const completeWizard = async (params: WizardParams) => {
+    if (wizardBusy) return;
+    setWizardBusy(true);
+    try {
+      const resNew = await api.bldr.newProject();
+      if (resNew.ok) {
+        const data = (await resNew.json()) as { projects?: PastProject[] };
+        setPastProjects(data.projects ?? []);
+      }
+      const resParams = await api.bldr.saveParams(params);
+      if (resParams.ok) {
+        const data = (await resParams.json()) as { brief?: string };
+        setSavedBrief(data.brief ?? null);
+      }
+      await refreshManifest();
+      setWizardOpen(false);
+    } catch {
+      /* keep the wizard open so the visitor can retry */
+    } finally {
+      setWizardBusy(false);
+    }
   };
 
-  const completeWizard = (brief: string) => {
-    window.dispatchEvent(new CustomEvent('bldr:brief', { detail: { brief } }));
-    closeWizard();
-  };
+  // Website handoff (?brief=): same flow, choices made on the website page.
+  useEffect(() => {
+    const brief = consumeIncomingBrief();
+    if (!brief) return;
+    (async () => {
+      try {
+        await api.bldr.newProject();
+        const res = await api.bldr.saveParams({ brief });
+        if (res.ok) setSavedBrief(((await res.json()) as { brief?: string }).brief ?? brief);
+        await refreshManifest();
+        void refreshProjects();
+      } catch {
+        /* transient */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The visitor's retrievable past projects (server keeps at most 5).
   async function refreshProjects() {
@@ -262,6 +309,23 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           );
         })}
       </div>
+      {savedBrief && !genJob?.running && (
+        <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+          <span className="font-semibold text-primary">✓ Brief saved:</span>
+          <span className="min-w-0 flex-1 truncate" title={savedBrief}>{savedBrief}</span>
+          <span className="text-xs text-muted-foreground">
+            Add details in the chat below (optional) — or just tell the AI to generate.
+          </span>
+          <button
+            type="button"
+            onClick={() => setSavedBrief(null)}
+            className="rounded px-1.5 text-muted-foreground hover:bg-accent"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="relative mt-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
         {galleryOpen && pastProjects.length > 0 && (
           <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-2xl rounded-lg border border-border bg-background p-3 shadow-xl">

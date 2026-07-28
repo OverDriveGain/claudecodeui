@@ -138,6 +138,72 @@ Only for a quick **location** pin correction (lat/lng/label of the plot) without
 redesigning. Costs and all drawings come from generate_design.
 `;
 
+// Wizard selections live OUTSIDE the chat: the app injects them here (the
+// assistant's briefing) so the customer never has to repeat them in chat.
+export const PARAMS_FILE = 'project-params.json';
+
+/** Compose the one-line brief from saved selections (or a raw handoff brief). */
+export function composeBriefLine(p) {
+  if (!p) return '';
+  if (p.brief) return String(p.brief);
+  const bits = [p.type, p.area ? `${p.area} m²` : null, p.style ? `${p.style} style` : null, p.finish].filter(Boolean);
+  return bits.join(', ');
+}
+
+/** The saved wizard selections for a workspace, or null. */
+export function readParams(workspacePath) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(workspacePath, PARAMS_FILE), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function buildClaudeMd(params) {
+  const line = composeBriefLine(params);
+  if (!line) return CLAUDE_MD;
+  const items = [
+    params.type ? `- Project type: ${params.type}` : null,
+    params.area ? `- Built area: ${params.area} m²` : null,
+    params.style ? `- Architectural style: ${params.style}` : null,
+    params.finish ? `- Finish level: ${params.finish}` : null,
+    params.brief ? `- Customer request: ${params.brief}` : null,
+  ].filter(Boolean).join('\n');
+  return `${CLAUDE_MD}
+## THE CUSTOMER'S SAVED SELECTIONS (from the design wizard — known facts, do NOT re-ask)
+
+${items}
+
+Composed brief line: "${line}"
+
+The customer already made these choices before the chat opened. Providing further
+details is OPTIONAL for them: if their first message adds details (rooms, pool,
+plot, colours…), fold the details into the brief line and call generate_design.
+If they just greet you or say "go ahead" / "generate", call generate_design with
+the composed brief line as-is. Never ask them to repeat what is listed above.
+`;
+}
+
+/**
+ * Save the customer's wizard selections: params file + refreshed briefing
+ * (CLAUDE.md) + brief stamped on the manifest. Returns the composed brief line.
+ */
+export function writeProjectParams(workspacePath, params) {
+  fs.mkdirSync(workspacePath, { recursive: true });
+  fs.writeFileSync(path.join(workspacePath, PARAMS_FILE), JSON.stringify(params, null, 2));
+  fs.writeFileSync(path.join(workspacePath, 'CLAUDE.md'), buildClaudeMd(params));
+  const line = composeBriefLine(params);
+  try {
+    const manifestPath = path.join(workspacePath, MANIFEST_FILE);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.brief = line;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  } catch {
+    /* manifest absent — seeded on next touch */
+  }
+  return line;
+}
+
 /**
  * Seed a freshly-created workspace with the mock project (idempotent — never
  * overwrites an existing manifest/assets, so a returning user keeps their work).
@@ -165,9 +231,11 @@ export function seedWorkspace(workspacePath) {
     }
     // CLAUDE.md is app-owned protocol (not user data): always refresh it so
     // existing workspaces pick up instruction changes on their next touch.
+    // Includes the customer's saved wizard selections when they exist.
     const claudeMd = path.join(workspacePath, 'CLAUDE.md');
-    if (!fs.existsSync(claudeMd) || fs.readFileSync(claudeMd, 'utf8') !== CLAUDE_MD) {
-      fs.writeFileSync(claudeMd, CLAUDE_MD);
+    const wanted = buildClaudeMd(readParams(workspacePath));
+    if (!fs.existsSync(claudeMd) || fs.readFileSync(claudeMd, 'utf8') !== wanted) {
+      fs.writeFileSync(claudeMd, wanted);
     }
   } catch (err) {
     console.error('[bldr] seedWorkspace failed for', workspacePath, err?.message || err);

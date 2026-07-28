@@ -96,6 +96,12 @@ export const api = {
     generateJob: () => authenticatedFetch('/api/bldr/generate/job'),
     // Gallery of the visitor's past projects (max 5) + swap one back in.
     projects: () => authenticatedFetch('/api/bldr/projects'),
+    newProject: () => authenticatedFetch('/api/bldr/projects/new', { method: 'POST' }),
+    saveParams: (params) =>
+      authenticatedFetch('/api/bldr/params', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }),
     restoreProject: (id) =>
       authenticatedFetch(`/api/bldr/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
     // Admin: the pane→endpoint chain (who generates each pane).

@@ -7,11 +7,11 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { workspacePathFor } from '../bldr/workspace.js';
-import { seedWorkspace, MANIFEST_FILE } from '../bldr/seed.js';
+import { seedWorkspace, writeProjectParams, MANIFEST_FILE } from '../bldr/seed.js';
 import { generateProposalPdf } from '../bldr/proposal.js';
 import { startGeneration, getJob, listJobs, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
 import { loadEndpoints, saveEndpoints, endpointAvailability, PANE_IDS, PRESETS } from '../bldr/endpoints.js';
-import { listProjects, restoreProject, beginNewProject, MAX_PROJECTS } from '../bldr/gallery.js';
+import { listProjects, restoreProject, beginNewProject, resetProject, MAX_PROJECTS } from '../bldr/gallery.js';
 
 const router = express.Router();
 
@@ -170,6 +170,48 @@ router.get('/projects', (req, res) => {
   } catch (err) {
     console.error('[bldr] projects list error:', err?.message || err);
     res.status(500).json({ error: 'Failed to list projects.' });
+  }
+});
+
+// "New design": archive the current design and blank every generated pane.
+router.post('/projects/new', (req, res) => {
+  try {
+    const wp = workspaceOf(req);
+    if (getJob(wp)?.running) {
+      return res.status(409).json({ error: 'A generation is running — wait for it to finish.' });
+    }
+    if (!fs.existsSync(path.join(wp, MANIFEST_FILE))) seedWorkspace(wp);
+    const manifest = resetProject(wp);
+    res.json({ ok: true, manifest, projects: listProjects(wp) });
+  } catch (err) {
+    console.error('[bldr] new project error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to start a new design.' });
+  }
+});
+
+// The customer's design-wizard selections. Saved OUTSIDE the chat — injected
+// into the assistant's briefing so the customer never repeats them.
+router.post('/params', express.json({ limit: '8kb' }), (req, res) => {
+  try {
+    const b = req.body || {};
+    const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+    const params = {
+      type: str(b.type, 60),
+      area: Number.isFinite(Number(b.area)) ? Math.min(1200, Math.max(30, Math.round(Number(b.area)))) : undefined,
+      style: str(b.style, 60),
+      finish: str(b.finish, 60),
+      brief: str(b.brief, 2000),
+    };
+    if (!params.type && !params.brief) {
+      return res.status(400).json({ error: 'Nothing to save.' });
+    }
+    const wp = workspaceOf(req);
+    if (!fs.existsSync(path.join(wp, MANIFEST_FILE))) seedWorkspace(wp);
+    const brief = writeProjectParams(wp, params);
+    res.json({ ok: true, brief });
+  } catch (err) {
+    console.error('[bldr] params error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to save the selections.' });
   }
 });
 

@@ -135,3 +135,29 @@ export function beginNewProject(wp, brief) {
   manifest.generatedAt = Date.now();
   fs.writeFileSync(path.join(wp, MANIFEST_FILE), JSON.stringify(manifest, null, 2));
 }
+
+/**
+ * Start from a BLANK slate: archive the current design (if real), then empty
+ * every generated pane — sheets show their "no content yet" state until the
+ * next generation fills them. The location map keeps its pin. Revs bump past
+ * the old ones so panes repaint. Returns the new manifest.
+ */
+export function resetProject(wp) {
+  archiveCurrent(wp);
+  const manifest = readManifest(wp);
+  if (!manifest) return null;
+  const sources = manifest.sources || {};
+  for (const [id, src] of Object.entries(sources)) {
+    if (src?.type === 'image') {
+      sources[id] = { type: 'image', rev: (src.rev || 0) + 1 };
+    } else if (src?.type === 'cost-table') {
+      sources[id] = { type: 'cost-table', rev: (src.rev || 0) + 1 };
+    } // map-cesium keeps its pin
+  }
+  delete manifest.brief;
+  delete manifest.generatedAt;
+  manifest.sources = sources;
+  fs.writeFileSync(path.join(wp, MANIFEST_FILE), JSON.stringify(manifest, null, 2));
+  try { fs.rmSync(path.join(wp, 'project-params.json'), { force: true }); } catch { /* none */ }
+  return manifest;
+}
