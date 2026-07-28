@@ -28,7 +28,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
-import { createCanvasMcpServer } from './canvas/canvas-mcp.js';
+import { createCanvasMcpServer, isCustomerWorkspace } from './canvas/canvas-mcp.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -595,6 +595,19 @@ async function queryClaudeSDK(command, options = {}, ws) {
       // permission mode (the customer must never see an approval dialog).
       if (toolName === 'mcp__bldr_canvas__update_canvas' || toolName === 'mcp__bldr_canvas__generate_design') {
         return { behavior: 'allow', updatedInput: input };
+      }
+
+      // CUSTOMER STUDIO LOCKDOWN: inside a customer workspace the assistant is
+      // a design consultant, not a coding agent — it gets the two design tools
+      // above and NOTHING else (no file reads/writes, no shell, no web). This
+      // both seals customer data and stops "let me check this directory" talk:
+      // it cannot explore, so it cannot narrate exploring.
+      if (isCustomerWorkspace(options.cwd)) {
+        return {
+          behavior: 'deny',
+          message:
+            'Tools are disabled in the BTI design studio. Everything you need is already in your briefing. Answer the customer in plain words as the BTI architect; use generate_design for any design change.',
+        };
       }
 
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);

@@ -116,7 +116,7 @@ function blockedImagePanes(args) {
 
 // True when this chat session runs inside a customer project workspace (the
 // only place design generation applies — never fleet/agent working dirs).
-function isCustomerWorkspace(cwd) {
+export function isCustomerWorkspace(cwd) {
   if (!cwd) return false;
   const resolved = path.resolve(cwd);
   const base = path.resolve(WORKSPACE_BASE);
