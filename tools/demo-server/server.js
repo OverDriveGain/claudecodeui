@@ -36,6 +36,13 @@ try { PRIVACY_HTML = fs.readFileSync(path.join(__dirname, 'privacy.html'), 'utf8
 const REMOTE_SESSION = 'demo-remote-1';
 const LOCAL_SESSION = 'demo-local-1';
 
+// Turns the reviewer sends during their session, per sessionId. The iOS app
+// refetches history right after a reply completes (end-of-turn reconcile); if
+// that refetch didn't include the just-sent turn the reply would flash and then
+// vanish. Persisting turns here makes the demo behave like a real server.
+const liveTurns = Object.create(null);
+let seq = 0;
+
 function projects() {
   return [
     {
@@ -63,8 +70,8 @@ function projects() {
   ];
 }
 
-function history() {
-  const msgs = [
+function history(sessionId) {
+  const base = [
     { id: 'm1', kind: 'text', role: 'user', content: 'Add a README with a quick-start section.' },
     { id: 'm2', kind: 'text', role: 'assistant',
       content: "Sure — I'll create `README.md` with an overview and a quick-start." },
@@ -74,6 +81,8 @@ function history() {
     { id: 'm5', kind: 'text', role: 'assistant',
       content: 'Done. `README.md` now has an overview and a quick-start section. Anything else?' },
   ];
+  const extra = (sessionId && liveTurns[sessionId]) || [];
+  const msgs = base.concat(extra);
   return {
     messages: msgs, total: msgs.length, hasMore: false, offset: 0, limit: 200,
     context: { usedTokens: 18450, windowTokens: 200000 },
@@ -119,7 +128,10 @@ const server = http.createServer((req, res) => {
   if (p === '/api/projects/archived') return sendJSON(res, 200, { projects: [] });
   if (p === '/api/projects/agent-status')
     return sendJSON(res, 200, { agents: [{ id: 'remote:demo-agent', running: false, connected: true }] });
-  if (/^\/api\/providers\/sessions\/[^/]+\/messages$/.test(p)) return sendJSON(res, 200, history());
+  {
+    const mm = p.match(/^\/api\/providers\/sessions\/([^/]+)\/messages$/);
+    if (mm) return sendJSON(res, 200, history(decodeURIComponent(mm[1])));
+  }
   if (/^\/api\/projects\/[^/]+\/files$/.test(p)) return sendJSON(res, 200, fileTree());
   if (/^\/api\/projects\/[^/]+\/file$/.test(p))
     return sendJSON(res, 200, { content: '# hello-world\n\nA tiny demo project.\n' });
@@ -152,6 +164,14 @@ wss.on('connection', (ws) => {
       // Echo the user's line, then stream a short canned assistant reply.
       const reply = "This is the MyMu demo backend — everything here is sample " +
                     "data. Point the app at your own Claude Code UI server to drive real agents.";
+      // Persist the turn so the app's end-of-turn history refetch keeps it (see
+      // liveTurns) instead of wiping the reply back to the base transcript.
+      const sid = (msg.options && (msg.options.sessionId || msg.options.remoteControl)) || LOCAL_SESSION;
+      const userText = (msg.command || '').toString();
+      (liveTurns[sid] || (liveTurns[sid] = [])).push(
+        { id: 'u' + (++seq), kind: 'text', role: 'user', content: userText },
+        { id: 'a' + (++seq), kind: 'text', role: 'assistant', content: reply },
+      );
       send({ kind: 'status', text: 'Thinking…' });
       const words = reply.split(' ');
       let i = 0;
