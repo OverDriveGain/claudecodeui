@@ -592,6 +592,12 @@ private struct ChatComposer: View {
     @State private var showFileImporter = false
     @State private var attachError: String?
     @State private var photoPickerPresented = false
+    // iPad: a SwiftUI Menu is a popover, and toggling .fileImporter/.photosPicker
+    // from inside a Menu item is swallowed as the popover dismisses — the picker
+    // never presents (App Store 2.1(a) reject, iPadOS 26). A confirmationDialog
+    // finishes dismissing BEFORE its action fires, so the picker presents on iPad
+    // and iPhone alike.
+    @State private var showAttachDialog = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -603,21 +609,20 @@ private struct ChatComposer: View {
                     .padding(.horizontal, 16).padding(.top, 6)
             }
             HStack(alignment: .bottom, spacing: 0) {
-                Menu {
-                    Button { showFileImporter = true } label: { Label("Attach file", systemImage: "doc") }
-                    // PhotosPicker presented via the modifier below.
-                    Button { photoPickerPresented = true } label: { Label("Photo library", systemImage: "photo") }
-                } label: {
+                Button { showAttachDialog = true } label: {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 26))
                         .foregroundColor(Theme.mutedText)
                 }
+                .accessibilityIdentifier("composer-attach")
+                .accessibilityLabel("Add attachment")
                 .padding(.leading, 10)
                 .padding(.bottom, 12)
 
                 TextField("", text: $input,
                           prompt: Text("Message MyMu…").foregroundColor(Theme.mutedText),
                           axis: .vertical)
+                    .accessibilityIdentifier("composer-input")
                     .lineLimit(1...6)
                     .font(.system(size: 17))
                     .foregroundColor(Theme.text)
@@ -649,6 +654,7 @@ private struct ChatComposer: View {
                         .font(.system(size: 32))
                         .foregroundColor(sendButtonActive ? Theme.primary : Theme.mutedText.opacity(0.5))
                 }
+                .accessibilityIdentifier("composer-send")
                 .disabled(!relay.isLoading && !canSend)
                 .padding(.trailing, 6)
                 .padding(.bottom, 7)
@@ -661,6 +667,11 @@ private struct ChatComposer: View {
             .padding(.vertical, 10)
         }
         .background(Theme.background)
+        .confirmationDialog("Add attachment", isPresented: $showAttachDialog, titleVisibility: .visible) {
+            Button("Photo library") { photoPickerPresented = true }
+            Button("Attach file") { showFileImporter = true }
+            Button("Cancel", role: .cancel) { }
+        }
         .photosPicker(isPresented: $photoPickerPresented, selection: $photoItem, matching: .images)
         .fileImporter(isPresented: $showFileImporter,
                       allowedContentTypes: [UTType.item],

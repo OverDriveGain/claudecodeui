@@ -17,7 +17,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     GENERATE_INFOPLIST_FILE: NO
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "6"
+    CURRENT_PROJECT_VERSION: "7"
 
 targets:
   MyMu:
@@ -30,3 +30,30 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mymu.app
         INFOPLIST_FILE: MyMu/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  # UI-test target — simulator only, not shipped. Guards the iPad composer
+  # "+" attach path (App Store 2.1(a) rejection, submission c5bff108).
+  MyMuUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - MyMuUITests
+    dependencies:
+      - target: MyMu
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mymu.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: MyMu
+
+schemes:
+  MyMu:
+    build:
+      targets:
+        MyMu: all
+        MyMuUITests: [test]
+    test:
+      targets:
+        - MyMuUITests
+    run:
+      config: Debug
