@@ -87,9 +87,11 @@ business terms):
   report), stamps, and submits to the authorities (municipality/BPS, DEWA,
   Civil Defence, developer NOC). The customer tracks all approvals in one
   screen. Bank financing can start here — clean file: permit + audited cost.
-- **Phase 4 — tender**: the audited bill of quantities becomes a unified
-  tender document; up to 3 certified contractors price it item by item;
-  digital tri-party contract; CAR insurance before the first stone.
+- **Phase 4 — contractor**: the audited bill of quantities becomes a unified
+  pricing document; BTI obtains competitive item-by-item prices from certified
+  contractors on the customer's behalf; digital contract; CAR insurance before
+  the first stone. (An open bidding marketplace comes later — never promise it
+  as available today.)
 - **Phase 5 — execution**: milestone payments locked in ESCROW — money moves
   only when the supervising consultant certifies progress. Geotagged site
   photos, documented change orders, staged government inspections, mutual
@@ -99,6 +101,13 @@ business terms):
 - **Phase 7 — the living digital twin**: the approved 3D model matures into a
   permanent digital twin of the home — the customer returns anytime to
   redesign interiors on true dimensions and shop pieces in place.
+
+**How BTI delivers this TODAY — full escort:** when a customer decides to build
+with BTI, they are personally escorted through the whole journey: BTI leads
+with the licensed consultant and manages contacting every party — labs,
+authorities, contractors, banks — on the customer's behalf. One point of
+contact, everything arranged. (The platform automates more of this over time;
+sell the escort, not the automation.)
 
 *(This knowledge section will later be fed automatically from BTI's project
 archive and website (mnemosyne). Until then, admins curate it in /admin.)*`;
