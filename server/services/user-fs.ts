@@ -103,6 +103,33 @@ export async function existsAsUser(user: string, filePath: string): Promise<bool
   }
 }
 
+/** Is the path a directory for the owning user? */
+export async function isDirAsUser(user: string, filePath: string): Promise<boolean> {
+  try {
+    await execFileAsync('sudo', sudoArgs(user, ['test', '-d', filePath]));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** mkdir -p as the owning user. */
+export async function mkdirAsUser(user: string, dirPath: string): Promise<void> {
+  await execFileAsync('sudo', sudoArgs(user, ['mkdir', '-p', '--', dirPath]));
+}
+
+/**
+ * Canonicalize a path as the owning user (`readlink -m`: resolves symlinks in
+ * every existing component, tolerates missing trailing components — the shape
+ * project creation needs, where the leaf may not exist yet).
+ */
+export async function resolvePathAsUser(user: string, p: string): Promise<string> {
+  const { stdout } = await execFileAsync('sudo', sudoArgs(user, ['readlink', '-m', '--', p]));
+  const out = String(stdout).trim();
+  if (!out) throw new Error('cross-user path resolution returned nothing');
+  return out;
+}
+
 // Python walker producing EXACTLY the shape of getFileTree in index.js:
 // [{name, path, type, size, modified, permissions, permissionsRwx, isSymlink?,
 //   truncated?, mount?, children?}] — sorted dirs-first then by name, depth
