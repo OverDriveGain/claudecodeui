@@ -271,15 +271,15 @@ export default function SidebarProjectList({
   const conversationProjects = filteredProjects.filter((project) => !isAgent(project));
 
   // Conversations tab: a single flat list of every session across all (non-agent)
-  // projects, most-recently-used first — the same shape claude.ai/code shows in its
-  // Recents panel, instead of a tree of collapsed project folders.
+  // projects, newest-CREATED first — a stable order that doesn't reshuffle every
+  // time a session receives a message (lastActivity only as legacy fallback).
   if (listKind === 'conversations') {
     const sessionTime = (session: SessionWithProvider): number => {
       const raw =
-        (session.updated_at as string) ||
-        (session.lastActivity as string) ||
         (session.createdAt as string) ||
         (session.created_at as string) ||
+        (session.updated_at as string) ||
+        (session.lastActivity as string) ||
         '';
       const t = new Date(raw).getTime();
       return Number.isNaN(t) ? 0 : t;

@@ -65,6 +65,13 @@ export const getSessionDate = (session: SessionWithProvider): Date => {
   return new Date(getUpdatedTimestamp(session) || getCreatedTimestamp(session) || 0);
 };
 
+// Ordering is by CREATION time, newest first — a stable position that doesn't
+// reshuffle the list every time a session receives a message. lastActivity is
+// only a fallback for rows that predate the createdAt field.
+export const getSessionSortDate = (session: SessionWithProvider): Date => {
+  return new Date(getCreatedTimestamp(session) || getUpdatedTimestamp(session) || 0);
+};
+
 export const getSessionName = (session: SessionWithProvider, t: TFunction): string => {
   return session.summary || session.name || t('projects.newSession');
 };
@@ -120,7 +127,7 @@ export const getAllSessions = (project: Project): SessionWithProvider[] => {
   }));
 
   return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions, ...opencodeSessions].sort(
-    (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
+    (a, b) => getSessionSortDate(b).getTime() - getSessionSortDate(a).getTime(),
   );
 };
 
