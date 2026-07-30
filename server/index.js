@@ -207,7 +207,7 @@ app.locals.wss = wss;
 app.use(compression());
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
-    limit: '50mb',
+    limit: `${MAX_FILE_UPLOAD_SIZE_MB}mb`,
     type: (req) => {
         // Skip multipart/form-data requests (for file uploads like images)
         const contentType = req.headers['content-type'] || '';
@@ -217,7 +217,7 @@ app.use(express.json({
         return contentType.includes('json');
     }
 }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.urlencoded({ limit: `${MAX_FILE_UPLOAD_SIZE_MB}mb`, extended: true }));
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {
@@ -1654,7 +1654,7 @@ app.post('/api/projects/:projectId/upload-images', authenticateToken, async (req
             storage,
             fileFilter,
             limits: {
-                fileSize: 5 * 1024 * 1024, // 5MB
+                fileSize: MAX_FILE_UPLOAD_SIZE_BYTES,
                 files: 5
             }
         });

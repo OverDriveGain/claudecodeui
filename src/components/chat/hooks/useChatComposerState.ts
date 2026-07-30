@@ -25,6 +25,12 @@ import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 
+// Keep in sync with MAX_FILE_UPLOAD_SIZE_MB in server/index.js — the multer limit on
+// /api/projects/:projectId/upload-images is the real gate. Any reverse proxy in front
+// of the server also needs client_max_body_size >= this value.
+const MAX_ATTACHMENT_SIZE_MB = 200;
+const MAX_ATTACHMENT_SIZE_BYTES = MAX_ATTACHMENT_SIZE_MB * 1024 * 1024;
+
 type PendingViewSession = {
   startedAt: number;
 };
@@ -485,11 +491,11 @@ export function useChatComposerState({
 
         // Any file type is accepted (images, PDFs, text/code, etc.) — the server
         // encodes each per type when sending to a live agent.
-        if (!file.size || file.size > 5 * 1024 * 1024) {
+        if (!file.size || file.size > MAX_ATTACHMENT_SIZE_BYTES) {
           const fileName = file.name || 'Unknown file';
           setImageErrors((previous) => {
             const next = new Map(previous);
-            next.set(fileName, 'File too large (max 5MB)');
+            next.set(fileName, `File too large (max ${MAX_ATTACHMENT_SIZE_MB}MB)`);
             return next;
           });
           return false;
@@ -534,7 +540,7 @@ export function useChatComposerState({
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     // No `accept` filter — all file types are allowed (images, PDFs, text/code, …).
-    maxSize: 5 * 1024 * 1024,
+    maxSize: MAX_ATTACHMENT_SIZE_BYTES,
     maxFiles: 5,
     onDrop: handleImageFiles,
     noClick: true,
