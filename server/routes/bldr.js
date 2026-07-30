@@ -244,6 +244,14 @@ router.get('/admin/jobs', requireAdmin, (req, res) => {
   res.json(listJobs());
 });
 
+// The TABU product-foundation document (confidential — admin eyes only).
+// The full user journey V1.1 (Wael, July 2026): land → key, 8 phases, 33 steps.
+router.get('/admin/journey', requireAdmin, (req, res) => {
+  const docPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../docs/tabu-user-journey-v1.1.html');
+  if (!fs.existsSync(docPath)) return res.status(404).json({ error: 'Journey document not found.' });
+  res.type('html').send(fs.readFileSync(docPath, 'utf8'));
+});
+
 // The AI Architect: persona, BTI knowledge, greeting protocol. Applies to the
 // customer's NEXT chat message — the briefing is injected per turn.
 router.get('/admin/architect', requireAdmin, (req, res) => {

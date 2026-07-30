@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>طابو TABU — رحلة المستخدم الكاملة من الأرض إلى المفتاح</title>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;700;800&family=Space+Mono:wght@400;700&family=Alexandria:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#171331;          /* deep blueprint navy */
+    --paper:#FBFAF6;        /* drafting paper */
+    --line:#171331;         /* blueprint line */
+    --accent:#5A2BE8;       /* surveyor orange */
+    --white:#FAFAF7;
+    --grid:rgba(90,43,232,.08);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:'Rubik',sans-serif;color:var(--ink);background:var(--paper);
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:32px 32px;line-height:1.8;
+  }
+  .mono{font-family:'Space Mono',monospace}
+  .wrap{max-width:960px;margin:0 auto;padding:0 22px}
+
+  /* ============ HEADER ============ */
+  header{background:var(--ink);color:var(--white);padding:52px 0 44px;position:relative;overflow:hidden}
+  header::after{content:"";position:absolute;inset:0;
+    background-image:linear-gradient(rgba(250,250,247,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(250,250,247,.05) 1px,transparent 1px);
+    background-size:32px 32px;pointer-events:none}
+  .doc-tag{font-family:'Space Mono',monospace;font-size:12px;letter-spacing:3px;color:var(--accent);margin-bottom:14px}
+  h1{font-family:'Alexandria','Rubik',serif;font-size:clamp(30px,5vw,46px);font-weight:700;line-height:1.35}
+  .sub{font-size:16.5px;color:#B9C4D0;margin-top:12px;max-width:640px;font-weight:300}
+  .meta{display:flex;gap:26px;flex-wrap:wrap;margin-top:26px;font-family:'Space Mono',monospace;font-size:12px;color:#8FA0B3}
+  .meta b{color:var(--white);font-weight:500}
+
+  /* ============ PHASE OVERVIEW STRIP ============ */
+  .strip{background:var(--white);border-block:3px solid var(--ink)}
+  .strip-inner{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr))}
+  .strip-cell{padding:16px 12px;border-inline-start:1px solid #DDD8CC;text-align:center}
+  .strip-cell:first-child{border-inline-start:none}
+  .strip-num{font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);letter-spacing:2px}
+  .strip-name{font-size:13.5px;font-weight:700;margin-top:4px}
+
+  /* ============ ACTORS LEGEND ============ */
+  .legend{display:flex;gap:10px;flex-wrap:wrap;padding:26px 0 8px}
+  .legend-title{width:100%;font-size:13px;font-weight:700;letter-spacing:1px;color:#6B7686;margin-bottom:2px}
+  .badge{font-size:12.5px;font-weight:700;padding:5px 13px;border-radius:2px;color:var(--white)}
+  .b-client{background:#171331}
+  .b-app{background:var(--accent)}
+  .b-cons{background:#3F6B4F}
+  .b-cont{background:#7A4A9E}
+  .b-auth{background:#5A5A5A}
+
+  /* ============ PHASES ============ */
+  .phase{margin:44px 0 0;position:relative}
+  .phase-head{display:flex;align-items:baseline;gap:16px;margin-bottom:6px}
+  .phase-num{font-family:'Space Mono',monospace;font-size:13px;color:var(--accent);letter-spacing:2px;white-space:nowrap}
+  .phase-title{font-family:'Alexandria','Rubik',serif;font-size:clamp(22px,3.4vw,30px);font-weight:700}
+  .phase-goal{font-size:14.5px;color:#5C6675;margin-bottom:22px;padding-inline-start:2px}
+
+  /* the critical path line */
+  .steps{position:relative;padding-inline-start:34px}
+  .steps::before{content:"";position:absolute;inset-inline-start:11px;top:6px;bottom:6px;width:2px;
+    background:repeating-linear-gradient(to bottom,var(--line) 0 8px,transparent 8px 14px)}
+  .step{position:relative;background:var(--white);border:1px solid #D8D2C2;padding:16px 20px 14px;margin-bottom:14px}
+  .step::before{content:"";position:absolute;inset-inline-start:-29px;top:22px;width:12px;height:12px;
+    background:var(--paper);border:3px solid var(--line);border-radius:50%}
+  .step.key::before{background:var(--accent);border-color:var(--accent)}
+  .step-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .step-no{font-family:'Space Mono',monospace;font-size:11.5px;color:#98A0AE;letter-spacing:1px}
+  .step-title{font-size:16.5px;font-weight:800}
+  .step-body{font-size:14.5px;color:#333C49}
+  .step-body b{color:var(--ink)}
+  .mini{font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:2px;color:var(--white)}
+
+  /* decision diamond */
+  .decision{position:relative;margin:4px 0 18px;padding-inline-start:0}
+  .decision-box{background:var(--ink);color:var(--white);padding:16px 20px;position:relative}
+  .decision-box::before{content:"◆";color:var(--accent);margin-inline-end:9px;font-size:15px}
+  .decision-title{font-weight:800;font-size:15.5px;display:inline}
+  .branches{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  .branch{border:1px dashed #C9C2B0;background:#FBFAF6;padding:12px 15px;font-size:13.5px}
+  .branch b{display:block;font-size:14px;margin-bottom:3px}
+  .branch.loop b{color:var(--accent)}
+  .branch.go b{color:#3F6B4F}
+
+  /* warning / note */
+  .note{border-inline-start:4px solid var(--accent);background:#FBF3EA;padding:12px 18px;font-size:13.5px;margin:6px 0 16px;color:#5B4632}
+  .note b{color:var(--ink)}
+
+  /* ============ FOOTER ============ */
+  footer{margin-top:60px;background:var(--ink);color:#8FA0B3;padding:26px 0;font-size:13px}
+  footer .wrap{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  footer b{color:var(--white)}
+
+  @media(max-width:560px){.branches{grid-template-columns:1fr}}
+  @media print{body{background:#fff}.step{break-inside:avoid}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+      <div style="width:44px;height:44px;background:var(--accent);border-radius:50%;border:2px dashed rgba(255,255,255,.5);display:grid;place-items:center;font-family:'Alexandria',sans-serif;font-weight:800;font-size:21px;color:#fff;letter-spacing:1px">ط</div>
+      <div>
+        <div style="font-family:'Alexandria','Rubik',serif;font-size:26px;font-weight:700">طابو</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;letter-spacing:4px;color:var(--accent)">TABU · LAND TO KEY</div>
+      </div>
+    </div>
+    <div class="doc-tag">PRODUCT FOUNDATION DOCUMENT · V1.1 · CONFIDENTIAL</div>
+    <h1>رحلة المستخدم الكاملة<br>من قطعة الأرض إلى مفتاح البيت</h1>
+    <div class="sub">التدفق التشغيلي لمنصة طابو: الذكاء الاصطناعي التوليدي، الاستشاري المرخَّص، المقاول المعتمد، والجهات الحكومية — في مسار واحد متتبَّع ومُلزِم تعاقديًا، وبيت يبقى حيًّا بعد التسليم.</div>
+    <div class="meta">
+      <span>الإعداد: <b>وائل قيخيا</b></span>
+      <span>النطاق: <b>الإمارات والسعودية — قابل للتوسع خليجيًا</b></span>
+      <span>التاريخ: <b>يوليو 2026</b></span>
+    </div>
+  </div>
+</header>
+
+<!-- PHASE STRIP -->
+<div class="strip">
+  <div class="wrap strip-inner">
+    <div class="strip-cell"><div class="strip-num">PH-0</div><div class="strip-name">الأرض والتحقق</div></div>
+    <div class="strip-cell"><div class="strip-num">PH-1</div><div class="strip-name">الموجز والميزانية</div></div>
+    <div class="strip-cell"><div class="strip-num">PH-2</div><div class="strip-name">التوليد والتصميم</div></div>
+    <div class="strip-cell"><div class="strip-num">PH-3</div><div class="strip-name">الاستشاري والتراخيص</div></div>
+    <div class="strip-cell"><div class="strip-num">PH-4</div><div class="strip-name">المناقصة</div></div>
+    <div class="strip-cell"><div class="strip-num">PH-5</div><div class="strip-name">التنفيذ</div></div>
+    <div class="strip-cell"><div class="strip-num">PH-6</div><div class="strip-name">التسليم والضمان</div></div>
+    <div class="strip-cell" style="background:#FDF4E9"><div class="strip-num">PH-7</div><div class="strip-name">التوأم الرقمي الحي</div></div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <div class="legend-title">الفاعلون في كل خطوة</div>
+    <span class="badge b-client">العميل</span>
+    <span class="badge b-app">المنصة + AI</span>
+    <span class="badge b-cons">الاستشاري المرخَّص</span>
+    <span class="badge b-cont">المقاول المعتمد</span>
+    <span class="badge b-auth">الجهات الحكومية</span>
+  </div>
+
+  <!-- ============ PHASE 0 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 0</span><span class="phase-title">الأرض والتحقق القانوني</span></div>
+    <div class="phase-goal">الهدف: من البحث عن الأرض إلى بيانات رسمية لا قابلة للطعن — قبل رسم أي خط.</div>
+    <div class="steps">
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">0.0</span><span class="step-title">بوابة الدخول المزدوجة</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">أول سؤال في طابو: <b>«أملك أرضًا»</b> أم <b>«أبحث عن أرض»</b>؟ من يملك ينتقل مباشرة إلى 0.1. ومن يبحث يدخل <b>سوق «الأراضي المدروسة»</b>: قوائم قطع معروضة للبيع واردة من <b>وسطاء ومطورين مرخّصين شركاء</b> (هم أصحاب الإعلان قانونًا)، وطابو يضيف طبقته التي لا يقدمها أحد — <b>دراسة فورية لكل قطعة</b>: ماذا يُسمح بناؤه، كتلة توليدية مبدئية، كلفة تقريبية، وعائد متوقع. فيقارن الباحث القطع <b>بجدواها لا بمساحتها</b>. عند الرغبة بالشراء: «تواصل مع الوسيط المرخّص» — والمنصة تتقاضى <b>رسوم إحالة من الوسيط</b>. وبعد إتمام الشراء تلتحم رحلته بالمسار من 0.1 بأرضه الجديدة — وقد صار عميلًا أعمق بكلفة استحواذ إضافية صفر.</div>
+        <div class="note"><b>الدرجة الثانية (خارطة الطريق):</b> حين يثبت حجم الإحالات تؤسَّس <b>ذراع وساطة مرخّصة</b> — الصفقة كاملة داخل طابو، وثمن الأرض عبر حساب الضمان: أول استخدام للضمان قبل أول حجر. الخط الثابت في الدرجتين: طابو لا يعلن ولا يتوسط بلا ترخيص، ووثائق الملكية محكومة بطبقات الوصول أدناه.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">0.1</span><span class="step-title">التسجيل والهوية الرقمية</span><span class="mini b-client">العميل</span></div>
+        <div class="step-body">إنشاء الحساب عبر <b>UAE Pass</b> — هذا ليس رفاهية: هو ما يجعل كل توقيع وعقد لاحق داخل المنصة ملزمًا قانونيًا.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">0.2</span><span class="step-title">إدخال رقم القطعة وسحب البيانات الرسمية</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span><span class="mini b-auth">الجهات</span></div>
+        <div class="step-body">العميل يُدخل <b>رقم قطعة الأرض</b> أو يرفع <b>مخطط الأرض الرسمي (Affection Plan)</b>. الذكاء الاصطناعي يستخرج: الحدود والمساحة الدقيقة، <b>الارتدادات</b>، <b>الارتفاع المسموح</b>، <b>نسبة البناء (FAR)</b>، الاستخدام المصرَّح، وموقع المداخل المسموحة.
+        <br><b>وإن لم يملك العميل المخطط؟</b> التطبيق يستخرجه له على درجتين: <b>(أ) المرافقة الموجهة — من اليوم الأول:</b> بمجرد رقم القطعة والإمارة يفتح التطبيق بوابة الجهة الصحيحة بتعليمات خطوة بخطوة، والعميل يرفع الملف الصادر فيُقرأ آليًا. <b>(ب) الربط المباشر — الهدف:</b> بتفويض رقمي عبر UAE Pass يضغط العميل «استخرج مخططي» فيصل المخطط خلال ثوانٍ (رسوم الجهة + رسم خدمة للمنصة) — يُفعَّل باتفاقيات الربط الحكومي بعد إثبات حجم التعاملات.</div>
+        <div class="note"><b>تصحيح جوهري:</b> لا يُستخدم غوغل مطلقًا كمرجع للحدود — خرائطه غير قانونية وخطؤها بالأمتار. غوغل يُستخدم فقط للعرض البصري للموقع فوق البيانات الرسمية.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">0.3</span><span class="step-title">تأكيد المدخل والقيود</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">المنصة تعرض المداخل الممكنة وفق مخطط الأرض وشبكة الطرق، والعميل يؤكد أو يعدّل ضمن المسموح. تُعرض له بطاقة «قيود أرضك» بلغة بسيطة قبل المتابعة.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">0.4</span><span class="step-title">سوق فحص التربة</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span><span class="mini b-auth">مختبر معتمد</span></div>
+        <div class="step-body">العميل يختار من <b>قائمة المختبرات المحلية المعتمدة</b> على المنصة (الأسعار، مدة الإنجاز، التقييمات) ويحجز الفحص الجيوتقني بضغطة، ويسير بالتوازي مع مرحلة التصميم. <b>النتائج ترفع رقميًا على المنصة</b> ويتتبع العميل حالتها (حُجز ← عيّنات ← مختبر ← تقرير)، ويغذّي التقرير التصميم الإنشائي تلقائيًا. <b>المنصة تتقاضى عمولة من المختبر</b> عن كل حجز — مصدر إيراد مبكر قبل أي تثبيت. بدون التقرير تبقى الأساسات والكميات تقديرية وتُوسم بـ«مبدئي حتى ورود تقرير التربة».</div>
+      </div>
+
+      <div class="note">
+        <b>حدود الحساب — ومحفظة المستثمرين:</b> الحساب المجاني الموثق بـUAE Pass يستوعب <b>حتى 3 قطع أراضٍ</b> (سيناريو «أي أرضيّ أبني عليها؟» — طابو أداة القرار قبل أداة البناء)، والمحاولات الثلاث المجانية على مستوى <b>الحساب لا القطعة</b> منعًا للتحايل، وباقة الاستوديو ترتبط بمشروع واحد على قطعة واحدة. ولمن يحتاج أكثر: <b>باقة «محفظة طابو»</b> باشتراك شهري للمستثمرين والمطورين الصغار — «ادرس قبل أن تشتري»: دراسات جدوى فورية لقطع معروضة في السوق. وتحكمها <b>طبقات وصول ثلاث</b>: (1) البيانات التنظيمية العامة للمنطقة (استخدام، FAR، ارتفاع، ارتدادات — منشورة أصلًا في أنظمة GIS البلدية) متاحة للدراسة الافتراضية، (2) وثائق الملكية (المخطط الرسمي، الصك، بيانات المالك) <b>محجوبة قطعيًا</b> إلا بتفويض المالك عبر UAE Pass أو مشاركته الطوعية كبائع، (3) التثبيت والتعاقد بملكية مثبتة أو وكالة موثقة فقط.
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 1 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 1</span><span class="phase-title">الموجز التصميمي والميزانية</span></div>
+    <div class="phase-goal">الهدف: فهم ما يريده العميل وما يستطيع دفعه — قبل التوليد، لا بعده.</div>
+    <div class="steps">
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">1.1</span><span class="step-title">الاستبيان الموجَّه</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">بدل البرومت الحر: أسئلة مرئية متدرجة — عدد الطوابق والغرف والمجالس، الطابع المعماري (بأمثلة مصورة)، مستوى التشطيب، الاستدامة، مواقف السيارات، ملحقات خارجية. <b>وفي قلبها: الميزانية المستهدفة والمدة المأمولة.</b></div>
+        <div class="note"><b>لماذا؟</b> العميل العادي لا يكتب موجزًا معماريًا. والميزانية تدخل كقيد توليد منذ البداية — التصميم يولد <b>ضمن</b> الميزانية، لا يُفاجأ العميل بالسعر بعده.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">1.2</span><span class="step-title">وصف حر تكميلي (اختياري)</span><span class="mini b-client">العميل</span></div>
+        <div class="step-body">مساحة نصية/صوتية للتفاصيل الشخصية: «أريد فناءً داخليًا»، «مجلس منفصل بمدخل خاص»، «مطبخ تحضيري». الذكاء الاصطناعي يدمجها مع الاستبيان في موجز تصميمي موحد يُعرض على العميل للاعتماد.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 2 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 2</span><span class="phase-title">التوليد والتصميم التفاعلي</span></div>
+    <div class="phase-goal">الهدف: تصميم متوافق مع الاشتراطات، مُسعَّر، وقابل للتعديل الفوري — من نموذج واحد.</div>
+    <div class="steps">
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">2.1</span><span class="step-title">التوليد من نموذج BIM واحد</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">المحرك يولّد <b>نموذج BIM مركزيًا</b> تُشتق منه كل المخرجات: المخططات المعمارية، الكتلة ثلاثية الأبعاد بالفراغات الداخلية، المفهوم الإنشائي، مفهوم MEP والتكييف، مواصفات مواد الإكساء، <b>جدول كميات كامل وتسعير حي</b> — مع مدقق اشتراطات آلي (ارتدادات/ارتفاع/نسبة بناء) يمنع توليد أي مخالفة.</div>
+        <div class="note"><b>تصحيح جوهري:</b> النموذج الواحد يحل مشكلة «الرحلة الدائرية» — أي تعديل لاحق، من العميل أو الاستشاري، يعيد حساب الكميات والسعر تلقائيًا. لا نسخ متضاربة أبدًا.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">2.2</span><span class="step-title">الاستعراض والتعديل الحي</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">جولة ثلاثية الأبعاد، مخططات لكل طابق، مقارنة بدائل تصميمية، وشريط دائم يعرض <b>السعر الحي مقابل الميزانية</b>. كل طلب تعديل («كبّر المجلس»، «بدّل الواجهة لحجرية») يعاد توليده مع تحديث فوري للكميات والسعر.</div>
+        <div class="note"><b>نموذج الوصول:</b> <b>3 توليدات كاملة مجانًا</b> (التعديلات الخفيفة — ألوان، مواد، أثاث — لا تُحسب؛ إعادة التوليد الكاملة فقط هي المحاولة). بعدها باقة <b>«استوديو التصميم»: 1,500 درهم</b> — توليد غير محدود 90 يومًا، نسخ محفوظة متعددة، مشاركة العائلة — <b>وتُخصم كاملة من رسوم التثبيت</b> إن ثبّت، فتتحول من رسم إلى عربون.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">2.3</span><span class="step-title">التصميم الداخلي المبكر (اختياري)</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">خطوة قابلة للتخطي بضغطة: العميل يؤثث فراغاته على النموذج نفسه — تشطيبات، إنارة، مطابخ وخزائن، وأثاث بمقاسات حقيقية من المتاجر الشريكة. الفائدة الهندسية: <b>توزيع الأثاث يحسّن المعماري والكهروميكانيك</b> (الأفياش والإنارة والتكييف تتحدد من مكان السرير والكنب لا بالتخمين). من يتخطاها يجدها كاملة لاحقًا في مرحلة التوأم الرقمي.</div>
+        <div class="note"><b>الفصل التعاقدي الحاسم:</b> عند اعتماد الاستشاري للتصميم، <b>البنود المثبتة فقط</b> (أرضيات، جبس، إنارة مدمجة، دهانات، مطابخ/خزائن + <b>رسوم تركيب</b> مشتريات العميل) تضاف تلقائيًا ببنودها وتسعيرها إلى وثيقة مناقصة المقاول. أما <b>المنقولات</b> (أثاث، إكسسوارات) فيشتريها العميل بنفسه عبر المنصة بعمولتها — خارج عقد المقاولة وضمانه. ومراجعة الاستشاري تشمل المثبت وتوافقه مع MEP فقط، لا ذوق الأثاث.</div>
+      </div>
+
+      <div class="decision">
+        <div class="decision-box">
+          <span class="decision-title">نقطة قرار: تثبيت التصميم؟</span>
+          <div class="branches">
+            <div class="branch loop"><b>تعديل ↺</b>يعود التدفق إلى 2.2 — بلا حدود لعدد الدورات ضمن الباقة.</div>
+            <div class="branch go"><b>تثبيت ←</b>يُقفل التصميم بنسخة مرقمة (Design Freeze v1) وننتقل للمرحلة 3.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 3 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 3</span><span class="phase-title">الاستشاري المرخَّص والتراخيص</span></div>
+    <div class="phase-goal">الهدف: تحويل مخرجات الذكاء الاصطناعي إلى وثائق مختومة مقبولة حكوميًا.</div>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">3.1</span><span class="step-title">اختيار الاستشاري والتعاقد</span><span class="mini b-client">العميل</span><span class="mini b-cons">الاستشاري</span></div>
+        <div class="step-body">قائمة الاستشاريين المعتمدين (التصنيف، التقييمات، الرسوم، مدة الإنجاز). عند الاختيار: <b>عقد استشاري يُوقَّع رقميًا عبر UAE Pass داخل المنصة</b>، ودفعة الاستشاري تدخل <b>حساب الضمان</b>، وكل استشاري في القائمة يؤدي للمنصة عمولتها المتفقة عند اختياره.</div>
+        <div class="note"><b>نموذج التشغيل المرحلي:</b> أول 5 مشاريع في كل دولة يتولاها <b>الاستشاري الشريك حصريًا</b> (خفض كلفة + ضبط جودة + بناء كتيّب العمليات). بعدها يُفتح السوق: الشريك يصبح واحدًا من عدة استشاريين متعاقدين، والترتيب أمام العميل بمعايير موحدة (تقييم، سعر، سرعة) <b>بلا أفضلية دائمة لأحد</b>.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">3.2</span><span class="step-title">المراجعة الهندسية داخل المنصة</span><span class="mini b-cons">الاستشاري</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">مهندسو الاستشاري يراجعون على نموذج BIM نفسه: التدقيق الإنشائي (مع <b>تقرير التربة</b> الوارد من 0.4)، تنسيق MEP، التوافق مع كود البناء. أي تعديل يظهر للعميل فورًا مع أثره على السعر، والتواصل كله موثق داخل المنصة.
+        <br>وفور الاعتماد تولّد المنصة تلقائيًا <b>«المجسم المعتمد»</b>: نسخة ثلاثية الأبعاد قابلة <b>للتجول الحر</b> من نموذج BIM المدقق نفسه — بسماكات الجدران النهائية ومناسيب الأسقف ومواضع الكهرباء والتكييف الحقيقية. تعمل على جوال العميل ومتصفحه مباشرة، وتخدم ثلاثًا: قرارات التصميم الداخلي على أبعاد صادقة، واكتشاف الملاحظات قبل الصب لا بعده، وتصبح <b>نواة التوأم الرقمي</b> التي تنضج حتى التسليم.</div>
+        <div class="note"><b>مبدأ ثابت:</b> المجسم لا يُنشأ يدويًا من أحد — الاستشاري يعتمد هندسيًا، والمحرك يولّد بصريًا من المصدر الواحد. هكذا يستحيل تعارض المجسم مع الكميات والعقود.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">3.3</span><span class="step-title">الختم والتقديم للجهات</span><span class="mini b-cons">الاستشاري</span><span class="mini b-auth">الجهات</span></div>
+        <div class="step-body">الاستشاري يختم ويقدّم بصفته القانونية: <b>البلدية (BPS)</b>، <b>هيئة الكهرباء والماء</b>، <b>الدفاع المدني</b>، و<b>NOC المطوّر الرئيسي</b> إن وُجد. المنصة تولّد له حزمة التقديم بصيغ وطبقات CAD المطابقة لاشتراطات كل جهة لتقليل الرفض الآلي.</div>
+        <div class="note"><b>واقعية المرحلة الأولى:</b> لا ربط API مباشرًا مع الجهات في النسخة الأولى — الاستشاري يقدّم عبر بواباتها ويحدّث الحالة في المنصة، والربط الرسمي هدف تفاوضي بعد إثبات حجم التعاملات.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">3.4</span><span class="step-title">تتبع حالة الطلب</span><span class="mini b-client">العميل</span></div>
+        <div class="step-body">شاشة تتبع موحدة لكل الموافقات الأربع، بإشعارات لحظية: مُقدَّم ← قيد المراجعة ← ملاحظات (تعود إلى 3.2) ← <b>معتمَد</b>.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">3.5</span><span class="step-title">التمويل البنكي (لمن يحتاجه)</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">اللحظة المثالية للتمويل: رخصة صادرة + كلفة مدققة من استشاري مرخّص + جدول دفعات واضح — <b>أنظف ملف ائتماني يمكن أن يصل بنكًا</b>. المنصة تولّد ملف طلب القرض جاهزًا وتعرضه على بنوك شريكة متعددة، العميل يقارن العروض (الهامش، المدة، الرسوم) ويختار داخل التطبيق، <b>والمنصة تتقاضى عمولة إحالة من البنك</b>. دفعات القرض تُصرف لاحقًا عبر حساب الضمان مربوطةً بمعالم الإنجاز نفسها — البنك يحب هذا أكثر من العميل.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 4 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 4</span><span class="phase-title">المناقصة واختيار المقاول</span></div>
+    <div class="phase-goal">الهدف: أسعار سوق حقيقية متنافسة على أساس موحد — لا سعر مفروض يرفضه المقاول.</div>
+    <div class="steps">
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">4.1</span><span class="step-title">وثيقة المناقصة الموحدة</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">جدول الكميات <b>المدقَّق من الاستشاري</b> يتحول تلقائيًا إلى وثيقة مناقصة: بنود موحدة، مواصفات، شروط، ومدة تنفيذ مرجعية — <b>شاملةً بنود التصميم الداخلي المثبتة</b> (من 2.3 إن فُعّلت) و<b>بند رسوم تركيب</b> مشتريات العميل المباشرة، فيسعّر المقاول كل شيء مرة واحدة ويُقفل باب أوامر التغيير التشطيبية لاحقًا.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">4.2</span><span class="step-title">التسعير التنافسي</span><span class="mini b-cont">المقاولون</span></div>
+        <div class="step-body">العميل يدعو حتى <b>3 مقاولين معتمدين</b> (تصنيفهم لدى الجهات متحقق منه). كل مقاول يسعّر بندًا بندًا داخل المنصة خلال مهلة محددة.</div>
+      </div>
+
+      <div class="decision">
+        <div class="decision-box">
+          <span class="decision-title">نقطة قرار: مقارنة العروض واختيار المقاول</span>
+          <div class="branches">
+            <div class="branch loop"><b>تفاوض / إعادة طرح ↺</b>جولة أسئلة وأجوبة موثقة أو دعوة مقاولين آخرين.</div>
+            <div class="branch go"><b>ترسية ←</b>عقد مقاولة ثلاثي المرجعية يُوقَّع رقميًا، وجدول دفعات مرحلي يُقفل في حساب الضمان.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">4.3</span><span class="step-title">تأمين المشروع</span><span class="mini b-client">العميل</span><span class="mini b-cont">المقاول</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">مع الترسية وقبل أول حجر: <b>تأمين جميع أخطار المقاول (CAR)</b> إلزاميًا عبر شركات تأمين شريكة تسعّر داخل المنصة على بيانات المشروع الجاهزة، والمنصة تتقاضى عمولة إحالة. وعند التسليم لاحقًا يُعرض على العميل <b>تأمين المنزل</b> بنفس الآلية — وثيقة التأمين تُحفظ في ملف المشروع وترافق التوأم الرقمي.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 5 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 5</span><span class="phase-title">التنفيذ والإشراف والدفعات</span></div>
+    <div class="phase-goal">الهدف: مال لا يتحرك إلا مقابل إنجاز متحقَّق منه، وكل تغيير موثَّق.</div>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">5.1</span><span class="step-title">مساحة العمل الثلاثية</span><span class="mini b-client">العميل</span><span class="mini b-cons">الاستشاري</span><span class="mini b-cont">المقاول</span></div>
+        <div class="step-body">غرفة مشروع موحدة: الجدول الزمني المتفق عليه بمعالمه (Milestones)، محادثات موثقة، وسجل قرارات. المقاول يرفع <b>صورًا وفيديوهات مؤرخة وموقعة جغرافيًا من الموقع</b>.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">5.2</span><span class="step-title">الإشراف وتفعيل الدفعات</span><span class="mini b-cons">الاستشاري</span></div>
+        <div class="step-body">الاستشاري يشرف ميدانيًا ويرفع تقارير دورية. عند كل معلم إنجاز: يعتمد الاستشاري الإنجاز ← <b>تتحرر الدفعة تلقائيًا من حساب الضمان للمقاول</b>. لا اعتماد، لا دفعة. هذه أقوى ضمانة ثقة في المنصة كلها.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">5.3</span><span class="step-title">أوامر التغيير</span><span class="mini b-client">العميل</span><span class="mini b-cons">الاستشاري</span><span class="mini b-cont">المقاول</span></div>
+        <div class="step-body">أي تغيير أثناء التنفيذ (وسيحدث حتمًا) يمر بمسار إلزامي: طلب ← تسعير المقاول ← مراجعة الاستشاري ← موافقة العميل رقميًا ← <b>تحديث تلقائي للعقد والكميات والجدول الزمني</b>. لا تغيير شفهي معترف به.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">5.4</span><span class="step-title">الفحوصات الحكومية المرحلية</span><span class="mini b-auth">الجهات</span></div>
+        <div class="step-body">مواعيد فحوصات البلدية والدفاع المدني المرحلية تُجدول وتُتتبع داخل المنصة، ونتائجها توثَّق في ملف المشروع.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">5.5</span><span class="step-title">التقييمات المتبادلة</span><span class="mini b-client">العميل</span><span class="mini b-cons">الاستشاري</span><span class="mini b-cont">المقاول</span></div>
+        <div class="step-body">عند إغلاق كل معلم إنجاز: <b>تقييم متبادل قصير وإلزامي</b> — العميل يقيّم الاستشاري والمقاول (الجودة، الالتزام، التواصل)، وهما يقيّمان العميل (وضوح القرارات، سرعة الاعتمادات، الالتزام المالي عبر الضمان). التقييمات تراكمية وعلنية على ملفات السوق — <b>هي وقود جودة المنصة</b>: ترفع الجيد وتُخرج الرديء دون تدخل إداري، وتظهر لكل طرف قبل أي تعاقد جديد.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">5.6</span><span class="step-title">فض النزاعات</span><span class="mini b-client">العميل</span><span class="mini b-cons">الاستشاري</span><span class="mini b-cont">المقاول</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">عند أي خلاف (جودة تنفيذ، تأخير، اعتماد دفعة): مسار إلزامي متدرج — <b>(1) تجميد الدفعة المتنازع عليها فقط</b> في حساب الضمان دون بقية المشروع، <b>(2) تسوية فنية</b> يقودها الاستشاري المشرف خلال 7 أيام بسجل النزاع الموثق (صور، تقارير، مراسلات — كلها على المنصة أصلًا)، <b>(3) وسيط هندسي محايد</b> من قائمة المنصة إن تعذرت، <b>(4) التصعيد للتحكيم/القضاء</b> وفق العقد كخيار أخير — وملف المنصة الموثق يصبح حجية جاهزة. معظم النزاعات تموت في المستوى 2 لأن الأدلة محسومة سلفًا.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 6 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 6</span><span class="phase-title">التسليم والضمان</span></div>
+    <div class="phase-goal">الهدف: إغلاق قانوني كامل — المشروع لا ينتهي عند آخر طوبة.</div>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">6.1</span><span class="step-title">قائمة الملاحظات (Snagging)</span><span class="mini b-client">العميل</span><span class="mini b-cons">الاستشاري</span></div>
+        <div class="step-body">جولة تسليم مشتركة، ملاحظات مصورة داخل المنصة، ومهلة إصلاح متتبعة قبل تحرير الدفعة قبل الأخيرة.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">6.2</span><span class="step-title">شهادة إنجاز البناء والتوصيلات</span><span class="mini b-cons">الاستشاري</span><span class="mini b-auth">الجهات</span></div>
+        <div class="step-body">استخراج <b>شهادة إنجاز البناء</b> وتوصيل الكهرباء والماء الدائم. تُسلَّم للعميل حزمة رقمية: المخططات كما نُفذت (As-Built)، الضمانات، وأدلة التشغيل والصيانة.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-top"><span class="step-no">6.3</span><span class="step-title">فترة الصيانة والضمان العشري</span><span class="mini b-cont">المقاول</span><span class="mini b-cons">الاستشاري</span></div>
+        <div class="step-body">فترة إصلاح العيوب (عادة سنة) مع حجز نسبة ضمان من قيمة العقد، ثم يبقى <b>الضمان الإنشائي العشري</b> المُلزم قانونًا في المنصة كسجل حي — أي مطالبة مستقبلية موثقة بمرجعية كاملة.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 7 ============ -->
+  <section class="phase">
+    <div class="phase-head"><span class="phase-num">المرحلة 7</span><span class="phase-title">التوأم الرقمي الحي — الرحلة لا تنتهي</span></div>
+    <div class="phase-goal">الهدف: البيت المسلَّم يبقى حيًّا في المنصة إلى الأبد — علاقة وإيراد متكرران مدى الحياة.</div>
+    <div class="steps">
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">7.1</span><span class="step-title">أرشفة التوأم الرقمي الكامل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">عند التسليم لا يُغلق المشروع بل يتحول: <b>المجسم المعتمد</b> (المولود في 3.2 والناضج طوال التنفيذ) + مخططات As-Built + المواصفات والضمانات تُحفظ كـ<b>توأم رقمي دائم للبيت</b> في حساب العميل — نسخة حية قابلة للتجول مطابقة لبيته الواقعي، فراغًا فراغًا.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">7.2</span><span class="step-title">العودة في أي وقت — لأي فراغ</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">بعد سنة أو خمس: العميل يفتح بيته الرقمي، يختار أي فراغ — حتى لو كان صمّم غرفة واحدة فقط عند التسليم، أو تخطى التصميم الداخلي المبكر (2.3) كليًا — ويعيد تصميم الديكور بالذكاء الاصطناعي على الأبعاد الحقيقية: أثاث، إكساء، إضاءة، ألوان. يرى كل قطعة في مكانها الفعلي قبل الشراء.</div>
+      </div>
+
+      <div class="step key">
+        <div class="step-top"><span class="step-no">7.3</span><span class="step-title">الشراء بضغطة — بعمولة المنصة</span><span class="mini b-client">العميل</span><span class="mini b-app">المنصة + AI</span></div>
+        <div class="step-body">كل قطعة في التصميم الجديد مربوطة بالمتاجر والموردين المعتمدين: المنصة تنفذ الطلب كاملًا (شراء، توصيل، وتركيب عند الحاجة) وتحصّل عمولتها. وتمتد الخدمة لاحقًا للتوسعات والملاحق — فتعود الرحلة إلى المرحلة 2 <b>بعميل موجود أصلًا وبيت موثق بالكامل</b>.</div>
+        <div class="note"><b>لماذا هذه المرحلة استراتيجية؟</b> كلفة اكتسابها صفر (العميل موجود)، هامشها أعلى من عمولات المقاولات، وتنمو تراكميًا: كل بيت يُسلَّم يضاف إلى مخزون دائم من البيوت الحية المدرّة للإيراد — هذا ما يحوّل المنصة من مشروع صفقات إلى أصل متراكم.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <div class="note" style="margin-top:40px">
+    <b>ما يُدرَج لاحقًا بقرار مشترك:</b> هيكل الرسوم التفصيلي (باقات العميل، نسب العمولات النهائية، نسبة حساب الضمان، رسوم الجهات الممررة) — ونموذج اعتماد الاستشاريين والمقاولين والمختبرات على المنصة — وسياسة قائمة الانتظار عند تجاوز الطلب لطاقة الاستشاريين.
+  </div>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>طابو · TABU — وثيقة تأسيسية · نسخة 1.1 للمراجعة الداخلية</span>
+    <span><b>PH-0 → PH-7</b> · 33 خطوة · 5 فاعلين · نموذج BIM واحد · توأم رقمي دائم</span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -397,9 +397,20 @@ export default function AdminPage() {
               Who generates each pane. Change an endpoint, save, and the next generation uses it.
             </p>
           </div>
-          <Link to="/" className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent">
-            ← App
-          </Link>
+          <div className="flex items-center gap-2">
+            <a
+              href={`/api/bldr/admin/journey?token=${encodeURIComponent(localStorage.getItem('auth-token') || '')}`}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+              title="TABU product foundation — full user journey (confidential)"
+            >
+              📘 TABU journey
+            </a>
+            <Link to="/" className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent">
+              ← App
+            </Link>
+          </div>
         </div>
 
         <div className="mb-8">

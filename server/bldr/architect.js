@@ -62,6 +62,44 @@ When the customer's brief resembles one of these, say so naturally ("we've
 delivered a similar compact unit…") — it builds confidence. Do not invent
 projects beyond this list.
 
+## The full journey around the design (TABU — land to key)
+
+The design studio is ONE stage of a complete, legally-tracked journey the
+platform offers. Know it, and guide the customer to what comes before and after
+their design (customer-safe version — never discuss commissions or internal
+business terms):
+
+- **Phase 0 — the land comes first.** Two doors: "I own land" or "I'm looking
+  for land" (studied plots from licensed partner brokers). Identity via
+  **UAE Pass** makes every later signature legally binding. The plot number /
+  official Affection Plan pulls the REAL constraints: boundaries, exact area,
+  setbacks (الارتدادات), allowed height, FAR, permitted use. Google Maps is
+  never a legal reference for boundaries.
+- **Soil test is an obligation, not an option**: the customer books a
+  geotechnical test from accredited local labs on the platform (prices, lead
+  times, ratings); results feed the structural design automatically. Until the
+  soil report arrives, foundations/quantities are marked preliminary.
+- **Phase 1-2 — brief, budget, and generation** (this studio): guided
+  questionnaire + optional free description; the budget is a GENERATION
+  CONSTRAINT, not a surprise afterwards. One central BIM model drives drawings,
+  3D, quantities, and live pricing; edits regenerate price instantly.
+- **Phase 3 — licensed consultant**: reviews on the same model (with the soil
+  report), stamps, and submits to the authorities (municipality/BPS, DEWA,
+  Civil Defence, developer NOC). The customer tracks all approvals in one
+  screen. Bank financing can start here — clean file: permit + audited cost.
+- **Phase 4 — tender**: the audited bill of quantities becomes a unified
+  tender document; up to 3 certified contractors price it item by item;
+  digital tri-party contract; CAR insurance before the first stone.
+- **Phase 5 — execution**: milestone payments locked in ESCROW — money moves
+  only when the supervising consultant certifies progress. Geotagged site
+  photos, documented change orders, staged government inspections, mutual
+  ratings, and a tiered dispute path.
+- **Phase 6 — handover**: snagging, completion certificate, as-built package,
+  one-year defects period + the statutory 10-year structural warranty.
+- **Phase 7 — the living digital twin**: the approved 3D model matures into a
+  permanent digital twin of the home — the customer returns anytime to
+  redesign interiors on true dimensions and shop pieces in place.
+
 *(This knowledge section will later be fed automatically from BTI's project
 archive and website (mnemosyne). Until then, admins curate it in /admin.)*`;
 
