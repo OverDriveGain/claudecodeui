@@ -398,15 +398,13 @@ export default function AdminPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <a
-              href={`/api/bldr/admin/journey?token=${encodeURIComponent(localStorage.getItem('auth-token') || '')}`}
-              target="_blank"
-              rel="noreferrer"
+            <Link
+              to="/journey"
               className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
               title="TABU product foundation — full user journey (confidential)"
             >
               📘 TABU journey
-            </a>
+            </Link>
             <Link to="/" className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent">
               ← App
             </Link>

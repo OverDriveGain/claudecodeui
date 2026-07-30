@@ -9,6 +9,7 @@ import { WebSocketProvider } from './contexts/WebSocketContext';
 import { PluginsProvider } from './contexts/PluginsContext';
 import AppContent from './components/app/AppContent';
 import AdminPage from './components/admin/AdminPage';
+import JourneyPage from './components/admin/JourneyPage';
 import i18n from './i18n/config.js';
 
 const DEPLOYMENT_ASSET_DIRECTORIES = new Set(['assets', 'static', 'icons', 'images']);
@@ -118,6 +119,7 @@ export default function App() {
                       <Route path="/" element={<AppContent />} />
                       <Route path="/session/:sessionId" element={<AppContent />} />
                       <Route path="/admin" element={<AdminPage />} />
+                      <Route path="/journey" element={<JourneyPage />} />
                     </Routes>
                   </Router>
                 </ProtectedRoute>
