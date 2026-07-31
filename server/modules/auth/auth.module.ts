@@ -20,7 +20,14 @@ const databaseConnection = getConnection();
 const authService = createAuthService({
   users: {
     hasUsers: () => userDb.hasUsers(),
-    createUser: (username, passwordHash) => userDb.createUser(username, passwordHash),
+    // MYMU: register only ever creates the FIRST (setup) user — stamp
+    // account_owner so the operator sees every agent the deployment surfaces
+    // (plain users added later are scoped to their mapped linux user).
+    createUser: (username, passwordHash) => {
+      const user = userDb.createUser(username, passwordHash);
+      databaseConnection.prepare('UPDATE users SET account_owner = 1 WHERE id = ?').run(user.id);
+      return user;
+    },
     getUserByUsername: (username) => userDb.getUserByUsername(username),
     updateLastLogin: (userId) => userDb.updateLastLogin(userId),
   },

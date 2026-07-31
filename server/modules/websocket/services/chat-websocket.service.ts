@@ -20,6 +20,8 @@ import type {
   ProviderRuntimeWriter,
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
+// MYMU: per-user agent visibility on the chat socket (FORK.md S2)
+import { runWithUserContext, parseAgentAllow, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
 
 /**
  * Trust boundary for client-supplied image attachments: chat.send options come
@@ -380,7 +382,16 @@ export function handleChatConnection(
 
   const userId = readRequestUserId(request);
 
-  ws.on('message', async (rawMessage) => {
+  // MYMU: every message this socket sends dispatches inside the user's
+  // visibility context; the allow-list + linux user are stamped on the socket
+  // so per-user broadcasters can scope their pushes to this client.
+  const wsUser = request?.user as Record<string, unknown> | undefined;
+  const agentAllowRaw = effectiveAgentAllowRaw(wsUser as never);
+  const wsLinuxUser = effectiveLinuxUser(wsUser as never);
+  (ws as unknown as Record<string, unknown>).agentAllow = parseAgentAllow(agentAllowRaw);
+  (ws as unknown as Record<string, unknown>).linuxUser = wsLinuxUser;
+
+  ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, async () => {
     try {
       const parsed = parseIncomingJsonObject(rawMessage);
       if (!parsed) {
@@ -412,7 +423,7 @@ export function handleChatConnection(
       console.error('[ERROR] Chat WebSocket error:', message);
       sendProtocolError(ws, 'INTERNAL_ERROR', message);
     }
-  });
+  }, wsLinuxUser)); // MYMU: closes runWithUserContext
 
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');

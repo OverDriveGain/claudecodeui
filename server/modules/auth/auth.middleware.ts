@@ -2,6 +2,8 @@
 import jwt from 'jsonwebtoken';
 
 import { userDb, appConfigDb } from '../database/index.js';
+// MYMU: per-user agent visibility + linux-user mapping (FORK.md S2)
+import { runWithUserContext, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
 
 const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
 
@@ -32,7 +34,8 @@ const authenticateToken = async (req, res, next) => {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
       req.user = user;
-      return next();
+      // MYMU: visibility context on the platform path too
+      return runWithUserContext(effectiveAgentAllowRaw(user), next, effectiveLinuxUser(user));
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -80,7 +83,9 @@ const authenticateToken = async (req, res, next) => {
     }
 
     req.user = user;
-    next();
+    // MYMU: carry per-agent visibility (account_owner → unrestricted; explicit
+    // agent_allow → as set; else derived from the mapped linux user).
+    return runWithUserContext(effectiveAgentAllowRaw(user), next, effectiveLinuxUser(user));
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
       res.setHeader('X-Auth-Error', 'session-expired');
@@ -121,7 +126,16 @@ const authenticateWebSocket = (token) => {
     try {
       const user = userDb.getFirstUser();
       if (user) {
-        return { id: user.id, userId: user.id, username: user.username };
+        // MYMU: full visibility fields — omitting them silently demotes an
+        // owner to derived scope and every send drops as out-of-scope.
+        return {
+          id: user.id,
+          userId: user.id,
+          username: user.username,
+          agent_allow: user.agent_allow,
+          linux_user: user.linux_user,
+          account_owner: user.account_owner,
+        };
       }
       return null;
     } catch (error) {
@@ -142,7 +156,14 @@ const authenticateWebSocket = (token) => {
     if (!user) {
       return null;
     }
-    return { userId: user.id, username: user.username };
+    // MYMU: full visibility fields (see platform-path note)
+    return {
+      userId: user.id,
+      username: user.username,
+      agent_allow: user.agent_allow,
+      linux_user: user.linux_user,
+      account_owner: user.account_owner,
+    };
   } catch (error) {
     if (!(error instanceof jwt.TokenExpiredError)) {
       console.warn(
