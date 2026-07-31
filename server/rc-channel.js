@@ -20,7 +20,47 @@ import { createNormalizedMessage } from './shared/utils.js';
 
 // The engine is provider-agnostic; this adapter supplies the claude normalizer so a
 // streamed bridge frame renders through the exact same path the local SDK uses.
-const normalizeClaude = (rawFrame, sessionId) => sessionsService.normalizeMessage('claude', rawFrame, sessionId);
+const normalizeClaude = (rawFrame, sessionId) => {
+  const messages = sessionsService.normalizeMessage('claude', rawFrame, sessionId);
+  // MYMU: mirror the local runtime's token_budget status frames for relay
+  // sessions, so the stock TokenUsageSummary + usage modal light up for
+  // agents exactly like local conversations.
+  const tokenBudget = extractRelayTokenBudget(rawFrame);
+  if (tokenBudget) {
+    messages.push(createNormalizedMessage({
+      kind: 'status',
+      text: 'token_budget',
+      tokenBudget,
+      sessionId,
+      provider: 'claude',
+    }));
+  }
+  return messages;
+};
+
+/** Token budget from a raw relay frame's usage payload (same shape the local
+ *  claude runtime's extractTokenBudget produces). */
+function extractRelayTokenBudget(rawFrame) {
+  const usage = rawFrame?.message?.usage;
+  if (!usage || typeof usage !== 'object') return null;
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const cacheCreationTokens = n(usage.cache_creation_input_tokens);
+  const cacheReadTokens = n(usage.cache_read_input_tokens);
+  const inputTokens = n(usage.input_tokens) + cacheCreationTokens + cacheReadTokens;
+  const outputTokens = n(usage.output_tokens);
+  if (inputTokens + outputTokens === 0) return null;
+  const contextWindow = Number.parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
+  return {
+    used: inputTokens + outputTokens,
+    total: contextWindow,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    cacheTokens: cacheCreationTokens + cacheReadTokens,
+    breakdown: { input: inputTokens, output: outputTokens },
+  };
+}
 
 /** A chat command targets a remote agent iff it carries options.remoteControl. */
 export function isRemoteCommand(options) {

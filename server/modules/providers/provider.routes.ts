@@ -20,6 +20,8 @@ import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils
 // MYMU
 import { isLockdownEnabled } from '@/modules/mymu/index.js';
 import { listRemoteAgents } from '@/services/rc.service.js';
+import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
+import { deriveOpenTurn } from '@/modules/providers/services/sessions.service.js';
 
 const router = express.Router();
 
@@ -572,7 +574,18 @@ router.get(
       const agents = await listRemoteAgents();
       for (const agent of agents) {
         if (agent.running) {
-          sessions.push({ sessionId: agent.id, provider: 'claude' });
+          // True turn start from the warm event cache (no relay round-trip) so
+          // the activity indicator shows real elapsed time for agents.
+          let startedAt: number | undefined;
+          try {
+            const events = await getRemoteSessionEventsCached(agent.id, { topUp: false });
+            const openTurn = deriveOpenTurn(events ?? []);
+            if (openTurn?.turnStartedAt) {
+              const parsed = Date.parse(openTurn.turnStartedAt.replace(/\.\d+(?=Z|[+-])/, ''));
+              if (Number.isFinite(parsed)) startedAt = parsed;
+            }
+          } catch { /* cold cache → spinner without elapsed */ }
+          sessions.push({ sessionId: agent.id, provider: 'claude', startedAt });
         }
       }
     } catch { /* relay down → local list only */ }

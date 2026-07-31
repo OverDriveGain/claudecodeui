@@ -85,7 +85,7 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
  * turn completed — the client only consumes this while the agent is running, so
  * a stale open turn (interrupted, never produced a result) is harmless.
  */
-function deriveOpenTurn(events: unknown[]): { turnStartedAt: string; turnStartContextTokens?: number } | null {
+export function deriveOpenTurn(events: unknown[]): { turnStartedAt: string; turnStartContextTokens?: number } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i] as Record<string, unknown> | null;
     if (!e || typeof e !== 'object') continue;
