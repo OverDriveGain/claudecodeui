@@ -4,6 +4,14 @@ import { hostForProject, hostForSession } from "./remoteHosts";
 // Utility function for authenticated API calls. `host` (a RemoteHost from
 // remoteHosts.ts) redirects the call to a connected peer host with ITS token —
 // the multi-host model: every resource is served by the host that owns it.
+// Stock-claudecodeui servers wrap REST payloads as {success: true, data: ...};
+// some of this server's routes now do the same while older ones return the
+// payload bare. Normalize both shapes at the parse site.
+export const unwrapApiEnvelope = (payload) =>
+  payload && typeof payload === 'object' && payload.success === true && 'data' in payload
+    ? payload.data
+    : payload;
+
 /**
  * @param {string} url
  * @param {RequestInit & { headers?: Record<string, string> }} [options]

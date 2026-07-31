@@ -15,7 +15,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import { authenticatedFetch } from '../utils/api';
+import { authenticatedFetch, unwrapApiEnvelope } from '../utils/api';
 import { hostForSession } from '../utils/remoteHosts';
 import type { LLMProvider } from '../types/app';
 import {
@@ -217,7 +217,7 @@ export function useSessionStore() {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data = await response.json();
+      const data = unwrapApiEnvelope(await response.json());
       if (slot._fetchSeq !== fetchSeq) return slot; // superseded by a newer fetch
       const messages: NormalizedMessage[] = data.messages || [];
 
@@ -276,7 +276,7 @@ export function useSessionStore() {
     try {
       const response = await authenticatedFetch(url, {}, hostForSession(resolvedSessionId));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const data = unwrapApiEnvelope(await response.json());
       const olderMessages: NormalizedMessage[] = data.messages || [];
 
       // Older messages carry earlier timestamps; deriveLog re-sorts, so a plain
@@ -361,7 +361,7 @@ export function useSessionStore() {
       const response = await authenticatedFetch(url, {}, hostForSession(resolvedSessionId));
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const data = unwrapApiEnvelope(await response.json());
       if (slot._fetchSeq !== fetchSeq) return; // superseded by a newer fetch/refresh
 
       const messages: NormalizedMessage[] = data.messages || [];
