@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// MyMu's top-level IA as a native tab bar — Agents (default), Projects, Chats,
+/// MyMu's top-level IA as a native tab bar — Projects (default), Chats, Agents,
 /// Archive. Each tab's NavigationStack PATH lives here: MainTabView never leaves
 /// the hierarchy, so switching tabs preserves exactly where you were in each one.
 struct MainTabView: View {
@@ -22,22 +22,23 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            NavigationStack(path: $agentsPath) {
-                AgentsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
-            }
-            .tabItem { Label("Agents", systemImage: "terminal") }
-            .tag(0)
-
             NavigationStack(path: $projectsPath) {
                 ProjectsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
             }
             .tabItem { Label("Projects", systemImage: "folder") }
-            .tag(1)
+            .tag(0)
 
             NavigationStack(path: $chatsPath) {
                 RecentsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
             }
             .tabItem { Label("Chats", systemImage: "message") }
+            .tag(1)
+
+            // Live agents — moved to second-to-last (immediately before Archive).
+            NavigationStack(path: $agentsPath) {
+                AgentsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
+            }
+            .tabItem { Label("Agents", systemImage: "terminal") }
             .tag(2)
 
             NavigationStack(path: $archivePath) {
