@@ -119,11 +119,11 @@ demo mode for App Store review. Ships from this repo; xcodegen project.
 
 ## Port checklist (vanilla-port branch)
 
-- [ ] S1 relay layer into upstream's chat gateway + run registry
-- [ ] S2 multi-user (schema, user-context, sudo seam, spawn-as-owner)
-- [ ] S3 telemetry + injected classification into upstream fetchHistory
-- [ ] S4 residue: relay materialization + asset cap override
-- [ ] S5 file flows
+- [x] S1 relay layer (2026-07-31: DI-injected gateway branches; 267 agents live-verified)
+- [x] S2 multi-user (2026-07-31: schema+auth+context+spawn-as-owner+owner-aware projects)
+- [x] S3 telemetry + injected classification (2026-07-31: normalizer + windowed fetchHistory merged)
+- [x] S4 residue (2026-07-31: 200MB caps env-tunable; relay attachment materialization via rc-channel)
+- [x] S5 file flows (2026-07-31: federation + delivered-file + remote/local file routes; remote browse live-verified)
 - [x] S6 lockdown + version (2026-07-31: mymu module, verified on :3099)
 - [ ] S7 web features onto upstream's current UI
 - [ ] S8 verify iOS app against ported server (contract should already hold)

@@ -55,6 +55,7 @@ import { configureWebPush } from './modules/notifications/index.js';
 import { IS_PLATFORM } from './constants/config.js';
 // MYMU: remote-control proxy (live relay agents)
 import agentHostsRoutes from './routes/agent-hosts.js';
+import registerRemoteFileRoutes from './routes/remote-files.js';
 import {
     queryRemoteChannel,
     subscribeRemoteChannel,
@@ -175,6 +176,11 @@ app.use('/api', mymuRoutes);
 
 // File Tree API Routes (protected)
 app.use('/api/file-tree', authenticateToken, fileTreeRoutes);
+
+// MYMU: remote/local file routes + federation + delivered files (FORK.md S5) —
+// registered BEFORE the module project routes so these fork implementations
+// (remote:cse_ awareness, sudo-aware cross-user reads) take precedence.
+registerRemoteFileRoutes(app, authenticateToken);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
