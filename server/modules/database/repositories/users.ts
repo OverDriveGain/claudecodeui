@@ -18,9 +18,18 @@ type UserRow = {
   git_name: string | null;
   git_email: string | null;
   has_completed_onboarding: number;
+  agent_allow: string | null;
+  // One-instance-per-host model: the linux user this account maps to (NULL =
+  // same as username) and the operator role that sees everything the
+  // deployment surfaces.
+  linux_user: string | null;
+  account_owner: number;
 };
 
-type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'created_at' | 'last_login'>;
+type UserPublicRow = Pick<
+  UserRow,
+  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'linux_user' | 'account_owner'
+>;
 
 type UserGitConfig = {
   git_name: string | null;
@@ -47,11 +56,11 @@ export const userDb = {
   },
 
   /** Inserts a new user and returns the created ID + username. */
-  createUser(username: string, passwordHash: string): CreateUserResult {
+  createUser(username: string, passwordHash: string, agentAllow: string | null = null): CreateUserResult {
     const db = getConnection();
     const result = db
-      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-      .run(username, passwordHash);
+      .prepare('INSERT INTO users (username, password_hash, agent_allow) VALUES (?, ?, ?)')
+      .run(username, passwordHash, agentAllow);
     return { id: result.lastInsertRowid, username };
   },
 
@@ -84,7 +93,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -94,7 +103,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },
@@ -127,6 +136,17 @@ export const userDb = {
     db.prepare(
       'UPDATE users SET has_completed_onboarding = 1 WHERE id = ?'
     ).run(userId);
+  },
+
+  /**
+   * Every active account's linux-user mapping (username + optional alias) —
+   * drives the cross-user disk layer (user-fs) on one-instance-per-host.
+   */
+  listLinuxUserMappings(): Array<{ username: string; linux_user: string | null }> {
+    const db = getConnection();
+    return db
+      .prepare('SELECT username, linux_user FROM users WHERE is_active = 1')
+      .all() as Array<{ username: string; linux_user: string | null }>;
   },
 
   /** Returns true if the user has finished the onboarding flow. */

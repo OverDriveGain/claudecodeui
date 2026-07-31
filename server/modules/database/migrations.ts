@@ -1,12 +1,14 @@
 import { Database } from 'better-sqlite3';
 
 import {
+  AGENT_HOST_ASSIGNMENTS_TABLE_SCHEMA_SQL,
   APP_CONFIG_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
   NOTIFICATION_CHANNEL_ENDPOINTS_TABLE_SCHEMA_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
+  USER_HIDDEN_AGENTS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
   VAPID_KEYS_TABLE_SCHEMA_SQL,
 } from '@/modules/database/schema.js';
@@ -449,8 +451,30 @@ export const runMigrations = (db: Database) => {
       'has_completed_onboarding',
       'BOOLEAN DEFAULT 0'
     );
+    // Per-user remote-agent visibility. Explicit comma-separated globs restrict
+    // this user to ONLY agents whose name matches — enforced server-side. With
+    // the one-instance-per-host model, NULL now means "derive from linux_user"
+    // (see effectiveAgentAllowRaw); the old NULL=admin semantics are preserved
+    // by the account_owner stamp below.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_allow', 'TEXT DEFAULT NULL');
+    // One-instance-per-host user model (2026-07-25): every account maps to a
+    // linux user on this host (NULL = same as username; aliases like wael→bti
+    // set it explicitly), and `account_owner` marks the operator role that sees
+    // every agent the deployment surfaces.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'linux_user', 'TEXT DEFAULT NULL');
+    const hadAccountOwner = userColumnNames.includes('account_owner');
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'account_owner', 'INTEGER NOT NULL DEFAULT 0');
+    if (!hadAccountOwner) {
+      // One-time semantic migration: agent_allow NULL/empty used to mean
+      // "unrestricted admin" — those users become account owners so existing
+      // deployments keep exactly their previous visibility.
+      db.exec("UPDATE users SET account_owner = 1 WHERE agent_allow IS NULL OR TRIM(agent_allow) = ''");
+    }
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
+    db.exec(USER_HIDDEN_AGENTS_TABLE_SCHEMA_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_user_hidden_agents_user ON user_hidden_agents(user_id)');
+    db.exec(AGENT_HOST_ASSIGNMENTS_TABLE_SCHEMA_SQL);
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
     db.exec(VAPID_KEYS_TABLE_SCHEMA_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL);
