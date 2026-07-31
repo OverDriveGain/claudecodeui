@@ -351,7 +351,6 @@ export default function SidebarContent({
                   {runningSessionsCount}
                 </span>
               </div>
-              <>{agentsSection /* MYMU */}</>
               <SidebarProjectList {...projectListProps} />
             </div>
           )
@@ -609,7 +608,10 @@ export default function SidebarContent({
             </div>
           )
         ) : (
-          <SidebarProjectList {...projectListProps} />
+          <>
+            {agentsSection /* MYMU: live-agents section above the project list */}
+            <SidebarProjectList {...projectListProps} />
+          </>
         )}
       </ScrollArea>
 
