@@ -59,7 +59,13 @@ function Sidebar({
 
   // MYMU: agents are their own sidebar section — never mixed into projects.
   const { isHidden, hideAgent } = useHiddenAgents();
-  const agentProjects = projects.filter((p) => p.isRemoteAgent && !isHidden(p));
+  const agentSearch = searchFilter.trim().toLowerCase();
+  const agentProjects = projects.filter(
+    (p) =>
+      p.isRemoteAgent &&
+      !isHidden(p) &&
+      (!agentSearch || (p.displayName || '').toLowerCase().includes(agentSearch)),
+  );
   const regularProjects = projects.filter((p) => !p.isRemoteAgent);
 
   const {
