@@ -7,6 +7,15 @@ import type {
   ProjectRepositoryRow,
   WorkspacePathValidationResult,
 } from '@/shared/types.js';
+import { currentLinuxUser } from '@/services/user-context.js';
+import {
+  SERVICE_USER,
+  isDirAsUser,
+  mappedForeignUsers,
+  mkdirAsUser,
+  ownerForPath,
+  resolvePathAsUser,
+} from '@/services/user-fs.js';
 import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/utils.js';
 
 type CreateProjectInput = {
@@ -41,9 +50,60 @@ type CreateProjectServiceResult = {
   project: ProjectApiView;
 };
 
+/**
+ * Workspace validation for a CCUI account mapped to a foreign linux user: the
+ * project must live inside THEIR home (their sandbox), and symlinks are
+ * resolved as them — the service user often cannot even traverse that home.
+ */
+async function validateScopedWorkspacePath(
+  requestedPath: string,
+  linuxUser: string,
+): Promise<WorkspacePathValidationResult> {
+  const normalizedRequestedPath = normalizeProjectPath(requestedPath);
+  if (!normalizedRequestedPath) {
+    return { valid: false, error: 'Workspace path is required' };
+  }
+  const homeDir = `/home/${linuxUser}`;
+  const isWithinHome = (p: string): boolean => p === homeDir || p.startsWith(`${homeDir}${path.sep}`);
+  const absolutePath = path.resolve(normalizedRequestedPath);
+  if (!isWithinHome(absolutePath)) {
+    return { valid: false, error: `Workspace path must be within your home directory: ${homeDir}` };
+  }
+  if (!mappedForeignUsers().includes(linuxUser)) {
+    return { valid: false, error: `No home directory for user ${linuxUser} on this host` };
+  }
+  let resolvedPath: string;
+  try {
+    resolvedPath = normalizeProjectPath(await resolvePathAsUser(linuxUser, absolutePath));
+  } catch {
+    return { valid: false, error: 'Could not resolve workspace path as the owning user' };
+  }
+  if (!isWithinHome(resolvedPath)) {
+    return { valid: false, error: `Workspace path must be within your home directory: ${homeDir}` };
+  }
+  return { valid: true, resolvedPath };
+}
+
 const defaultDependencies: CreateProjectDependencies = {
-  validatePath: validateWorkspacePath,
+  validatePath: async (projectPath: string): Promise<WorkspacePathValidationResult> => {
+    const linuxUser = currentLinuxUser();
+    if (linuxUser && linuxUser !== SERVICE_USER) {
+      return validateScopedWorkspacePath(projectPath, linuxUser);
+    }
+    return validateWorkspacePath(projectPath);
+  },
   ensureWorkspaceDirectory: async (projectPath: string): Promise<void> => {
+    const owner = ownerForPath(projectPath);
+    if (owner) {
+      await mkdirAsUser(owner, projectPath);
+      if (!(await isDirAsUser(owner, projectPath))) {
+        throw new AppError('Path exists but is not a directory', {
+          code: 'PROJECT_PATH_NOT_DIRECTORY',
+          statusCode: 400,
+        });
+      }
+      return;
+    }
     await fs.mkdir(projectPath, { recursive: true });
     const directoryStats = await fs.stat(projectPath);
     if (!directoryStats.isDirectory()) {

@@ -54,6 +54,7 @@ import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 import { IS_PLATFORM } from './constants/config.js';
 // MYMU: remote-control proxy (live relay agents)
+import agentHostsRoutes from './routes/agent-hosts.js';
 import {
     queryRemoteChannel,
     subscribeRemoteChannel,
@@ -202,6 +203,9 @@ app.use('/api/notifications', authenticateToken, notificationRoutes);
 
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
+
+// MYMU: deployment-global agent → host assignments (FORK.md S5)
+app.use('/api/agent-hosts', authenticateToken, agentHostsRoutes);
 
 // Plugins API Routes (protected)
 app.use('/api/plugins', authenticateToken, pluginsRoutes);

@@ -11,6 +11,11 @@ import {
 
 const router = express.Router();
 
+// MYMU: attachment size policy — stock caps (5/10MB) are too small for this
+// deployment's use cases (large zips to agents). Env-tunable per host.
+const MYMU_MAX_ASSET_SIZE_BYTES =
+  (Number.parseInt(process.env.MYMU_MAX_ASSET_MB ?? '', 10) || 200) * 1024 * 1024;
+
 // Multer writes uploads straight into the global assets folder; the service
 // owns the folder location and the response record shape.
 const storage = multer.diskStorage({
@@ -36,15 +41,16 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
-    files: 5,
+    // MYMU: deployment policy allows large attachments (env-tunable, default 200MB)
+    fileSize: MYMU_MAX_ASSET_SIZE_BYTES,
+    files: 10,
   },
 });
 
 const attachmentUpload = multer({
   storage,
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    fileSize: MYMU_MAX_ASSET_SIZE_BYTES, // MYMU: same 200MB policy as images
     files: 10,
   },
 });
