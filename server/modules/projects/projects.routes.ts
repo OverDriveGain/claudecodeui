@@ -11,6 +11,8 @@ import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/proje
 import { isLockdownEnabled } from '@/modules/mymu/index.js';
 // MYMU: live relay agents roster (FORK.md S1)
 import { listRemoteAgents, listAccountErrors } from '@/services/rc.service.js';
+// MYMU
+import { userHiddenAgentsDb } from '@/modules/database/index.js';
 
 const router = express.Router();
 
@@ -92,7 +94,29 @@ router.get(
       sessionsLimit,
       sessionsOffset,
     });
-    res.json(projects);
+    // MYMU: apply the requesting user's per-user "hidden agents" preference to
+    // relay leaves server-side, so the stock UI shows the curated roster.
+    // Key = account + US(0x1f) + title (stable across relay restarts — same
+    // format the web client's agentDisplayKey computes). ?includeHidden=1
+    // reveals everything (the "Show online" affordance).
+    let visible = projects;
+    try {
+      const userId = (req as { user?: { id?: number } }).user?.id;
+      const includeHidden = req.query.includeHidden === '1' || req.query.includeHidden === 'true';
+      if (userId && !includeHidden) {
+        const hidden = new Set(userHiddenAgentsDb.listKeys(userId));
+        if (hidden.size > 0) {
+          visible = projects.filter((p) => {
+            if (!p.isRemoteAgent) return true;
+            const title = (p.displayName ?? '').trim();
+            const account = typeof p.remoteAccount === 'string' ? p.remoteAccount.trim() : '';
+            const key = account ? `${account}\u001f${title}` : title;
+            return !hidden.has(key);
+          });
+        }
+      }
+    } catch { /* never let the preference break the listing */ }
+    res.json(visible);
   }),
 );
 

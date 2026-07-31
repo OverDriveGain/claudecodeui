@@ -290,8 +290,18 @@ export async function getProjectsWithSessions(
         displayName: agent.title,
         fullPath: `remote://${agent.id}`,
         isStarred: false,
-        sessions: [],
-        sessionMeta: { hasMore: false, total: 0 },
+        // The agent's live relay session surfaces as a NORMAL session row, so
+        // the stock UI lists and opens the conversation with zero special
+        // casing — history and chat.send resolve the cse_ id via the relay.
+        sessions: [{
+          id: agent.id,
+          provider: 'claude',
+          summary: agent.title,
+          messageCount: 0,
+          lastActivity: agent.lastEventAt ?? new Date().toISOString(),
+          createdAt: null,
+        }],
+        sessionMeta: { hasMore: false, total: 1 },
         isRemoteAgent: true,
         remoteSessionId: agent.id,
         remoteConnected: agent.connected,
