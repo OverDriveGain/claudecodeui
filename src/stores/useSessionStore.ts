@@ -536,13 +536,30 @@ export function useSessionStore() {
    * Append a realtime (WebSocket) message to the correct session slot.
    * This works regardless of which session is actively viewed.
    */
+  // MYMU: relay sessions re-deliver frames by design (reconnect top-ups,
+  // rebind buffer flushes) — upsert by id instead of appending blindly, so a
+  // re-delivered row replaces its first copy instead of duplicating it.
+  // Streaming rows keep their append semantics (they reuse a stable id).
+  const upsertRealtime = (slot: SessionSlot, incoming: NormalizedMessage): NormalizedMessage[] => {
+    if (incoming.kind === 'stream_delta' || String(incoming.id).startsWith('__streaming')) {
+      return [...slot.realtimeMessages, incoming];
+    }
+    const index = slot.realtimeMessages.findIndex((m) => m.id === incoming.id && m.kind === incoming.kind);
+    if (index === -1) {
+      return [...slot.realtimeMessages, incoming];
+    }
+    const next = [...slot.realtimeMessages];
+    next[index] = incoming;
+    return next;
+  };
+
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
     const normalizedMessage =
       msg.sessionId === sessionId
         ? msg
         : { ...msg, sessionId };
-    let updated = [...slot.realtimeMessages, normalizedMessage];
+    let updated = upsertRealtime(slot, normalizedMessage);
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -562,7 +579,11 @@ export function useSessionStore() {
         ? msg
         : { ...msg, sessionId },
     );
-    let updated = [...slot.realtimeMessages, ...normalizedMessages];
+    // MYMU: same upsert-by-id rule as appendRealtime (see above).
+    let updated = slot.realtimeMessages;
+    for (const normalizedMessage of normalizedMessages) {
+      updated = upsertRealtime({ ...slot, realtimeMessages: updated } as SessionSlot, normalizedMessage);
+    }
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
