@@ -23,15 +23,9 @@ struct Project: Codable, Identifiable, Equatable, Hashable {
     let path: String?
     let isStarred: Bool?
     let sessions: [Session]?
-    // Set only for virtual `remote:<id>` projects — a live `claude --remote-control` agent.
-    let isRemoteAgent: Bool?
-    let remoteSessionId: String?
-    var remoteConnected: Bool?
-    var remoteRunning: Bool?
 
-    /// The one session this project's chat drives. For a remote agent that's the
-    /// relay session; for a local project the caller picks from `sessions`.
-    var primarySessionId: String? { isRemoteAgent == true ? remoteSessionId : sessions?.first?.id }
+    /// The default session this project's chat opens — the first (most recent).
+    var primarySessionId: String? { sessions?.first?.id }
 }
 
 struct Session: Codable, Identifiable, Equatable, Hashable {

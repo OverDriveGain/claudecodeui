@@ -19,8 +19,8 @@ struct MyMuApp: App {
         let demo = ProcessInfo.processInfo.environment["MYMU_DEMO"]
         if demo == "chat" || demo == "chatlong" {
             NavigationStack {
-                ChatView(sessionId: "demo", projectId: "demo", isRemote: true,
-                         title: "special-agent", token: "",
+                ChatView(sessionId: "demo", projectId: "demo",
+                         title: "claudecodeui", token: "",
                          previewMessages: demo == "chatlong" ? DemoData.longMessages : DemoData.messages)
             }
         } else if demo == "tabs" {

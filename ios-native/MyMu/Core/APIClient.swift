@@ -16,15 +16,12 @@ enum APIError: LocalizedError {
     }
 }
 
-/// Thin REST client over the same endpoints the web app uses.
+/// Thin REST client over the stock claudecodeui endpoints.
 struct APIClient {
     var token: String?
-    /// Per-conversation host override (agent→host pinning): requests go to this
-    /// origin instead of the active account's server. nil = active host.
-    var origin: String? = nil
 
     private func request(_ path: String, method: String = "GET", body: Data? = nil, auth: Bool = true) async throws -> Data {
-        guard let url = URL(string: (origin ?? Config.serverOrigin) + path) else { throw APIError.badURL }
+        guard let url = URL(string: Config.serverOrigin + path) else { throw APIError.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 30
@@ -48,12 +45,11 @@ struct APIClient {
         return Self.unwrapEnvelope(data)
     }
 
-    /// Stock (upstream) claudecodeui servers wrap REST payloads in a
-    /// `{success: true, data: …}` envelope; this app's original server returns
-    /// most payloads bare. Unwrap the envelope when it is the entire response
-    /// so both server dialects decode identically downstream. Responses that
-    /// merely contain a `success` flag among other fields (e.g. login) pass
-    /// through untouched.
+    /// claudecodeui servers wrap most REST payloads in a
+    /// `{success: true, data: …}` envelope, but not every endpoint is wrapped
+    /// (login, some bare arrays). Unwrap the envelope when it is the entire
+    /// response; responses that merely contain a `success` flag among other
+    /// fields (e.g. login) pass through untouched.
     private static func unwrapEnvelope(_ data: Data) -> Data {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               obj.count == 2,
@@ -70,16 +66,6 @@ struct APIClient {
         let body = try JSONEncoder().encode(["username": username, "password": password])
         let data = try await APIClient(token: nil).request("/api/auth/login", method: "POST", body: body, auth: false)
         return try JSONDecoder().decode(LoginResponse.self, from: data)
-    }
-
-    struct AgentStatusEntry: Codable { let id: String; let running: Bool?; let connected: Bool? }
-    private struct AgentStatusResponse: Codable { let agents: [AgentStatusEntry] }
-
-    /// Lightweight live status for remote agents ({id, running, connected}) —
-    /// served from a short server cache, safe to poll every few seconds.
-    func agentStatus() async throws -> [AgentStatusEntry] {
-        let data = try await request("/api/projects/agent-status")
-        return try JSONDecoder().decode(AgentStatusResponse.self, from: data).agents
     }
 
     func projects() async throws -> [Project] {
@@ -134,7 +120,7 @@ struct APIClient {
     /// names both the route and the multipart field.
     func uploadAssets(_ attachments: [(name: String, mime: String, bytes: Data)], field: String) async throws -> [AssetRecord] {
         guard !attachments.isEmpty else { return [] }
-        guard let url = URL(string: (origin ?? Config.serverOrigin) + "/api/assets/\(field)") else { throw APIError.badURL }
+        guard let url = URL(string: Config.serverOrigin + "/api/assets/\(field)") else { throw APIError.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 300
@@ -169,22 +155,12 @@ struct APIClient {
         return decoded.images ?? decoded.attachments ?? []
     }
 
-    /// Stock upstream servers allocate chat sessions over REST before the first
-    /// `chat.send` (the fork allocates implicitly on first message instead).
-    /// Returns the new app session id.
+    /// claudecodeui allocates a chat session over REST before the first
+    /// `chat.send`. Returns the new session id.
     func createProviderSession(provider: String = "claude", projectPath: String) async throws -> String {
         struct R: Codable { let sessionId: String }
         let body = try JSONEncoder().encode(["provider": provider, "projectPath": projectPath])
         let data = try await request("/api/providers/sessions", method: "POST", body: body)
         return try JSONDecoder().decode(R.self, from: data).sessionId
-    }
-
-    /// Agent → host assignments (admin-set on the server): agentKey → host
-    /// origin. Used to route a pinned agent's conversation through the saved
-    /// account matching its host, so file sends land on the agent's machine.
-    func agentHosts() async throws -> [String: String] {
-        struct R: Codable { let assignments: [String: String]? }
-        let data = try await request("/api/agent-hosts")
-        return (try JSONDecoder().decode(R.self, from: data)).assignments ?? [:]
     }
 }

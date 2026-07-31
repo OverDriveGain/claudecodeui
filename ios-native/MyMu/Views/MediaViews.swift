@@ -6,7 +6,7 @@ import UIKit
 /// AsyncImage replacement for authenticated media. AsyncImage cancels its load
 /// the moment the row leaves the viewport — the open-settle scroll does that
 /// constantly in a lazy transcript — and then PARKS in .failure forever, so
-/// delivered images showed as bare filename chips. This loader retries on every
+/// images showed as bare filename chips. This loader retries on every
 /// re-appear, keeps decoded images in a process-wide cache (scroll-back is
 /// instant, no re-download), and downsamples huge renders to screen scale.
 struct RemoteImage<Failure: View>: View {
@@ -56,8 +56,8 @@ struct RemoteImage<Failure: View>: View {
         }
     }
 
-    /// Agents deliver full-resolution renders (multi-MB, 3000px+). Decode at a
-    /// bounded pixel size so a transcript with several images can't spike memory.
+    /// Full-resolution renders (multi-MB, 3000px+) get decoded at a bounded
+    /// pixel size so a view with several images can't spike memory.
     private static func downsampled(_ data: Data) -> UIImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return UIImage(data: data) }
         let opts: [CFString: Any] = [
@@ -130,53 +130,6 @@ func downsampledImage(_ data: Data, maxPixel: Int = 1600) -> UIImage? {
         return UIImage(data: data)
     }
     return UIImage(cgImage: cg)
-}
-
-/// Inline preview of a file an agent delivered (SendUserFile). Streams from the
-/// authenticated delivered-file endpoint (token in the query — media elements
-/// can't set headers). Range is supported server-side so video/audio seek.
-struct DeliveredMediaView: View {
-    let path: String
-    let projectId: String
-    let token: String
-    var origin: String? = nil
-
-    private var url: URL? {
-        Config.fileStreamURL(projectId: projectId, path: path, token: token, delivered: true, origin: origin)
-    }
-    private var ext: String { (path as NSString).pathExtension.lowercased() }
-    private var name: String { (path as NSString).lastPathComponent }
-
-    var body: some View {
-        if let url {
-            switch ext {
-            case "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "avif":
-                // CONSTANT height, placeholder and loaded alike. The old
-                // placeholder (120pt) grew to the loaded size (≤320pt) seconds
-                // after the transcript pinned its bottom — every image load
-                // reflowed the list and re-opened the blank strip when opening
-                // an agent conversation. A row's height must NEVER change after
-                // first layout.
-                RemoteImage(url: url, zoomable: true) { fallback(url) }
-                    .frame(height: 240, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            case "mp4", "mov", "m4v", "webm", "ogv":
-                VideoBubble(url: url)
-            case "mp3", "wav", "m4a", "aac", "ogg", "opus", "flac", "oga":
-                AudioBubble(url: url, name: name)
-            default:
-                fallback(url)
-            }
-        }
-    }
-
-    private func fallback(_ url: URL) -> some View {
-        Link(destination: url) {
-            Label(name, systemImage: "doc")
-                .font(.caption)
-                .foregroundColor(Theme.primary)
-        }
-    }
 }
 
 /// Holds its AVPlayer in state so body re-evaluations don't reset playback.

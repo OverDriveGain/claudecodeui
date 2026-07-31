@@ -1,13 +1,12 @@
 import SwiftUI
 
-/// MyMu's top-level IA as a native tab bar — Agents (default), Projects, Chats,
-/// Archive. Each tab's NavigationStack PATH lives here: MainTabView never leaves
-/// the hierarchy, so switching tabs preserves exactly where you were in each one.
+/// The top-level IA as a native tab bar — Projects (default), Chats, Archive.
+/// Each tab's NavigationStack PATH lives here: MainTabView never leaves the
+/// hierarchy, so switching tabs preserves exactly where you were in each one.
 struct MainTabView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var store: ProjectsStore
     @State private var selection: Int
-    @State private var agentsPath: [Route] = []
     @State private var projectsPath: [Route] = []
     @State private var chatsPath: [Route] = []
     @State private var archivePath: [Route] = []
@@ -22,29 +21,23 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            NavigationStack(path: $agentsPath) {
-                AgentsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
-            }
-            .tabItem { Label("Agents", systemImage: "terminal") }
-            .tag(0)
-
             NavigationStack(path: $projectsPath) {
                 ProjectsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
             }
             .tabItem { Label("Projects", systemImage: "folder") }
-            .tag(1)
+            .tag(0)
 
             NavigationStack(path: $chatsPath) {
                 RecentsView().navigationDestination(for: Route.self) { RouteView(route: $0) }
             }
             .tabItem { Label("Chats", systemImage: "message") }
-            .tag(2)
+            .tag(1)
 
             NavigationStack(path: $archivePath) {
                 ArchiveView().navigationDestination(for: Route.self) { RouteView(route: $0) }
             }
             .tabItem { Label("Archive", systemImage: "archivebox") }
-            .tag(3)
+            .tag(2)
         }
         .environmentObject(store)
         .tint(Theme.primary)

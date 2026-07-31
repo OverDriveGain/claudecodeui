@@ -51,17 +51,7 @@ final class RelayClient: ObservableObject {
     @Published var context: ContextUsage?
 
     private let token: String
-    /// Host this conversation talks to (agent→host pinning); nil = active host.
-    /// The pinned host lands file attachments on the agent's own disk — the
-    /// relay mirrors the turn to every attached host, so viewing works anywhere
-    /// but SENDING must hit the agent's machine.
-    private let origin: String?
     private(set) var sessionId: String
-    private let isRemote: Bool
-    /// Remote agent sessions accept messages MID-TURN (the relay routes them
-    /// through the agent's native queue) — the composer uses this to allow
-    /// queueing while the agent is working.
-    var supportsMidTurnSend: Bool { isRemote }
     private let projectPath: String?
     private var task: URLSessionWebSocketTask?
     private var keepAlive: Task<Void, Never>?
@@ -73,12 +63,10 @@ final class RelayClient: ObservableObject {
     /// after this, closing gaps from drops/backgrounding.
     private var lastSeq = 0
 
-    init(token: String, sessionId: String, isRemote: Bool, projectPath: String? = nil, origin: String? = nil) {
+    init(token: String, sessionId: String, projectPath: String? = nil) {
         self.token = token
         self.sessionId = sessionId
-        self.isRemote = isRemote
         self.projectPath = projectPath
-        self.origin = origin
     }
 
     // MARK: Lifecycle
@@ -90,7 +78,7 @@ final class RelayClient: ObservableObject {
 
     private func openSocket() {
         guard task == nil else { return }
-        let ws = URLSession.shared.webSocketTask(with: Config.webSocketURL(token: token, origin: origin))
+        let ws = URLSession.shared.webSocketTask(with: Config.webSocketURL(token: token))
         task = ws
         ws.resume()
         connected = true
@@ -177,7 +165,7 @@ final class RelayClient: ObservableObject {
             //    the standard claudecodeui contract).
             if self.sessionId.isEmpty {
                 guard let projectPath = self.projectPath,
-                      let newId = try? await APIClient(token: self.token, origin: self.origin)
+                      let newId = try? await APIClient(token: self.token)
                           .createProviderSession(projectPath: projectPath) else {
                     self.appendOrReplace(ChatMessage(id: "err-\(self.nextSeq())", kind: "error", role: "assistant",
                                                      content: "Could not create a session on this server.", isError: true))
@@ -216,7 +204,7 @@ final class RelayClient: ObservableObject {
             let entry = (name: attachment["name"] ?? "attachment", mime: parsed.mime, bytes: parsed.bytes)
             if parsed.mime.hasPrefix("image/") { images.append(entry) } else { files.append(entry) }
         }
-        let api = APIClient(token: token, origin: origin)
+        let api = APIClient(token: token)
         var records: [APIClient.AssetRecord] = []
         if !images.isEmpty { records += try await api.uploadAssets(images, field: "images") }
         if !files.isEmpty { records += try await api.uploadAssets(files, field: "files") }
@@ -248,25 +236,6 @@ final class RelayClient: ObservableObject {
         isLoading = false
     }
 
-    /// Reconcile the working indicator with the server's live agent status — the
-    /// stream only flips isLoading when a frame ARRIVES, so opening a chat whose
-    /// agent is already mid-turn (quiet inside a long tool call) showed no loader
-    /// at all. Poll-safe: only ever turns the indicator ON; the stream's complete
-    /// (or the server watchdog) turns it off.
-    func syncRunningState(_ api: APIClient) async {
-        guard isRemote else { return }
-        if let st = try? await api.agentStatus(),
-           let mine = st.first(where: { $0.id == sessionId }),
-           mine.running == true {
-            if !isLoading { isLoading = true }
-            // Turn started elsewhere (web, another device, a scheduled run) or
-            // was already running on open: fetch the real start from the
-            // transcript so the timer doesn't restart from zero. Retries on the
-            // next poll until anchored (limit=1 keeps the fetch tiny).
-            if !turnAnchored { await refreshTurnStart(api) }
-        }
-    }
-
     /// Anchor the elapsed timer to the transcript's turn-start timestamp and
     /// seed the token counter's baseline when the server provides one.
     /// Ignored when idle (a stale anchor from a finished turn must not revive).
@@ -295,14 +264,6 @@ final class RelayClient: ObservableObject {
         }
     }
 
-    /// Fetch just the turn anchor — history with limit=1 still carries
-    /// turnStartedAt (derived server-side from the full event log).
-    private func refreshTurnStart(_ api: APIClient) async {
-        guard let h = try? await api.history(sessionId: sessionId, limit: 1) else { return }
-        if let ctx = h.context { context = ctx }
-        applyServerTurnStart(h.turnStartedAt, startContext: h.turnStartContextTokens)
-    }
-
     /// Relay timestamps carry microsecond fractions ("…T00:03:53.981039Z") that
     /// ISO8601DateFormatter rejects — drop the fraction (second precision is
     /// plenty for an elapsed timer).
@@ -324,7 +285,7 @@ final class RelayClient: ObservableObject {
         guard !isLoading else { return }
         Task { [weak self] in
             guard let self else { return }
-            if let h = try? await APIClient(token: self.token, origin: self.origin).history(sessionId: self.sessionId) {
+            if let h = try? await APIClient(token: self.token).history(sessionId: self.sessionId) {
                 if !self.isLoading { self.setHistory(h.messages) }
                 if let ctx = h.context { self.context = ctx }
             }
@@ -464,9 +425,10 @@ final class RelayClient: ObservableObject {
             m.requestId = obj["requestId"] as? String
             pendingPermission = m
         case "session_created":
-            // A new local conversation gets its real id at turn start — rebind so
-            // resumes and history reads target the actual session.
-            if !isRemote, let newId = (obj["newSessionId"] as? String) ?? (obj["sessionId"] as? String), !newId.isEmpty {
+            // A fresh conversation gets its real id at turn start — rebind so
+            // resumes and history reads target the actual session. (Vanilla
+            // pre-creates the id over REST and never emits this; harmless there.)
+            if let newId = (obj["newSessionId"] as? String) ?? (obj["sessionId"] as? String), !newId.isEmpty {
                 sessionId = newId
             }
         case "permission_cancelled":

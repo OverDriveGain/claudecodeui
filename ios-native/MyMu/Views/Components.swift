@@ -54,7 +54,6 @@ struct EmptyStateView: View {
 struct ProfileMenu: View {
     @EnvironmentObject var appState: AppState
     @State private var showAddAccount = false
-    @State private var serverVersion: String?
     var body: some View {
         Menu {
             ForEach(appState.accounts) { acct in
@@ -79,33 +78,11 @@ struct ProfileMenu: View {
             // Which build is on this phone — version from the marketing string,
             // build stamped per dev install (CURRENT_PROJECT_VERSION on the CLI).
             Text("App v\(Bundle.main.appVersionLabel)")
-            if let serverVersion {
-                Text("Server \(serverVersion)")
-            }
         } label: {
             Image(systemName: "person.crop.circle").foregroundColor(Theme.primary)
         }
         .sheet(isPresented: $showAddAccount) {
             LoginView(onSuccess: { showAddAccount = false })
-        }
-        .task(id: appState.accountEpoch) {
-            // Active host's backend build (/api/version, unauthenticated).
-            serverVersion = nil
-            guard let url = URL(string: Config.serverOrigin + "/api/version") else { return }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            var parts: [String] = []
-            if let v = obj["version"] as? String { parts.append("v\(v)") }
-            if let iso = obj["builtAt"] as? String {
-                let f = ISO8601DateFormatter()
-                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let d = f.date(from: iso) {
-                    let out = DateFormatter()
-                    out.dateFormat = "dd MMM HH:mm"
-                    parts.append("built \(out.string(from: d))")
-                }
-            }
-            serverVersion = parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
     }
 }
@@ -117,20 +94,6 @@ extension Bundle {
         let b = infoDictionary?["CFBundleVersion"] as? String ?? "?"
         return "\(v) (\(b))"
     }
-}
-
-enum AgentStatus {
-    static func color(_ p: Project) -> Color {
-        if p.remoteRunning == true { return Theme.primary }
-        if p.remoteConnected != false { return .green }
-        return Theme.mutedText
-    }
-    static func text(_ p: Project) -> String {
-        if p.remoteRunning == true { return "working…" }
-        if p.remoteConnected != false { return "agent" }
-        return "agent · offline"
-    }
-    static func dimmed(_ p: Project) -> Bool { p.remoteConnected == false }
 }
 
 /// Compact relative age ("<1m", "5m", "3hr", "2d") — mirrors formatCompactSessionAge.

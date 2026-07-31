@@ -8,9 +8,6 @@ struct MessageRow: View, Equatable {
     let message: ChatMessage
     let projectId: String
     let token: String
-    /// Host override for routed conversations (delivered files stream from the
-    /// agent's assigned host).
-    var origin: String? = nil
     /// Visible action row (Copy) — only the newest assistant message gets one,
     /// like the Claude/ChatGPT apps; long-press covers every other message.
     var showActions = false
@@ -46,7 +43,7 @@ struct MessageRow: View, Equatable {
         case "text":
             textBody
         case "tool_use":
-            if let d = deliveredFiles { mediaDelivery(d.files, d.caption) } else { toolUse }
+            toolUse
         case "tool_result":
             toolResult
         case "error":
@@ -154,28 +151,6 @@ struct MessageRow: View, Equatable {
             .padding(10)
             .background(Theme.danger.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    // MARK: delivered media (SendUserFile)
-
-    private var deliveredFiles: (files: [String], caption: String?)? {
-        guard message.kind == "tool_use", message.toolName == "SendUserFile",
-              let dict = message.toolInput?.value as? [String: Any] else { return nil }
-        let files = (dict["files"] as? [Any])?.compactMap { $0 as? String } ?? []
-        guard !files.isEmpty else { return nil }
-        return (files, dict["caption"] as? String)
-    }
-
-    private func mediaDelivery(_ files: [String], _ caption: String?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let caption, !caption.isEmpty {
-                Text(caption).font(.caption).foregroundColor(Theme.mutedText)
-            }
-            ForEach(files, id: \.self) { f in
-                DeliveredMediaView(path: f, projectId: projectId, token: token, origin: origin)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: helpers

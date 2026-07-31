@@ -14,16 +14,8 @@ struct PendingAttachment: Identifiable, Equatable {
 struct ChatView: View {
     let sessionId: String
     let projectId: String
-    let isRemote: Bool
     let title: String
-    /// Agent→host pinning: host origin + token this conversation is routed to
-    /// (nil = active account's host). Set when the agent is assigned to another
-    /// host the app has a saved login for.
-    let origin: String?
     private let chatToken: String
-    /// Pinned to a host with NO saved login: label shown by the composer's
-    /// file warning ("log in to <host> to share files"). nil = files work.
-    let pinnedHostNeedingLogin: String?
 
     @EnvironmentObject var appState: AppState
     @StateObject private var relay: RelayClient
@@ -62,20 +54,15 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let previewMessages: [ChatMessage]?
 
-    init(sessionId: String, projectId: String, isRemote: Bool, title: String, token: String,
-         projectPath: String? = nil, previewMessages: [ChatMessage]? = nil,
-         origin: String? = nil, pinnedHostNeedingLogin: String? = nil) {
+    init(sessionId: String, projectId: String, title: String, token: String,
+         projectPath: String? = nil, previewMessages: [ChatMessage]? = nil) {
         self.sessionId = sessionId
         self.projectId = projectId
-        self.isRemote = isRemote
         self.title = title
         self.previewMessages = previewMessages
-        self.origin = origin
         self.chatToken = token
-        self.pinnedHostNeedingLogin = pinnedHostNeedingLogin
         _relay = StateObject(wrappedValue: RelayClient(token: token, sessionId: sessionId,
-                                                       isRemote: isRemote, projectPath: projectPath,
-                                                       origin: origin))
+                                                       projectPath: projectPath))
     }
 
     var body: some View {
@@ -89,7 +76,7 @@ struct ChatView: View {
                 // whole chat re-rendered per keystroke, the visible-message filter
                 // walked every message's content — typing crawled in conversations
                 // with megabyte transcripts.
-                ChatComposer(relay: relay, pinnedHostNeedingLogin: pinnedHostNeedingLogin,
+                ChatComposer(relay: relay,
                              onWillSend: { followMode = true; sendPin += 1 })
             }
         }
@@ -104,7 +91,7 @@ struct ChatView: View {
                         ContextMeter(usage: ctx)
                     }
                     NavigationLink {
-                        FilesView(projectId: projectId, token: chatToken, title: title, origin: origin)
+                        FilesView(projectId: projectId, token: chatToken, title: title)
                     } label: {
                         Image(systemName: "folder").foregroundColor(Theme.primary)
                     }
@@ -113,25 +100,15 @@ struct ChatView: View {
         }
         .task {
             RecentlyViewedStore.shared.record(sessionId: sessionId, projectId: projectId,
-                                              isRemote: isRemote, title: title)
+                                              title: title)
             await start()
-        }
-        // Agent already working when the chat opens (or a turn starts silently):
-        // check the live status endpoint now and every 10s as a backstop.
-        .task {
-            guard isRemote else { return }
-            while !Task.isCancelled {
-                await relay.syncRunningState(APIClient(token: chatToken, origin: origin))
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
-            }
         }
         // Returning from the background: the socket iOS killed still LOOKS open,
         // so without this kick the chat sat stale until the next failed I/O plus
-        // the reconnect backoff. Reconnect + reconcile + status sync right away.
+        // the reconnect backoff. Reconnect + reconcile right away.
         .onChange(of: scenePhase) { phase in
             guard phase == .active, previewMessages == nil else { return }
             relay.ensureConnected()
-            Task { await relay.syncRunningState(APIClient(token: chatToken, origin: origin)) }
         }
         .onDisappear { relay.disconnect() }
     }
@@ -159,7 +136,7 @@ struct ChatView: View {
                     }
                     ForEach(visibleMessages) { m in
                         MessageRow(message: m, projectId: projectId, token: chatToken,
-                                   origin: origin, showActions: m.id == lastAssistantTextId)
+                                   showActions: m.id == lastAssistantTextId)
                             .equatable()
                             .id(m.id)
                     }
@@ -550,7 +527,7 @@ struct ChatView: View {
         let sid = relay.sessionId
         if !sid.isEmpty {
             do {
-                let h = try await APIClient(token: chatToken, origin: origin).history(sessionId: sid)
+                let h = try await APIClient(token: chatToken).history(sessionId: sid)
                 relay.setHistory(h.messages)
                 if let ctx = h.context { relay.context = ctx }
                 // If a stream frame already flipped the loader on, anchor the
@@ -578,11 +555,6 @@ private struct ContentFrameKey: PreferenceKey {
 /// keystroke made typing crawl in conversations with large histories).
 private struct ChatComposer: View {
     @ObservedObject var relay: RelayClient
-    /// The agent is pinned to this host but the app has no saved login for it —
-    /// arbitrary/binary files can't reach the agent (only image/PDF/text embed
-    /// through the relay). Attaching an unsupported type warns instead of
-    /// silently dropping it server-side.
-    let pinnedHostNeedingLogin: String?
     /// Parent hook fired right before a send (re-arms follow-mode).
     let onWillSend: () -> Void
 
@@ -631,12 +603,13 @@ private struct ChatComposer: View {
                     .padding(.trailing, 6)
                     .padding(.vertical, 14)
 
-                // Mid-turn sends are allowed for remote agents — the relay queues
-                // them into the agent's own message queue (same as the web app), so
-                // typed text always SENDS; stop is offered only when the composer
-                // is empty. Local sessions keep stop-while-working (no queue there).
+                // Stock composer semantics: SEND when idle, STOP (abort) while a
+                // turn is processing. The button is the send arrow when idle and
+                // the stop square while the agent is working.
                 Button {
-                    if canSend && (!relay.isLoading || relay.supportsMidTurnSend) {
+                    if relay.isLoading {
+                        relay.abort()
+                    } else if canSend {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         onWillSend()
                         let text = input
@@ -644,13 +617,9 @@ private struct ChatComposer: View {
                         input = ""
                         attachments = []
                         relay.send(text, attachments: files)
-                    } else if relay.isLoading {
-                        relay.abort()
                     }
                 } label: {
-                    Image(systemName: (canSend && (!relay.isLoading || relay.supportsMidTurnSend))
-                          ? "arrow.up.circle.fill"
-                          : (relay.isLoading ? "stop.circle.fill" : "arrow.up.circle.fill"))
+                    Image(systemName: relay.isLoading ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .font(.system(size: 32))
                         .foregroundColor(sendButtonActive ? Theme.primary : Theme.mutedText.opacity(0.5))
                 }
@@ -736,20 +705,6 @@ private struct ChatComposer: View {
             isImage: true))
     }
 
-    /// Types the relay can EMBED as content blocks (server toUserContent):
-    /// image/PDF/text reach any agent; everything else needs the file to LAND on
-    /// the agent's host — impossible without a login there.
-    private static let embeddableTextExts: Set<String> = [
-        "txt", "md", "markdown", "json", "csv", "tsv", "xml", "yaml", "yml", "toml", "ini", "cfg",
-        "conf", "env", "log", "js", "jsx", "ts", "tsx", "mjs", "cjs", "py", "rb", "go", "rs", "java",
-        "c", "cpp", "cc", "h", "hpp", "cs", "php", "sh", "bash", "zsh", "sql", "html", "htm", "css",
-        "scss", "less", "vue", "svelte", "svg", "dockerfile", "gitignore", "lua", "r", "kt", "swift",
-    ]
-    private static func embedsWithoutLanding(mime: String, name: String) -> Bool {
-        if mime.hasPrefix("image/") || mime.hasPrefix("text/") || mime == "application/pdf" { return true }
-        return embeddableTextExts.contains((name as NSString).pathExtension.lowercased())
-    }
-
     private func addFileAttachment(_ url: URL) {
         attachError = nil
         let scoped = url.startAccessingSecurityScopedResource()
@@ -763,13 +718,6 @@ private struct ChatComposer: View {
             return
         }
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        // Agent pinned to a host we're not logged into: this file type can't
-        // reach it (would be dropped server-side with a placeholder note).
-        if let host = pinnedHostNeedingLogin,
-           !Self.embedsWithoutLanding(mime: mime, name: url.lastPathComponent) {
-            attachError = "Can’t share this file: the agent runs on \(host), which you’re not signed in to. Add that account (profile → Add account) to send files."
-            return
-        }
         attachments.append(PendingAttachment(
             name: url.lastPathComponent,
             dataURL: "data:\(mime);base64,\(data.base64EncodedString())",
