@@ -45,7 +45,23 @@ struct APIClient {
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
-        return data
+        return Self.unwrapEnvelope(data)
+    }
+
+    /// Stock (upstream) claudecodeui servers wrap REST payloads in a
+    /// `{success: true, data: …}` envelope; this app's original server returns
+    /// most payloads bare. Unwrap the envelope when it is the entire response
+    /// so both server dialects decode identically downstream. Responses that
+    /// merely contain a `success` flag among other fields (e.g. login) pass
+    /// through untouched.
+    private static func unwrapEnvelope(_ data: Data) -> Data {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj.count == 2,
+              obj["success"] as? Bool == true,
+              let inner = obj["data"],
+              let unwrapped = try? JSONSerialization.data(withJSONObject: inner, options: [.fragmentsAllowed])
+        else { return data }
+        return unwrapped
     }
 
     // MARK: Endpoints
@@ -103,6 +119,64 @@ struct APIClient {
         let sid = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId
         let data = try await request("/api/providers/sessions/\(sid)/messages?limit=\(limit)&offset=\(offset)")
         return try JSONDecoder().decode(HistoryResponse.self, from: data)
+    }
+
+    struct AssetRecord: Codable {
+        let name: String?
+        let path: String
+        let size: Int?
+        let mimeType: String?
+    }
+
+    /// Uploads chat attachments to the server's asset store (the standard
+    /// claudecodeui flow: store first, then reference by path in chat.send).
+    /// `field` is "images" for image files or "files" for anything else — it
+    /// names both the route and the multipart field.
+    func uploadAssets(_ attachments: [(name: String, mime: String, bytes: Data)], field: String) async throws -> [AssetRecord] {
+        guard !attachments.isEmpty else { return [] }
+        guard let url = URL(string: (origin ?? Config.serverOrigin) + "/api/assets/\(field)") else { throw APIError.badURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 300
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let boundary = "mymu-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        for attachment in attachments {
+            let safeName = attachment.name.replacingOccurrences(of: "\"", with: "_")
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(field)\"; filename=\"\(safeName)\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: \(attachment.mime)\r\n\r\n".data(using: .utf8)!)
+            body.append(attachment.bytes)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+
+        let data: Data
+        let resp: URLResponse
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req)
+        } catch {
+            throw APIError.network(error.localizedDescription)
+        }
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            throw APIError.http(code, String(data: data, encoding: .utf8) ?? "")
+        }
+        struct R: Codable { let images: [AssetRecord]?; let attachments: [AssetRecord]? }
+        let decoded = try JSONDecoder().decode(R.self, from: Self.unwrapEnvelope(data))
+        return decoded.images ?? decoded.attachments ?? []
+    }
+
+    /// Stock upstream servers allocate chat sessions over REST before the first
+    /// `chat.send` (the fork allocates implicitly on first message instead).
+    /// Returns the new app session id.
+    func createProviderSession(provider: String = "claude", projectPath: String) async throws -> String {
+        struct R: Codable { let sessionId: String }
+        let body = try JSONEncoder().encode(["provider": provider, "projectPath": projectPath])
+        let data = try await request("/api/providers/sessions", method: "POST", body: body)
+        return try JSONDecoder().decode(R.self, from: data).sessionId
     }
 
     /// Agent → host assignments (admin-set on the server): agentKey → host

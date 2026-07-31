@@ -69,6 +69,9 @@ final class RelayClient: ObservableObject {
     private var seq = 0
     private var reconnectAttempts = 0
     private var intentionalClose = false
+    /// Highest `seq` seen from the server — chat.subscribe replays everything
+    /// after this, closing gaps from drops/backgrounding.
+    private var lastSeq = 0
 
     init(token: String, sessionId: String, isRemote: Bool, projectPath: String? = nil, origin: String? = nil) {
         self.token = token
@@ -111,8 +114,10 @@ final class RelayClient: ObservableObject {
     }
 
     private func subscribe() {
-        guard isRemote else { return }
-        sendJSON(["type": "rc-subscribe", "sessionId": sessionId])
+        // A brand-new conversation has no id to attach yet — the first send
+        // allocates one and subscribes.
+        guard !sessionId.isEmpty else { return }
+        sendJSON(["type": "chat.subscribe", "sessions": [["sessionId": sessionId, "lastSeq": lastSeq]]])
     }
 
     /// Foreground kick: iOS kills sockets in the background but they look alive
@@ -166,29 +171,80 @@ final class RelayClient: ObservableObject {
         // iOS kills sockets in the background; a send into a dead one would
         // silently vanish behind the optimistic bubble. Reopen before sending.
         if task == nil { openSocket() }
-        var options: [String: Any] = [:]
-        if isRemote {
-            options["sessionId"] = sessionId
-            options["resume"] = true
-            options["remoteControl"] = sessionId
-        } else {
-            // Local project session: the server spawns/reattaches the CLI in the
-            // project directory. Empty sessionId = brand-new conversation; the
-            // session_created frame below rebinds us to the real id.
-            if let projectPath { options["projectPath"] = projectPath; options["cwd"] = projectPath }
-            if !sessionId.isEmpty { options["sessionId"] = sessionId; options["resume"] = true }
+        Task { [weak self] in
+            guard let self else { return }
+            // 1. Sessions exist BEFORE the first message (allocated over REST —
+            //    the standard claudecodeui contract).
+            if self.sessionId.isEmpty {
+                guard let projectPath = self.projectPath,
+                      let newId = try? await APIClient(token: self.token, origin: self.origin)
+                          .createProviderSession(projectPath: projectPath) else {
+                    self.appendOrReplace(ChatMessage(id: "err-\(self.nextSeq())", kind: "error", role: "assistant",
+                                                     content: "Could not create a session on this server.", isError: true))
+                    self.isLoading = false
+                    return
+                }
+                self.sessionId = newId
+                self.subscribe()   // attach the live stream so replay covers the whole run
+            }
+            // 2. Attachments go to the server's asset store first and are
+            //    referenced by path (standard flow); a failed upload keeps the
+            //    text going and reports the loss instead of vanishing silently.
+            var options: [String: Any] = [:]
+            if !attachments.isEmpty {
+                do {
+                    let records = try await self.uploadAttachments(attachments)
+                    if !records.isEmpty { options["images"] = records }
+                } catch {
+                    self.appendOrReplace(ChatMessage(id: "err-\(self.nextSeq())", kind: "error", role: "assistant",
+                                                     content: "Attachment upload failed — sending without files. (\(error.localizedDescription))",
+                                                     isError: true))
+                }
+            }
+            self.sendJSON(["type": "chat.send", "sessionId": self.sessionId, "content": trimmed, "options": options], retryOnce: true)
         }
-        if !attachments.isEmpty { options["images"] = attachments }
-        sendJSON(["type": "claude-command", "command": trimmed, "options": options], retryOnce: true)
+    }
+
+    /// Uploads composer attachments (held as data-URLs) to the asset store and
+    /// returns the `{name, path, mimeType}` records chat.send references.
+    /// Images and other files go to their respective store routes.
+    private func uploadAttachments(_ attachments: [[String: String]]) async throws -> [[String: Any]] {
+        var images: [(name: String, mime: String, bytes: Data)] = []
+        var files: [(name: String, mime: String, bytes: Data)] = []
+        for attachment in attachments {
+            guard let dataURL = attachment["data"], let parsed = Self.parseDataURL(dataURL) else { continue }
+            let entry = (name: attachment["name"] ?? "attachment", mime: parsed.mime, bytes: parsed.bytes)
+            if parsed.mime.hasPrefix("image/") { images.append(entry) } else { files.append(entry) }
+        }
+        let api = APIClient(token: token, origin: origin)
+        var records: [APIClient.AssetRecord] = []
+        if !images.isEmpty { records += try await api.uploadAssets(images, field: "images") }
+        if !files.isEmpty { records += try await api.uploadAssets(files, field: "files") }
+        return records.map { record in
+            var entry: [String: Any] = ["path": record.path]
+            if let name = record.name { entry["name"] = name }
+            if let mimeType = record.mimeType { entry["mimeType"] = mimeType }
+            return entry
+        }
+    }
+
+    /// "data:<mime>;base64,<payload>" → (mime, bytes). Returns nil for
+    /// malformed or non-base64 data URLs.
+    static func parseDataURL(_ dataURL: String) -> (mime: String, bytes: Data)? {
+        guard dataURL.hasPrefix("data:"), let comma = dataURL.firstIndex(of: ",") else { return nil }
+        let header = String(dataURL[dataURL.index(dataURL.startIndex, offsetBy: 5)..<comma])
+        let mime = header.split(separator: ";").first.map(String.init) ?? ""
+        guard let bytes = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])) else { return nil }
+        return (mime.isEmpty ? "application/octet-stream" : mime, bytes)
     }
 
     func answerPermission(requestId: String, allow: Bool) {
-        sendJSON(["type": "claude-permission-response", "requestId": requestId, "allow": allow])
+        sendJSON(["type": "chat.permission-response", "requestId": requestId, "allow": allow])
         pendingPermission = nil
     }
 
     func abort() {
-        sendJSON(["type": "abort-session", "sessionId": sessionId, "provider": "claude"])
+        sendJSON(["type": "chat.abort", "sessionId": sessionId])
         isLoading = false
     }
 
@@ -324,6 +380,42 @@ final class RelayClient: ObservableObject {
 
         // Live token counter: assistant frames carry the absolute context position.
         if let ctx = obj["contextTokens"] as? Int { noteContextTokens(ctx) }
+
+        // Upstream frames carry a per-run seq — remember the high-water mark so
+        // the next chat.subscribe replays only what we actually missed.
+        if let s = obj["seq"] as? Int { lastSeq = max(lastSeq, s) }
+
+        switch kind {
+        case "chat_subscribed":
+            // Upstream's subscribe ack: authoritative running/pending snapshot.
+            if let processing = obj["isProcessing"] as? Bool {
+                if processing { isLoading = true }
+                // A just-sent turn can't have finished before its first frame —
+                // don't let a pre-run snapshot kill the fresh loader.
+                else if !awaitingFirstResponse { isLoading = false }
+            }
+            if let pending = obj["pendingPermissions"] as? [[String: Any]],
+               let first = pending.first, let requestId = first["requestId"] as? String {
+                var m = ChatMessage(id: (first["id"] as? String) ?? "perm-\(nextSeq())",
+                                    kind: "permission_request", role: "assistant",
+                                    toolName: first["toolName"] as? String)
+                m.requestId = requestId
+                pendingPermission = m
+            }
+            return
+        case "session_upserted", "loading_progress":
+            return
+        case "protocol_error":
+            streamingId = nil
+            Haptics.error()
+            appendOrReplace(ChatMessage(id: messageId(obj), kind: "error", role: "assistant",
+                                        content: (obj["message"] as? String) ?? "Server rejected the request.",
+                                        isError: true))
+            isLoading = false
+            return
+        default:
+            break
+        }
 
         switch kind {
         case "stream_delta":

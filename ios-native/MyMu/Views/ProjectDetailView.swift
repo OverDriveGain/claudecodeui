@@ -72,7 +72,10 @@ struct ProjectDetailView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(s.displayTitle).foregroundColor(Theme.text).font(.body).lineLimit(1)
                 HStack(spacing: 6) {
-                    if let c = s.messageCount { Text("\(c) messages").font(.caption2).foregroundColor(Theme.mutedText) }
+                    // Hide zero counts: stock upstream servers report 0 for
+                    // sessions synced from CLI transcripts even when messages
+                    // exist — "0 messages" next to a full thread reads broken.
+                    if let c = s.messageCount, c > 0 { Text("\(c) messages").font(.caption2).foregroundColor(Theme.mutedText) }
                     Text(compactAge(s.sortKey)).font(.caption2).foregroundColor(Theme.mutedText)
                 }
             }
