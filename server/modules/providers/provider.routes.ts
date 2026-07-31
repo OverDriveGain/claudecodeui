@@ -1,5 +1,8 @@
+import { randomUUID } from 'crypto';
+
 import express, { type Request, type Response } from 'express';
 
+import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
@@ -419,6 +422,35 @@ router.post(
   }),
 );
 
+/**
+ * Stock-upstream session pre-create: allocates the session id for a brand-new
+ * chat BEFORE the first `chat.send` (the post-fork upstream client contract).
+ * MyMu's own flow allocates implicitly on first message; this route exists so
+ * one client protocol works against MyMu and stock servers alike. The row is a
+ * placeholder (no transcript): the first `chat.send` spawns fresh, announces
+ * the real provider session id via `session_created`, and the placeholder is
+ * dropped. Only paths of already-registered projects are accepted — project
+ * registration is where path validation/scoping happens.
+ */
+router.post(
+  '/sessions',
+  asyncHandler(async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const provider = parseProvider(body.provider ?? 'claude');
+    const projectPath = typeof body.projectPath === 'string' ? body.projectPath.trim() : '';
+    if (!projectPath || !projectsDb.getProjectPath(projectPath)) {
+      throw new AppError('projectPath must reference a registered project.', {
+        code: 'PROJECT_PATH_REQUIRED',
+        statusCode: 400,
+      });
+    }
+
+    const sessionId = randomUUID();
+    sessionsDb.createSession(sessionId, provider, projectPath);
+    res.status(201).json(createApiSuccessResponse({ sessionId, provider, projectPath }));
+  }),
+);
+
 router.put(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
@@ -464,7 +496,7 @@ router.get(
       limit,
       offset,
     });
-    res.json(result);
+    res.json(createApiSuccessResponse(result));
   }),
 );
 

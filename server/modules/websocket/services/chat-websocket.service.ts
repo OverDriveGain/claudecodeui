@@ -1,5 +1,7 @@
 import type { WebSocket } from 'ws';
 
+import { materializeAttachmentOptions } from '@/modules/assets/index.js';
+import { sessionsDb } from '@/modules/database/index.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
 import { WebSocketWriter } from '@/modules/websocket/services/websocket-writer.service.js';
 import type {
@@ -141,6 +143,123 @@ export function handleChatConnection(
         throw new Error('Message type is required');
       }
 
+      // ---- Stock-upstream dialect (chat.*) ----
+      // The post-fork upstream client protocol. MyMu accepts BOTH vocabularies
+      // so one client can speak one protocol against MyMu and stock servers
+      // alike; these aliases translate onto the existing handlers below.
+
+      // Relay-agent sessions carry the Anthropic `cse_` id prefix; the dynamic
+      // check alone only knows sessions that are ALREADY attached, which a
+      // quiet agent isn't yet.
+      const isRelaySession = (id: string): boolean =>
+        id.startsWith('cse_') || dependencies.isRemoteSession(id);
+
+      if (messageType === 'chat.subscribe') {
+        const sessions = Array.isArray((data as AnyRecord).sessions)
+          ? ((data as AnyRecord).sessions as AnyRecord[])
+          : [];
+        for (const entry of sessions) {
+          const sessionId = typeof entry?.sessionId === 'string' ? entry.sessionId : '';
+          if (!sessionId) continue;
+          if (isRelaySession(sessionId)) {
+            await dependencies.subscribeRemoteChannel(sessionId, writer);
+            // isProcessing deliberately omitted for relay sessions: the
+            // agent-status poll is authoritative there, and a wrong `false`
+            // in this ack would fight the client's loader.
+            writer.send({ kind: 'chat_subscribed', sessionId });
+          } else {
+            const isProcessing = dependencies.isClaudeSDKSessionActive(sessionId);
+            if (isProcessing) {
+              dependencies.reconnectSessionWriter(sessionId, ws);
+            }
+            writer.send({
+              kind: 'chat_subscribed',
+              sessionId,
+              isProcessing,
+              pendingPermissions: isProcessing
+                ? dependencies.getPendingApprovalsForSession(sessionId)
+                : [],
+            });
+          }
+        }
+        return;
+      }
+
+      if (messageType === 'chat.send') {
+        const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+        const content = typeof (data as AnyRecord).content === 'string'
+          ? String((data as AnyRecord).content)
+          : '';
+        const clientOptions = { ...((data.options ?? {}) as AnyRecord) };
+        if (!sessionId) {
+          writer.send({
+            kind: 'protocol_error',
+            code: 'SESSION_ID_REQUIRED',
+            message: 'chat.send requires a sessionId.',
+          });
+          return;
+        }
+        // Store-referenced attachments ({path} records from POST /api/assets/*)
+        // become the inline shape the provider pipeline consumes; inline
+        // data-URLs pass through, references outside the store are dropped.
+        await materializeAttachmentOptions(clientOptions);
+        if (isRelaySession(sessionId)) {
+          await dependencies.queryRemoteChannel(
+            content,
+            { ...clientOptions, sessionId, resume: true, remoteControl: sessionId },
+            writer
+          );
+          return;
+        }
+        const row = sessionsDb.getSessionById(sessionId);
+        if (!row) {
+          writer.send({
+            kind: 'protocol_error',
+            code: 'SESSION_NOT_FOUND',
+            message: `Session "${sessionId}" was not found. Create it via POST /api/providers/sessions first.`,
+            sessionId,
+          });
+          return;
+        }
+        const projectPath = row.project_path ?? undefined;
+        const options: AnyRecord = {
+          ...clientOptions,
+          projectPath,
+          cwd: clientOptions.cwd ?? projectPath,
+        };
+        if (row.jsonl_path) {
+          // Existing transcript: resume the provider-native session.
+          options.sessionId = sessionId;
+          options.resume = true;
+        } else {
+          // Pre-created placeholder (no transcript yet): first message spawns
+          // fresh; `session_created` announces the real id and the client
+          // rebinds. The placeholder served its purpose — the sessions watcher
+          // registers the real session when its transcript lands on disk.
+          sessionsDb.deleteSessionById(sessionId);
+        }
+        await dependencies.queryClaudeSDK(content, options, writer);
+        return;
+      }
+
+      if (messageType === 'chat.abort') {
+        const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+        const success = isRelaySession(sessionId)
+          ? dependencies.abortRemoteSession(sessionId)
+          : await dependencies.abortClaudeSDKSession(sessionId);
+        writer.send(
+          createNormalizedMessage({
+            kind: 'complete',
+            exitCode: success ? 0 : 1,
+            aborted: true,
+            success,
+            sessionId,
+            provider: DEFAULT_PROVIDER,
+          })
+        );
+        return;
+      }
+
       // Read-only live subscription: the GUI opened a remote-control agent and wants
       // its stream mirrored live (terminal messages, thinking progress, output) the
       // way claude.ai/code does — without sending anything.
@@ -229,7 +348,7 @@ export function handleChatConnection(
         return;
       }
 
-      if (messageType === 'claude-permission-response') {
+      if (messageType === 'claude-permission-response' || messageType === 'chat.permission-response') {
         if (typeof data.requestId === 'string' && data.requestId.length > 0) {
           const decision = {
             allow: Boolean(data.allow),

@@ -84,6 +84,7 @@ import agentHostsRoutes from './routes/agent-hosts.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import providerRoutes from './modules/providers/provider.routes.js';
+import assetsRoutes from './modules/assets/assets.routes.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -258,6 +259,9 @@ app.use('/api/settings', authenticateToken, settingsRoutes);
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
 app.use('/api/agent-hosts', authenticateToken, agentHostsRoutes);
+
+// Chat attachment store (stock-claudecodeui contract; see modules/assets)
+app.use('/api/assets', authenticateToken, assetsRoutes);
 
 // Gemini API Routes (protected)
 app.use('/api/gemini', authenticateToken, geminiRoutes);
