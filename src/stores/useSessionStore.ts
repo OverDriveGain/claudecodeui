@@ -33,6 +33,8 @@ export type MessageKind =
   | 'task_notification';
 
 export interface NormalizedMessage {
+  /** MYMU: harness-injected user-role row (skill payloads) — renders as a context chip. */
+  isInjected?: boolean;
   id: string;
   sessionId: string;
   timestamp: string;

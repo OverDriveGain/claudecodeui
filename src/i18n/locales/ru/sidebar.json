@@ -133,7 +133,8 @@
     "projectsScanned_one": "{{count}} проект просканирован",
     "projectsScanned_few": "{{count}} проекта просканировано",
     "projectsScanned_many": "{{count}} проектов просканировано",
-    "projectsScanned_other": "{{count}} проектов просканировано"
+    "projectsScanned_other": "{{count}} проектов просканировано",
+    "modeAgents": "Agents"
   },
   "deleteConfirmation": {
     "deleteProject": "Убрать проект",
@@ -147,5 +148,9 @@
     "deleteAllData": "Удалить все данные навсегда",
     "allConversationsDeleted": "Проект будет убран из боковой панели. Ваши файлы, воспоминания и данные сеансов сохранятся.",
     "cannotUndo": "Вы сможете добавить проект позже."
+  },
+  "agents": {
+    "empty": "No agents visible",
+    "hide": "Remove from view"
   }
 }

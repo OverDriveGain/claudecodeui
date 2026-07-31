@@ -18,6 +18,34 @@ import ChatMessageFiles from './ChatMessageFiles';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
 import MessageSpeakControl from './MessageSpeakControl';
+import {
+  splitInjectedContent,
+  injectedLabelFor,
+  InjectedSegmentChip,
+  InjectedContextRow,
+  type InjectedSegment,
+} from './InjectedContentNote';
+
+/**
+ * Open a data: URL attachment in a new tab. Browsers block top-frame navigation
+ * to data: URLs (window.open(dataUrl) silently does nothing), so the bytes are
+ * converted to a Blob and opened via an object URL instead.
+ */
+function openDataUrlAttachment(dataUrl: string): void {
+  try {
+    const [head, b64] = dataUrl.split(',', 2);
+    const mime = head.match(/^data:([^;]+)/)?.[1] || 'application/octet-stream';
+    const bytes = atob(b64 || '');
+    const buf = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([buf], { type: mime }));
+    window.open(url, '_blank', 'noopener');
+    // Give the new tab time to load the blob before releasing it.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    window.open(dataUrl, '_blank');
+  }
+}
 
 type DiffLine = {
   type: string;
@@ -65,6 +93,26 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   const isCommandOrFileEditToolResponse = Boolean(
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
+  // Collapse injected machinery (loaded-skill payloads, long system-reminders)
+  // into compact chips so they don't dominate the chat as walls of text.
+  const userInjected = useMemo(
+    () => (message.type === 'user' ? splitInjectedContent(userCopyContent) : { text: userCopyContent, segments: [] }),
+    [message.type, userCopyContent],
+  );
+  const userDisplayText = message.type === 'user' ? userInjected.text : userCopyContent;
+  const userIsPureInjection = message.type === 'user' && userInjected.segments.length > 0 && userInjected.text === '';
+  // A user-role row the person did NOT type: either the server flagged it as
+  // harness-injected (`isInjected`), or the client heuristics reduced it to
+  // nothing but injected segments. Render on the agent side as collapsed
+  // context — a right-side bubble here reads as "I sent this", which is wrong.
+  const injectedSegments = useMemo<InjectedSegment[]>(() => {
+    if (message.type !== 'user') return [];
+    if (message.isInjected) {
+      return [{ kind: 'injected', label: injectedLabelFor(userCopyContent), body: userCopyContent }];
+    }
+    return userIsPureInjection ? userInjected.segments : [];
+  }, [message.type, message.isInjected, userCopyContent, userIsPureInjection, userInjected.segments]);
+  const isInjectedUserMessage = injectedSegments.length > 0;
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
@@ -83,9 +131,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
-      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
+      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' && !isInjectedUserMessage ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
-      {message.type === 'user' ? (
+      {isInjectedUserMessage ? (
+        <InjectedContextRow segments={injectedSegments} timestamp={formattedTime} />
+      ) : message.type === 'user' ? (
         /* User turn on the right: claude.ai-style attachment cards above the bubble */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
           <div className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
@@ -123,7 +173,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             )}
           </div>
           {!isGrouped && (
-            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm text-white sm:flex">
+            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground sm:flex">
               U
             </div>
           )}
@@ -135,6 +185,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${message.taskStatus === 'completed' ? 'bg-green-400 dark:bg-green-500' : 'bg-amber-400 dark:bg-amber-500'}`} />
             <span className="text-xs text-gray-500 dark:text-gray-400">{message.content}</span>
           </div>
+        </div>
+      ) : message.isSystemNotice ? (
+        /* Centered system notice (compact_boundary, informational) — mirrors the
+           dim divider Claude Code shows in the terminal */
+        <div className="my-1 flex w-full items-center gap-3 px-2">
+          <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+          <span
+            className={`text-xs ${message.systemLevel === 'warning' || message.systemLevel === 'error' ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-500'}`}
+          >
+            {message.content}
+          </span>
+          <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
         </div>
       ) : (
         /* Claude/Error/Tool messages on the left */

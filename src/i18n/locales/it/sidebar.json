@@ -129,7 +129,8 @@
     "matches_one": "{{count}} corrispondenza",
     "matches_other": "{{count}} corrispondenze",
     "projectsScanned_one": "{{count}} progetto analizzato",
-    "projectsScanned_other": "{{count}} progetti analizzati"
+    "projectsScanned_other": "{{count}} progetti analizzati",
+    "modeAgents": "Agents"
   },
   "deleteConfirmation": {
     "deleteProject": "Rimuovi progetto",
@@ -141,5 +142,9 @@
     "deleteAllData": "Elimina tutti i dati permanentemente",
     "allConversationsDeleted": "Il progetto verrà rimosso dalla barra laterale. I tuoi file, memorie e dati delle sessioni verranno preservati.",
     "cannotUndo": "Puoi riaggiungerlo in seguito."
+  },
+  "agents": {
+    "empty": "No agents visible",
+    "hide": "Remove from view"
   }
 }

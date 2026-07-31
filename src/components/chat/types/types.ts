@@ -39,6 +39,8 @@ export interface SubagentChildTool {
 }
 
 export interface ChatMessage {
+  /** MYMU: harness-injected user-role content (skill payloads) — context chip, not a bubble. */
+  isInjected?: boolean;
   type: string;
   content?: string;
   displayText?: string;

@@ -175,12 +175,12 @@ app.use('/api/auth', authRoutes);
 app.use('/api', mymuRoutes);
 
 // File Tree API Routes (protected)
-app.use('/api/file-tree', authenticateToken, fileTreeRoutes);
-
-// MYMU: remote/local file routes + federation + delivered files (FORK.md S5) —
-// registered BEFORE the module project routes so these fork implementations
-// (remote:cse_ awareness, sudo-aware cross-user reads) take precedence.
+// MYMU: remote/local file routes + federation + delivered files (FORK.md F1/F4)
+// — registered BEFORE the file-tree and project modules so the fork
+// implementations (remote:cse_ awareness, sudo-aware cross-user reads) win.
 registerRemoteFileRoutes(app, authenticateToken);
+
+app.use('/api/file-tree', authenticateToken, fileTreeRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);

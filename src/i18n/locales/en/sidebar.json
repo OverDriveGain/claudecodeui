@@ -129,7 +129,8 @@
     "matches_one": "{{count}} match",
     "matches_other": "{{count}} matches",
     "projectsScanned_one": "{{count}} project scanned",
-    "projectsScanned_other": "{{count}} projects scanned"
+    "projectsScanned_other": "{{count}} projects scanned",
+    "modeAgents": "Agents"
   },
   "deleteConfirmation": {
     "deleteProject": "Remove Project",
@@ -141,5 +142,9 @@
     "deleteAllData": "Delete all data permanently",
     "allConversationsDeleted": "The project will be removed from the sidebar. Your files, memories, and session data will be preserved.",
     "cannotUndo": "You can re-add the project later."
+  },
+  "agents": {
+    "empty": "No agents visible",
+    "hide": "Remove from view"
   }
 }

@@ -129,7 +129,8 @@
     "matches_one": "{{count}} eşleşme",
     "matches_other": "{{count}} eşleşme",
     "projectsScanned_one": "{{count}} proje tarandı",
-    "projectsScanned_other": "{{count}} proje tarandı"
+    "projectsScanned_other": "{{count}} proje tarandı",
+    "modeAgents": "Agents"
   },
   "deleteConfirmation": {
     "deleteProject": "Projeyi Kaldır",
@@ -141,5 +142,9 @@
     "deleteAllData": "Tüm veriyi kalıcı olarak sil",
     "allConversationsDeleted": "Proje kenar çubuğundan kaldırılacak. Dosyaların, bellek verilerin ve oturum verilerin korunacak.",
     "cannotUndo": "Projeyi sonra tekrar ekleyebilirsin."
+  },
+  "agents": {
+    "empty": "No agents visible",
+    "hide": "Remove from view"
   }
 }

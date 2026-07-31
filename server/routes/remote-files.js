@@ -800,7 +800,13 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
     }
 });
 
-app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) => {
+// MYMU: the stock UI fetches trees via the file-tree module route; remote
+// agents' projects alias onto this remote-aware handler (locals fall through).
+app.get('/api/file-tree/projects/:projectId/files', authenticateToken, (req, res, next) => {
+    if (!String(req.params.projectId || '').startsWith('remote:')) return next();
+    return mymuProjectFilesHandler(req, res);
+});
+const mymuProjectFilesHandler = async (req, res) => {
     try {
 
         // Using fsPromises from import
@@ -859,6 +865,7 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
         console.error('[ERROR] File tree error:', error.message);
         res.status(500).json({ error: error.message });
     }
-});
+};
+app.get('/api/projects/:projectId/files', authenticateToken, mymuProjectFilesHandler);
 
 }

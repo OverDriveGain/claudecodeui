@@ -126,6 +126,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               timestamp: msg.timestamp,
               images,
               files,
+              isInjected: msg.isInjected, // MYMU: harness-injected rows render as context chips
               ...sharedMetadata,
             });
           }

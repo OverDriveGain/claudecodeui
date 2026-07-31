@@ -4,7 +4,7 @@ import type { Project } from '../../../types/app';
 import type { SubagentChildTool } from '../types/types';
 
 import { getToolConfig } from './configs/toolConfigs';
-import { OneLineDisplay, BashCommandDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
+import { OneLineDisplay, BashCommandDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer, FileDeliveryContent } from './components';
 import { PlanDisplay } from './components/PlanDisplay';
 import { ToolStatusBadge } from './components/ToolStatusBadge';
 import type { ToolStatus } from './components/ToolStatusBadge';
@@ -117,6 +117,24 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         toolInput={toolInput}
         toolResult={toolResult}
         subagentState={subagentState}
+      />
+    );
+  }
+
+  // SendUserFile: an agent delivered a file to the user. Render real download
+  // cards from the tool INPUT (`files`/`caption`); suppress the tool RESULT (it's
+  // just "1 file delivered … file_uuid: …" confirmation text that reads as noise).
+  // The bytes stream through the existing authenticated files/content endpoint
+  // against the agent's cwd, so co-located agents download with no extra plumbing.
+  if (toolName === 'SendUserFile') {
+    if (mode === 'result') return null;
+    const files = Array.isArray(parsedData?.files) ? parsedData.files.filter((f: unknown): f is string => typeof f === 'string') : [];
+    if (files.length === 0) return null;
+    return (
+      <FileDeliveryContent
+        files={files}
+        caption={typeof parsedData?.caption === 'string' ? parsedData.caption : undefined}
+        projectId={selectedProject?.projectId}
       />
     );
   }

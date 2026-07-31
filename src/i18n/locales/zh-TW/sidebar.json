@@ -128,7 +128,8 @@
     "matches_one": "{{count}} 個符合",
     "matches_other": "{{count}} 個符合",
     "projectsScanned_one": "{{count}} 個專案已掃描",
-    "projectsScanned_other": "{{count}} 個專案已掃描"
+    "projectsScanned_other": "{{count}} 個專案已掃描",
+    "modeAgents": "Agents"
   },
   "deleteConfirmation": {
     "deleteProject": "移除專案",
@@ -140,5 +141,9 @@
     "deleteAllData": "永久刪除所有資料",
     "allConversationsDeleted": "專案將從側邊欄中移除。您的檔案、記憶和工作階段資料將會保留。",
     "cannotUndo": "您可以稍後重新新增此專案。"
+  },
+  "agents": {
+    "empty": "No agents visible",
+    "hide": "Remove from view"
   }
 }
