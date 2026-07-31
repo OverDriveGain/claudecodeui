@@ -1,3 +1,5 @@
+// MYMU: this upstream file carries MyMu modifications — F1 live agents (remote leaves + per-user filter).
+// Diff against upstream main to see the exact hunks (see FORK.md).
 import fs from 'node:fs/promises';
 import path from 'node:path';
 

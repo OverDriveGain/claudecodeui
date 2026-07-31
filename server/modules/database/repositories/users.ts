@@ -1,3 +1,5 @@
+// MYMU: this upstream file carries MyMu modifications — F3 multi-user (linux_user/account_owner/agent_allow + mappings).
+// Diff against upstream main to see the exact hunks (see FORK.md).
 /**
  * User repository.
  *

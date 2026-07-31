@@ -1,3 +1,5 @@
+// MYMU: this upstream file carries MyMu modifications — F3 multi-user (repository exports).
+// Diff against upstream main to see the exact hunks (see FORK.md).
 export { initializeDatabase } from '@/modules/database/init-db.js';
 export { closeConnection, getConnection, getDatabasePath } from '@/modules/database/connection.js';
 export { apiKeysDb } from '@/modules/database/repositories/api-keys.js';

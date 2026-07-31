@@ -1,3 +1,5 @@
+// MYMU: this upstream file carries MyMu modifications — F1 live agents (frame/leaf fields).
+// Diff against upstream main to see the exact hunks (see FORK.md).
 import type { IncomingMessage } from 'node:http';
 import type { Readable } from 'node:stream';
 

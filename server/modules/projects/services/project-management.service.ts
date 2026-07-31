@@ -1,3 +1,5 @@
+// MYMU: this upstream file carries MyMu modifications — F3 multi-user (owner-aware create/validate).
+// Diff against upstream main to see the exact hunks (see FORK.md).
 import fs from 'node:fs/promises';
 import path from 'node:path';
 

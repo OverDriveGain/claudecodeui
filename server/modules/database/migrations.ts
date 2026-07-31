@@ -1,3 +1,5 @@
+// MYMU: this upstream file carries MyMu modifications — F3 multi-user (user columns migrations).
+// Diff against upstream main to see the exact hunks (see FORK.md).
 import { Database } from 'better-sqlite3';
 
 import {
