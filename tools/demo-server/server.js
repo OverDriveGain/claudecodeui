@@ -13,8 +13,11 @@
  *   GET  /api/projects  /api/projects/archived
  *   GET  /api/projects/agent-status
  *   GET  /api/providers/sessions/:id/messages
- *   GET  /api/projects/:id/files  /api/projects/:id/file
- *   WS   /ws   (rc-subscribe, claude-command -> streamed canned reply)
+ *   POST /api/providers/sessions                          -> session pre-create (build 11+)
+ *   GET  /api/projects/:id/files  /api/projects/:id/file  /api/projects/:id/files/content
+ *   GET  /api/file-tree/projects/:id/…                    -> rewritten onto the above (build 11+)
+ *   WS   /ws   chat.subscribe / chat.send / chat.abort    (build 11+ stock dialect)
+ *              rc-subscribe / claude-command              (legacy — published 1.0, still live)
  *
  * Zero secrets. One dependency: ws.
  */
@@ -109,7 +112,10 @@ function sendJSON(res, code, obj) {
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, `http://${req.headers.host}`);
-  const p = u.pathname;
+  let p = u.pathname;
+  // Build 11+ reads the file tree at the stock path /api/file-tree/projects/:id/…;
+  // rewrite it onto the existing /api/projects file handlers (same as the real fork).
+  if (p.startsWith('/api/file-tree/projects/')) p = '/api/projects/' + p.slice('/api/file-tree/projects/'.length);
 
   if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
 
@@ -132,6 +138,14 @@ const server = http.createServer((req, res) => {
     const mm = p.match(/^\/api\/providers\/sessions\/([^/]+)\/messages$/);
     if (mm) return sendJSON(res, 200, history(decodeURIComponent(mm[1])));
   }
+  // Build 11+ pre-creates a session over REST before the first chat.send.
+  if (req.method === 'POST' && p === '/api/providers/sessions')
+    return sendJSON(res, 201, { sessionId: LOCAL_SESSION, provider: 'claude', projectPath: '/home/demo/hello-world' });
+  if (/^\/api\/projects\/[^/]+\/files\/content$/.test(p)) {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end('# hello-world\n\nA tiny demo project.\n');
+    return;
+  }
   if (/^\/api\/projects\/[^/]+\/files$/.test(p)) return sendJSON(res, 200, fileTree());
   if (/^\/api\/projects\/[^/]+\/file$/.test(p))
     return sendJSON(res, 200, { content: '# hello-world\n\nA tiny demo project.\n' });
@@ -152,38 +166,47 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   const send = (o) => { try { ws.send(JSON.stringify(o)); } catch {} };
 
+  // Echo the user's line, then stream a short canned assistant reply. Persist the
+  // turn (liveTurns) so the app's end-of-turn history refetch keeps it instead of
+  // wiping the reply back to the base transcript.
+  const streamReply = (sid, userText) => {
+    const reply = "This is the MyMu demo backend — everything here is sample " +
+                  "data. Point the app at your own Claude Code UI server to drive real agents.";
+    (liveTurns[sid] || (liveTurns[sid] = [])).push(
+      { id: 'u' + (++seq), kind: 'text', role: 'user', content: (userText || '').toString() },
+      { id: 'a' + (++seq), kind: 'text', role: 'assistant', content: reply },
+    );
+    send({ kind: 'status', text: 'Thinking…' });
+    const words = reply.split(' ');
+    let i = 0;
+    const tick = setInterval(() => {
+      if (i >= words.length) {
+        clearInterval(tick);
+        send({ kind: 'complete', contextTokens: 18600 });
+        return;
+      }
+      send({ kind: 'stream_delta', content: (i === 0 ? '' : ' ') + words[i], contextTokens: 18500 + i });
+      i++;
+    }, 60);
+  };
+
   ws.on('message', (data) => {
     let msg = {};
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
-    if (msg.type === 'rc-subscribe') {
-      send({ type: 'session-status', isProcessing: false });
+    // --- current stock dialect (build 11+): chat.* ---
+    if (msg.type === 'chat.subscribe') { send({ type: 'session-status', isProcessing: false }); return; }
+    if (msg.type === 'chat.send') {
+      streamReply(msg.sessionId || LOCAL_SESSION, msg.content);
       return;
     }
+    if (msg.type === 'chat.abort') { send({ kind: 'complete' }); return; }
+
+    // --- legacy dialect (published 1.0 app, still live): rc-subscribe / claude-command ---
+    if (msg.type === 'rc-subscribe') { send({ type: 'session-status', isProcessing: false }); return; }
     if (msg.type === 'claude-command') {
-      // Echo the user's line, then stream a short canned assistant reply.
-      const reply = "This is the MyMu demo backend — everything here is sample " +
-                    "data. Point the app at your own Claude Code UI server to drive real agents.";
-      // Persist the turn so the app's end-of-turn history refetch keeps it (see
-      // liveTurns) instead of wiping the reply back to the base transcript.
       const sid = (msg.options && (msg.options.sessionId || msg.options.remoteControl)) || LOCAL_SESSION;
-      const userText = (msg.command || '').toString();
-      (liveTurns[sid] || (liveTurns[sid] = [])).push(
-        { id: 'u' + (++seq), kind: 'text', role: 'user', content: userText },
-        { id: 'a' + (++seq), kind: 'text', role: 'assistant', content: reply },
-      );
-      send({ kind: 'status', text: 'Thinking…' });
-      const words = reply.split(' ');
-      let i = 0;
-      const tick = setInterval(() => {
-        if (i >= words.length) {
-          clearInterval(tick);
-          send({ kind: 'complete', contextTokens: 18600 });
-          return;
-        }
-        send({ kind: 'stream_delta', content: (i === 0 ? '' : ' ') + words[i], contextTokens: 18500 + i });
-        i++;
-      }, 60);
+      streamReply(sid, msg.command);
       return;
     }
     if (msg.type === 'abort-session') { send({ kind: 'complete' }); return; }
