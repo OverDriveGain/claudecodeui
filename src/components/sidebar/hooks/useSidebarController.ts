@@ -132,7 +132,7 @@ export function useSidebarController({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
-  const [searchMode, setSearchMode] = useState<SidebarSearchMode>('projects');
+  const [searchMode, setSearchMode] = useState<SidebarSearchMode>('agents'); // MYMU: agents-first product
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);

@@ -544,6 +544,26 @@ export function useSessionStore() {
     if (incoming.kind === 'stream_delta' || String(incoming.id).startsWith('__streaming')) {
       return [...slot.realtimeMessages, incoming];
     }
+    // MYMU: relay sessions echo the user's own message back as a live frame
+    // (local runtimes never do) — reconcile it onto the optimistic local_ row
+    // instead of showing the message twice until the next server refresh.
+    if (incoming.kind === 'text' && incoming.role === 'user' && !String(incoming.id).startsWith('local_')) {
+      const body = (incoming.content ?? '').trim();
+      if (body) {
+        const localIndex = slot.realtimeMessages.findIndex(
+          (m) =>
+            String(m.id).startsWith('local_') &&
+            m.kind === 'text' &&
+            m.role === 'user' &&
+            (m.content ?? '').trim() === body,
+        );
+        if (localIndex !== -1) {
+          const next = [...slot.realtimeMessages];
+          next[localIndex] = incoming;
+          return next;
+        }
+      }
+    }
     const index = slot.realtimeMessages.findIndex((m) => m.id === incoming.id && m.kind === incoming.kind);
     if (index === -1) {
       return [...slot.realtimeMessages, incoming];

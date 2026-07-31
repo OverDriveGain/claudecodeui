@@ -140,46 +140,55 @@ export default function SidebarHeader({
           <div className="mt-2.5 space-y-2">
             {/* Search mode toggle */}
             <div className="flex rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
-              {/* MYMU: live-agents tab (FORK.md F1) */}
-              <button
-                onClick={() => onSearchModeChange('agents')}
-                aria-pressed={searchMode === 'agents'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'agents'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Bot className="h-3 w-3" />
-                {t('search.modeAgents', 'Agents')}
-              </button>
+              {/* MYMU: icon-only tabs, agents first (FORK.md F1) */}
+              <Tooltip content={t('search.modeAgents', 'Agents')} position="top">
+                <button
+                  onClick={() => onSearchModeChange('agents')}
+                  aria-pressed={searchMode === 'agents'}
+                  aria-label={t('search.modeAgents', 'Agents')}
+                  title={t('search.modeAgents', 'Agents')}
+                  className={cn(
+                    "flex-1 flex items-center justify-center rounded-md px-2 py-1.5 text-xs font-normal transition-all",
+                    searchMode === 'agents'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Bot className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+              <Tooltip content={t('search.modeProjects', 'Projects')} position="top">
+                <button
+                  onClick={() => onSearchModeChange('projects')}
+                  aria-pressed={searchMode === 'projects'}
+                  aria-label={t('search.modeProjects', 'Projects')}
+                  title={t('search.modeProjects', 'Projects')}
+                  className={cn(
+                    "flex-1 flex items-center justify-center rounded-md px-2 py-1.5 text-xs font-normal transition-all",
+                    searchMode === 'projects'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Folder className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+              <Tooltip content={t('search.modeConversations', 'Conversations')} position="top">
+                <button
+                  onClick={() => onSearchModeChange('conversations')}
+                  aria-pressed={searchMode === 'conversations'}
+                  aria-label={t('search.modeConversations', 'Conversations')}
+                  title={t('search.modeConversations', 'Conversations')}
+                  className={cn(
+                    "flex-1 flex items-center justify-center rounded-md px-2 py-1.5 text-xs font-normal transition-all",
+                    searchMode === 'conversations'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
               <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
                 <button
                   onClick={() => onSearchModeChange('running')}
