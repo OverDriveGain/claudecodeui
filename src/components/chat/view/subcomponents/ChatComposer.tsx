@@ -281,6 +281,12 @@ export default function ChatComposer({
           </div>
         )}
 
+        {tokenBudget != null && (
+          <div className="mb-1.5 flex justify-end">
+            <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
+          </div>
+        )}
+
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
           status={isLoading ? 'streaming' : 'ready'}
@@ -400,8 +406,6 @@ export default function ChatComposer({
                 </span>
               </div>
             </button>
-
-            <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
 
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}

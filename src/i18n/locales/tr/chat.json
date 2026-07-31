@@ -136,7 +136,8 @@
     "clickToChangeMode": "İzin modunu değiştirmek için tıkla (veya girdide Tab tuşuna bas)",
     "showAllCommands": "Tüm komutları göster",
     "clearInput": "Girdiyi temizle",
-    "scrollToBottom": "En alta git"
+    "scrollToBottom": "En alta git",
+    "totalTokens": "Toplam jeton"
   },
   "providerSelection": {
     "title": "AI Asistanını Seç",
