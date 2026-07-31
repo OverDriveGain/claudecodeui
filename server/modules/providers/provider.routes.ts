@@ -19,6 +19,7 @@ import type {
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 // MYMU
 import { isLockdownEnabled } from '@/modules/mymu/index.js';
+import { listRemoteAgents } from '@/services/rc.service.js';
 
 const router = express.Router();
 
@@ -562,7 +563,19 @@ router.post(
 router.get(
   '/sessions/running',
   asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = sessionsService.listRunningSessions();
+    const sessions: Array<Record<string, unknown>> = [...sessionsService.listRunningSessions()];
+    // MYMU: relay agents mid-turn join the running list so the stock UI's
+    // spinners/indicators cover them too (listRemoteAgents is per-user scoped
+    // via the request context; startedAt omitted — the registry only knows
+    // turns this server started). FORK.md S7.
+    try {
+      const agents = await listRemoteAgents();
+      for (const agent of agents) {
+        if (agent.running) {
+          sessions.push({ sessionId: agent.id, provider: 'claude' });
+        }
+      }
+    } catch { /* relay down → local list only */ }
     res.json(createApiSuccessResponse({ sessions }));
   }),
 );
