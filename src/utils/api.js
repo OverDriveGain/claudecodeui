@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../constants/config";
+import { hostForProject, hostForSession } from "./remoteHosts";
 
 export const AUTH_TOKEN_REFRESHED_EVENT = 'auth-token-refreshed';
 export const AUTH_SESSION_EXPIRED_EVENT = 'auth-session-expired';
@@ -85,9 +86,23 @@ export const storeAuthToken = (token) => {
   return true;
 };
 
-// Utility function for authenticated API calls
-export const authenticatedFetch = (url, options = {}) => {
-  const token = getStoredAuthToken();
+// MYMU: stock servers wrap REST payloads as {success:true, data:…}; some of
+// this server's routes do too. Normalize both shapes at the parse site.
+export const unwrapApiEnvelope = (payload) =>
+  payload && typeof payload === 'object' && payload.success === true && 'data' in payload
+    ? payload.data
+    : payload;
+
+// Utility function for authenticated API calls. MYMU: `host` (a RemoteHost from
+// remoteHosts.ts) redirects the call to a connected peer host with ITS token —
+// the multi-host model: every resource is served by the host that owns it.
+/**
+ * @param {string} url
+ * @param {RequestInit & { headers?: Record<string, string> }} [options]
+ * @param {import('./remoteHosts').RemoteHost | null} [host]
+ */
+export const authenticatedFetch = (url, options = {}, host = null) => {
+  const token = host ? host.token : getStoredAuthToken();
 
   const defaultHeaders = {};
 
@@ -96,27 +111,34 @@ export const authenticatedFetch = (url, options = {}) => {
     defaultHeaders['Content-Type'] = 'application/json';
   }
 
-  if (!IS_PLATFORM && token) {
+  if ((host || !IS_PLATFORM) && token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  return fetch(host ? `${host.url}${url}` : url, {
     ...options,
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
   }).then((response) => {
+    // Sliding-expiry refresh only applies to the primary host's token.
     const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
+    // MYMU: peer-host responses must never rotate/expire the PRIMARY session.
+    if (refreshedToken && !host) {
       storeAuthToken(refreshedToken);
     }
-    if (response.headers.get('X-Auth-Error')) {
+    if (!host && response.headers.get('X-Auth-Error')) {
       expireAuthSession();
     }
     return response;
   });
 };
+
+// Route by ownership: calls addressed by projectId / sessionId go to the
+// connected host that surfaced that item (null = primary, the page's origin).
+const byProject = (projectId) => hostForProject(projectId);
+const bySession = (sessionId) => hostForSession(sessionId);
 
 // API endpoints
 export const api = {
@@ -143,12 +165,16 @@ export const api = {
   // After the projectName → projectId migration the path/query identifier is
   // the DB-assigned `projectId`; parameter names reflect that for clarity.
   projects: () => authenticatedFetch('/api/projects'),
+  // Same endpoints against a CONNECTED PEER host (multi-host merge in useProjectsState).
+  projectsFor: (host) => authenticatedFetch('/api/projects', {}, host),
+  agentStatusFor: (host) => authenticatedFetch('/api/projects/agent-status', {}, host),
   archivedProjects: () => authenticatedFetch('/api/projects/archived'),
+  agentStatus: () => authenticatedFetch('/api/projects/agent-status'),
   projectSessions: (projectId, { limit = 20, offset = 0 } = {}) => {
     const params = new URLSearchParams();
     params.set('limit', String(limit));
     params.set('offset', String(offset));
-    return authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/sessions?${params.toString()}`);
+    return authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/sessions?${params.toString()}`, {}, byProject(projectId));
   },
   projectTaskmaster: (projectId) =>
     authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/taskmaster`),
@@ -161,7 +187,7 @@ export const api = {
       params.append('offset', String(offset));
     }
     const queryString = params.toString();
-    return authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`);
+    return authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`, {}, bySession(sessionId));
   },
   renameProject: (projectId, displayName) =>
     authenticatedFetch(`/api/projects/${projectId}/rename`, {
@@ -183,7 +209,7 @@ export const api = {
     const qs = params.toString();
     return authenticatedFetch(`/api/providers/sessions/${sessionId}${qs ? `?${qs}` : ''}`, {
       method: 'DELETE',
-    });
+    }, bySession(sessionId));
   },
   getArchivedSessions: () =>
     authenticatedFetch('/api/providers/sessions/archived'),
@@ -196,12 +222,12 @@ export const api = {
   restoreSession: (sessionId) =>
     authenticatedFetch(`/api/providers/sessions/${sessionId}/restore`, {
       method: 'POST',
-    }),
+    }, bySession(sessionId)),
   renameSession: (sessionId, summary) =>
     authenticatedFetch(`/api/providers/sessions/${sessionId}`, {
       method: 'PUT',
       body: JSON.stringify({ summary }),
-    }),
+    }, bySession(sessionId)),
   // `hardDelete` => server `?force=true` (remove DB row + Claude *.jsonl + sessions rows for path).
   deleteProject: (projectId, hardDelete = false) => {
     const params = new URLSearchParams();
@@ -232,18 +258,18 @@ export const api = {
       method: 'POST',
     }),
   readFile: (projectId, filePath) =>
-    authenticatedFetch(`/api/file-tree/projects/${projectId}/file?filePath=${encodeURIComponent(filePath)}`),
+    authenticatedFetch(`/api/file-tree/projects/${projectId}/file?filePath=${encodeURIComponent(filePath)}`, {}, byProject(projectId)),
   readFileBlob: (projectId, filePath) =>
-    authenticatedFetch(`/api/file-tree/projects/${projectId}/files/content?path=${encodeURIComponent(filePath)}`),
+    authenticatedFetch(`/api/file-tree/projects/${projectId}/files/content?path=${encodeURIComponent(filePath)}`, {}, byProject(projectId)),
   saveFile: (projectId, filePath, content) =>
     authenticatedFetch(`/api/file-tree/projects/${projectId}/file`, {
       method: 'PUT',
       body: JSON.stringify({ filePath, content }),
     }),
   getFiles: (projectId, options = {}) =>
-    authenticatedFetch(`/api/file-tree/projects/${projectId}/files`, options),
+    authenticatedFetch(`/api/file-tree/projects/${projectId}/files`, options, byProject(projectId)),
   getMentionableFiles: (projectId, options = {}) =>
-    authenticatedFetch(`/api/file-tree/projects/${projectId}/files?respectGitignore=true`, options),
+    authenticatedFetch(`/api/file-tree/projects/${projectId}/files?respectGitignore=true`, options, byProject(projectId)),
 
   // File operations
   createFile: (projectId, { path, type, name }) =>
@@ -338,6 +364,36 @@ export const api = {
     completeOnboarding: () =>
       authenticatedFetch('/api/user/complete-onboarding', {
         method: 'POST',
+      }),
+    // Per-user "Remove from view" preference for the agents view. `agentKey` is a
+    // stable agent identity (account + title), not the volatile relay session id.
+    hiddenAgents: () => authenticatedFetch('/api/user/hidden-agents'),
+    hideAgent: (agentKey) =>
+      authenticatedFetch('/api/user/hidden-agents', {
+        method: 'POST',
+        body: JSON.stringify({ agentKey }),
+      }),
+    unhideAgent: (agentKey) =>
+      authenticatedFetch('/api/user/hidden-agents', {
+        method: 'DELETE',
+        body: JSON.stringify({ agentKey }),
+      }),
+  },
+
+  // Agent → host assignments (deployment-global, admin-set on the PRIMARY host).
+  // Pins an agent to the CCUI host it runs on so sends and file landing route
+  // there. Same stable `agentKey` as hidden-agents.
+  agentHosts: {
+    list: () => authenticatedFetch('/api/agent-hosts'),
+    set: (agentKey, hostUrl) =>
+      authenticatedFetch('/api/agent-hosts', {
+        method: 'PUT',
+        body: JSON.stringify({ agentKey, hostUrl }),
+      }),
+    clear: (agentKey) =>
+      authenticatedFetch('/api/agent-hosts', {
+        method: 'DELETE',
+        body: JSON.stringify({ agentKey }),
       }),
   },
 
