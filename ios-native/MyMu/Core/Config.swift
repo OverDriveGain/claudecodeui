@@ -40,7 +40,7 @@ enum Config {
     /// Authorization header, so the token rides as ?token= — the server accepts it).
     static func fileStreamURL(projectId: String, path: String, token: String) -> URL? {
         let encodedId = projectId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectId
-        var comps = URLComponents(string: serverOrigin + "/api/projects/\(encodedId)/files/content")
+        var comps = URLComponents(string: serverOrigin + "/api/file-tree/projects/\(encodedId)/files/content")
         comps?.queryItems = [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "token", value: token),

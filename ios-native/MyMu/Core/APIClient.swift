@@ -84,7 +84,7 @@ struct APIClient {
     /// network-mounted folders.
     func files(projectId: String, path: String? = nil, depth: Int = 2) async throws -> [FileNode] {
         let pid = projectId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectId
-        var endpoint = "/api/projects/\(pid)/files?depth=\(depth)"
+        var endpoint = "/api/file-tree/projects/\(pid)/files?depth=\(depth)"
         if let path, !path.isEmpty {
             let p = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
             endpoint += "&path=\(p)"
@@ -97,7 +97,7 @@ struct APIClient {
         struct R: Codable { let content: String }
         let pid = projectId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectId
         let fp = filePath.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? filePath
-        let data = try await request("/api/projects/\(pid)/file?filePath=\(fp)")
+        let data = try await request("/api/file-tree/projects/\(pid)/file?filePath=\(fp)")
         return try JSONDecoder().decode(R.self, from: data).content
     }
 

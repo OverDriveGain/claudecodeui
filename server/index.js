@@ -232,6 +232,19 @@ app.get('/health', (req, res) => {
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
 
+// Stock file-tree compatibility: vanilla siteboon serves the project file tree
+// under /api/file-tree/projects/:id/{files,file,files/content}; this fork serves
+// the same handlers under /api/projects/:id/…. A pure stock client speaks the
+// vanilla path, so rewrite it onto our handlers (query string preserved). The
+// fork's web client uses /api/projects directly and is unaffected.
+app.use((req, res, next) => {
+  const prefix = '/api/file-tree/projects/';
+  if (req.url.startsWith(prefix)) {
+    req.url = '/api/projects/' + req.url.slice(prefix.length);
+  }
+  next();
+});
+
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
 
