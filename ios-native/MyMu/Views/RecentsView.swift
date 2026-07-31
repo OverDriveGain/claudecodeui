@@ -40,7 +40,7 @@ struct RecentsView: View {
         } else {
             List(filtered) { item in
                 NavigationLink(value: Route.chat(ChatTarget(
-                    sessionId: item.session.id, projectId: item.project.projectId,
+                    sessionId: item.session.id, projectId: item.project.projectId, isRemote: false,
                     title: item.session.displayTitle,
                     projectPath: item.project.fullPath ?? item.project.path))) {
                     row(item)

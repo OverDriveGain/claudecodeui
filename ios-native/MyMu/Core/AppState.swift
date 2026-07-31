@@ -31,6 +31,10 @@ final class AppState: ObservableObject {
     /// Local, network-free preview (canned DemoData) — used by the "Try the demo"
     /// button on the login screen so the app is reviewable/explorable with no server.
     @Published var isDemo = false
+    /// Agent → host assignments from the server (agent title → host origin).
+    /// Admin-set pinning: which CCUI host an agent runs on. Drives per-chat
+    /// routing so file sends land on the agent's machine.
+    @Published var agentHostAssignments: [String: String] = [:]
 
     private let tokenAccount = "auth-token" // legacy + always-the-ACTIVE-account token
     private let userKey = "mymu.user"
@@ -65,6 +69,47 @@ final class AppState: ObservableObject {
     var isAuthenticated: Bool { token != nil }
     var api: APIClient { APIClient(token: token) }
     var activeAccount: SavedAccount? { accounts.first { $0.id == activeAccountId } }
+
+    // MARK: Agent → host routing
+
+    /// Refresh the admin-set agent→host map from the active server. Cheap; call
+    /// when the agents list loads and after account switches.
+    func refreshAgentHosts() async {
+        guard token != nil, !isDemo else { return }
+        if let map = try? await api.agentHosts() {
+            agentHostAssignments = map
+        }
+    }
+
+    /// Where a pinned agent's conversation should connect: the assigned host +
+    /// the saved account's token for it. nil = the active host (unpinned, pinned
+    /// to the active host itself, or no saved login for the assigned host —
+    /// callers pair this with `pinnedHostNeedingLogin` for the file warning).
+    /// The key is the agent's title — same stable identity the web view uses
+    /// (single claude.ai account per host, so no account-label prefix).
+    func routeForAgent(title: String) -> (origin: String, token: String)? {
+        guard let assigned = agentHostAssignments[title] else { return nil }
+        let origin = Config.normalize(assigned)
+        guard origin != Config.normalize(Config.serverOrigin) else { return nil }
+        guard let acct = accounts.first(where: { Config.normalize($0.serverOrigin) == origin }),
+              let tok = Keychain.get(accountTokenKey(acct.id)) else { return nil }
+        return (origin, tok)
+    }
+
+    /// Host label when the agent is pinned to a host the app has NO saved login
+    /// for — arbitrary files can't reach it; the composer warns and points the
+    /// user at "Add account". nil when routing works (or nothing is pinned).
+    func pinnedHostNeedingLogin(title: String) -> String? {
+        guard let assigned = agentHostAssignments[title] else { return nil }
+        let origin = Config.normalize(assigned)
+        guard origin != Config.normalize(Config.serverOrigin) else { return nil }
+        let hasLogin = accounts.contains { acct in
+            Config.normalize(acct.serverOrigin) == origin && Keychain.get(accountTokenKey(acct.id)) != nil
+        }
+        return hasLogin ? nil : origin
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+    }
 
     func enterDemo() { isDemo = true }
 

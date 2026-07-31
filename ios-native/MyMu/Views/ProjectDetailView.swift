@@ -18,7 +18,7 @@ struct ProjectDetailView: View {
     }
 
     private var newChatTarget: ChatTarget {
-        ChatTarget(sessionId: "", projectId: project.projectId,
+        ChatTarget(sessionId: "", projectId: project.projectId, isRemote: false,
                    title: project.displayName, projectPath: project.fullPath ?? project.path)
     }
 
@@ -39,7 +39,7 @@ struct ProjectDetailView: View {
             } else {
                 List(filtered) { s in
                     NavigationLink(value: Route.chat(ChatTarget(
-                        sessionId: s.id, projectId: project.projectId,
+                        sessionId: s.id, projectId: project.projectId, isRemote: false,
                         title: s.displayTitle, projectPath: project.fullPath ?? project.path))) {
                         row(s)
                     }

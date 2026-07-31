@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Projects. Each opens to its conversations. (NavigationStack lives in
-/// MainTabView.)
+/// Projects = folders. Each opens to its conversations. (NavigationStack lives
+/// in MainTabView.)
 struct ProjectsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: ProjectsStore
@@ -9,8 +9,8 @@ struct ProjectsView: View {
 
     private var filtered: [Project] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return store.projects }
-        return store.projects.filter {
+        guard !q.isEmpty else { return store.folders }
+        return store.folders.filter {
             $0.displayName.localizedCaseInsensitiveContains(q)
                 || ($0.fullPath ?? $0.path ?? "").localizedCaseInsensitiveContains(q)
         }
@@ -33,7 +33,7 @@ struct ProjectsView: View {
     private var content: some View {
         if store.loading && store.projects.isEmpty {
             MyMuLoader().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if store.projects.isEmpty {
+        } else if store.folders.isEmpty {
             EmptyStateView(text: store.error ?? "No projects yet.") { Task { await store.load(appState.api) } }
         } else if filtered.isEmpty {
             EmptyStateView(text: "No projects match “\(query)”.")

@@ -53,22 +53,19 @@ final class UXSmokeUITests: XCTestCase {
 
         app.buttons["Try the demo"].tap()
 
-        // All three tabs exist and switch without breaking.
-        for name in ["Projects", "Chats", "Archive"] {
+        // All four tabs exist and switch without breaking.
+        for name in ["Agents", "Projects", "Chats", "Archive"] {
             let t = tab(app, name)
             XCTAssertTrue(t.waitForExistence(timeout: 10), "tab '\(name)' missing")
             t.tap()
             shot(app, "11-tab-\(name)")
         }
 
-        // Open a conversation: Projects → a project → its first session.
-        tab(app, "Projects").tap()
-        let project = app.staticTexts["claudecodeui"].firstMatch
-        XCTAssertTrue(project.waitForExistence(timeout: 10), "demo project row missing")
-        project.tap()
-        let session = app.staticTexts["Native iOS app — chat UI"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 10), "demo session row missing")
-        session.tap()
+        // Open an agent conversation from the Agents tab.
+        tab(app, "Agents").tap()
+        let agent = app.staticTexts["special-agent"].firstMatch
+        XCTAssertTrue(agent.waitForExistence(timeout: 10), "demo agent row missing")
+        agent.tap()
 
         // Composer must be present and the "+" responsive on this device.
         XCTAssertTrue(app.buttons["composer-attach"].waitForExistence(timeout: 10), "composer '+' missing in demo chat")
@@ -76,8 +73,7 @@ final class UXSmokeUITests: XCTestCase {
         app.buttons["composer-attach"].tap()
         XCTAssertTrue(app.buttons["Attach file"].waitForExistence(timeout: 6), "'+' did not present attach options")
         shot(app, "13-attach-options")
-        // Dismiss the dialog (best-effort cleanup — the assertions above are the test).
-        if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+        app.buttons["Cancel"].tap()
     }
 
     // MARK: - Path 2: real login → live transcript → streamed reply

@@ -3,22 +3,31 @@ import Foundation
 /// Sample transcript used by the DEBUG demo screen (MYMU_DEMO=1) so the chat UI
 /// can be screenshotted/iterated without a live login.
 enum DemoData {
-    private static func session(_ id: String, title: String, msgs: Int) -> Session {
+    private static func agent(_ name: String, id: String, connected: Bool, running: Bool) -> Project {
+        Project(projectId: "remote:\(id)", displayName: name, fullPath: nil, path: nil, isStarred: nil, sessions: nil,
+                isRemoteAgent: true, remoteSessionId: id, remoteConnected: connected, remoteRunning: running)
+    }
+
+    private static func session(_ id: String, title: String, msgs: Int, ageMin: Int) -> Session {
         Session(id: id, title: title, summary: nil, name: nil, lastActivity: nil,
                 updated_at: nil, created_at: nil, createdAt: nil, messageCount: msgs)
     }
 
-    private static func project(_ name: String, path: String, sessions: [Session]) -> Project {
-        Project(projectId: name, displayName: name, fullPath: path, path: path, isStarred: nil, sessions: sessions)
+    private static func folder(_ name: String, path: String, sessions: [Session]) -> Project {
+        Project(projectId: name, displayName: name, fullPath: path, path: path, isStarred: nil, sessions: sessions,
+                isRemoteAgent: false, remoteSessionId: nil, remoteConnected: nil, remoteRunning: nil)
     }
 
     static let projects: [Project] = [
-        project("claudecodeui", path: "/home/you/Projects/claudecodeui", sessions: [
-            session("s1", title: "Native iOS app — chat UI", msgs: 214),
-            session("s2", title: "Fix file preview streaming", msgs: 48),
+        agent("special-agent", id: "cse_a1", connected: true, running: true),
+        agent("casabot-monitor", id: "cse_b2", connected: true, running: false),
+        agent("quotomate-dev", id: "cse_c3", connected: false, running: false),
+        folder("claudecodeui", path: "/home/manar/Projects/claudecodeui", sessions: [
+            session("s1", title: "Native iOS app — MyMu chat", msgs: 214, ageMin: 3),
+            session("s2", title: "Fix delivered-file video streaming", msgs: 48, ageMin: 90),
         ]),
-        project("api-service", path: "/home/you/Projects/api-service", sessions: [
-            session("s3", title: "Add auth refresh handling", msgs: 132),
+        folder("mnemos", path: "/home/manar/Projects/mnemos", sessions: [
+            session("s3", title: "pgvector ingest pipeline", msgs: 132, ageMin: 1440),
         ]),
     ]
 
