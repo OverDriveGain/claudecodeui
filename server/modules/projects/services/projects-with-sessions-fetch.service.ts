@@ -317,18 +317,33 @@ export async function getProjectsWithSessions(
   try {
     const agents = await listRemoteAgents();
     for (const agent of agents) {
+      // Surface the agent as an ORDINARY stock project carrying one real session —
+      // the live relay session — so a vanilla CCUI client lists it and opens its
+      // conversation with ZERO custom fields. The relay session id (cse_…) IS the
+      // stock session id: the history route (/api/providers/sessions/:id/messages)
+      // and chat.send/chat.subscribe recognise the cse_ prefix and proxy to the
+      // relay, injecting remoteControl server-side — the client stays fleet-agnostic.
+      // The isRemoteAgent/remote* fields below remain for the (still fleet-aware)
+      // web client; a stock client needs none of them and ignores them.
+      const agentSession: SessionSummary = {
+        id: agent.id,
+        summary: agent.title,
+        messageCount: 0,
+        lastActivity: agent.lastEventAt ?? new Date().toISOString(),
+        createdAt: agent.createdAt ?? null,
+      };
       projects.push({
         projectId: remoteProjectId(agent.id),
         path: `remote://${agent.id}`,
         displayName: agent.title,
         fullPath: `remote://${agent.id}`,
         isStarred: false,
-        sessions: [],
+        sessions: [agentSession],
         cursorSessions: [],
         codexSessions: [],
         geminiSessions: [],
         opencodeSessions: [],
-        sessionMeta: { hasMore: false, total: 0 },
+        sessionMeta: { hasMore: false, total: 1 },
         isRemoteAgent: true,
         remoteSessionId: agent.id,
         remoteConnected: agent.connected,
