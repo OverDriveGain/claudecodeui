@@ -44,7 +44,7 @@ export default function VersionInfoSection({
 
   return (
     <div className="border-t border-border/50 pt-6">
-      {/* About CloudCLI */}
+      {/* About MyMu */}
       <div className="space-y-4">
         {/* Logo + name + version */}
         <div className="flex items-center gap-3">
@@ -57,7 +57,7 @@ export default function VersionInfoSection({
                 className="text-sm font-semibold text-foreground"
                 style={{ fontFamily: CLOUDCLI_WORDMARK_FONT_FAMILY }}
               >
-                CloudCLI
+                MyMu
               </span>
               <a
                 href={releasesUrl}
@@ -140,7 +140,7 @@ export default function VersionInfoSection({
         {/* Hosted CTA (OSS mode only) */}
         {!IS_PLATFORM && (
           <div className="rounded-xl border border-primary/10 bg-primary/5 p-4">
-            <h4 className="text-sm font-medium text-foreground">Try CloudCLI Hosted</h4>
+            <h4 className="text-sm font-medium text-foreground">Try MyMu Hosted</h4>
             <p className="mt-1 text-xs text-muted-foreground">
               Team collaboration, shared MCP configs, settings sync across environments, and managed infrastructure.
             </p>

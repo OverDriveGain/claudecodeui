@@ -117,6 +117,16 @@ demo mode for App Store review. Ships from this repo; xcodegen project.
   agent-to-agent/`, `android/` + `ios/` Capacitor shells, `src/mobile/`,
   loaders/tooling under `tools/`.
 
+### S7-branding (systematic — survives upstream pulls)
+- `public/` + `index.html` are wholesale MyMu-owned (icons, manifest, shapes,
+  loaders, title/fonts) — upstream versions are fully replaced, no merging.
+- All user-visible "CloudCLI" strings (locale values + code literals) are
+  renamed by `scripts/mymu-rebrand.mjs` — **run it once after every upstream
+  pull**; it is idempotent and never touches identifiers, key names, npm
+  scope, or runtime paths (`~/.cloudcli` store stays upstream-named).
+- Dark theme: MyMu pitch-black scale in `src/index.css` `.dark` block (mirrors
+  iOS Theme.swift); light theme stays upstream.
+
 ## Port checklist (vanilla-port branch)
 
 - [x] S1 relay layer (2026-07-31: DI-injected gateway branches; 267 agents live-verified)

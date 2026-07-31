@@ -21,6 +21,33 @@
   }
 }
 
+/* MyMu brand loader — a soft opacity wave across the letters (subtle, no scale swell).
+   Each letter fades from nearly-hidden up to full brand brightness, in sequence. */
+@keyframes mymu-letter-pulse {
+  0%, 60%, 100% { opacity: 0.1; }
+  25% { opacity: 1; }
+}
+.mymu-loader {
+  display: inline-flex;
+  align-items: baseline;
+  /* Mixed-case wordmark "MyMu" — NOT Koulen (which is uppercase-only and would
+     render it as "MYMU"). Use the app's sans so the lowercase y/u show. */
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: hsl(var(--primary));
+}
+.mymu-loader span {
+  display: inline-block;
+  animation: mymu-letter-pulse 1.6s ease-in-out infinite;
+}
+.mymu-loader span:nth-child(1) { animation-delay: 0s; }
+.mymu-loader span:nth-child(2) { animation-delay: 0.16s; }
+.mymu-loader span:nth-child(3) { animation-delay: 0.32s; }
+.mymu-loader span:nth-child(4) { animation-delay: 0.48s; }
+
 @layer base {
   :root {
     --background: 44 22% 96%;
@@ -85,37 +112,43 @@
   }
 
   .dark {
-    --background: 0 0% 8%;
-    --foreground: 40 8% 93%;
-    --card: 0 0% 12%;
-    --card-foreground: 40 8% 93%;
-    --popover: 0 0% 12%;
-    --popover-foreground: 40 8% 93%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 0 0% 8%;
-    --secondary: 0 0% 17%;
-    --secondary-foreground: 40 8% 93%;
-    --muted: 0 0% 17%;
-    --muted-foreground: 0 0% 60%;
-    --accent: 0 0% 17%;
-    --accent-foreground: 40 8% 93%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 40 8% 93%;
-    --border: 0 0% 17%;
-    --input: 0 0% 23%;
-    --ring: 217.2 91.2% 59.8%;
+    /* MyMu pitch-black high-contrast scale — mirrors the native iOS Theme.swift.
+       Conversation bg is TRUE black (#000000, OLED-crisp); surfaces above it are
+       barely lifted near-black neutrals so edges read sharp, not pale. Pure
+       grayscale (0% saturation) except --primary/--ring (brand purple) and
+       --destructive (error red), which carry the only hue. */
+    --background: 0 0% 0%;           /* #000000 conversation bg — pitch black */
+    --foreground: 0 0% 95%;          /* #F2F2F7 crisp near-white text */
+    --card: 0 0% 7%;                 /* #111113 composer / cards (barely lifted) */
+    --sidebar: 0 0% 4%;              /* #0A0A0B left panel */
+    --card-foreground: 0 0% 95%;
+    --popover: 0 0% 7%;              /* #111113 */
+    --popover-foreground: 0 0% 95%;
+    --primary: 264 56% 70%;          /* #AA88DD — the M (brand accent) — UNCHANGED */
+    --primary-foreground: 0 0% 0%;   /* black text on the light-purple accent */
+    --secondary: 0 0% 14%;           /* #232328 elevated (hover / selected) */
+    --secondary-foreground: 0 0% 95%;
+    --muted: 0 0% 7%;                /* #111113 */
+    --muted-foreground: 0 0% 66%;    /* #A3A3AC muted text — readable on black */
+    --accent: 0 0% 14%;              /* #232328 hover / selected */
+    --accent-foreground: 0 0% 95%;
+    --destructive: 358 76% 59%;      /* #E5484D sharper error red — kept */
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 14%;              /* #232328 */
+    --input: 0 0% 17%;               /* #2B2B2E input border */
+    --ring: 264 56% 70%;             /* mirrors primary — UNCHANGED */
 
-    /* Nav design tokens — dark overrides */
-    --nav-glass-bg: 0 0% 12% / 0.55;
+    /* Nav design tokens — dark overrides (pitch-black; purple glow kept) */
+    --nav-glass-bg: 0 0% 7% / 0.55;
     --nav-glass-blur: 24px;
     --nav-glass-saturate: 1.6;
-    --nav-tab-glow: 217.2 91.2% 59.8% / 0.25;
-    --nav-tab-ring: 217.2 91.2% 59.8% / 0.15;
-    --nav-float-shadow: 0 0% 0% / 0.35;
-    --nav-float-ring: 0 0% 17% / 0.3;
-    --nav-divider-color: 0 0% 17% / 0.5;
-    --nav-input-bg: 0 0% 17% / 0.5;
-    --nav-input-focus-ring: 217.2 91.2% 59.8% / 0.25;
+    --nav-tab-glow: 264 56% 70% / 0.25;
+    --nav-tab-ring: 264 56% 70% / 0.15;
+    --nav-float-shadow: 0 0% 0% / 0.5;
+    --nav-float-ring: 0 0% 14% / 0.3;
+    --nav-divider-color: 0 0% 14% / 0.5;
+    --nav-input-bg: 0 0% 14% / 0.5;
+    --nav-input-focus-ring: 264 56% 70% / 0.25;
   }
 }
 

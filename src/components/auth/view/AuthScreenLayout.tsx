@@ -33,7 +33,7 @@ export default function AuthScreenLayout({
             <div className="mb-5 flex justify-center">
               {logo ?? (
                 <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary/80 shadow-lg shadow-primary/25 ring-1 ring-inset ring-white/20">
-                  <img src="/logo.svg" alt="CloudCLI" className="h-9 w-9" />
+                  <img src="/logo.svg" alt="MyMu" className="h-9 w-9" />
                 </div>
               )}
             </div>
@@ -58,7 +58,7 @@ export default function AuthScreenLayout({
                 rel="noopener noreferrer"
                 className="text-xs text-muted-foreground/50 transition-colors hover:text-muted-foreground"
               >
-                CloudCLI is open source
+                MyMu is open source
               </a>
             </div>
           )}
