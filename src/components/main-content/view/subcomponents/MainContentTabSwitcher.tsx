@@ -12,6 +12,9 @@ type MainContentTabSwitcherProps = {
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   shouldShowTasksTab: boolean;
   shouldShowBrowserTab: boolean;
+  // MYMU: kept for API compatibility with agent-aware callers.
+  isRemoteAgent?: boolean;
+  agentViewMode?: boolean;
 };
 
 type BuiltInTab = {
@@ -57,12 +60,18 @@ export default function MainContentTabSwitcher({
   setActiveTab,
   shouldShowTasksTab,
   shouldShowBrowserTab,
+  // MYMU
+  isRemoteAgent = false,
+  agentViewMode = false,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
 
+  // MYMU: this deployment hides the Shell and Source Control tabs entirely.
+  void isRemoteAgent; void agentViewMode;
+  const baseTabs = BASE_TABS.filter((tab) => tab.id !== 'shell' && tab.id !== 'git');
   const builtInTabs: BuiltInTab[] = [
-    ...BASE_TABS,
+    ...baseTabs,
     ...(shouldShowBrowserTab ? [BROWSER_TAB] : []),
     ...(shouldShowTasksTab ? [TASKS_TAB] : []),
   ];
@@ -77,7 +86,10 @@ export default function MainContentTabSwitcher({
       iconFile: p.icon,
     }));
 
-  const tabs: TabDefinition[] = [...builtInTabs, ...pluginTabs];
+  // Agent view = the conversation and its files, nothing else.
+  const tabs: TabDefinition[] = agentViewMode
+    ? builtInTabs.filter((tab) => tab.id === 'chat' || tab.id === 'files')
+    : [...builtInTabs, ...pluginTabs];
 
   return (
     <PillBar>

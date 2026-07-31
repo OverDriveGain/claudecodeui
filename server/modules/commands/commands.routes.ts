@@ -446,7 +446,9 @@ Custom commands can be created in:
 router.post("/list", async (req, res) => {
   try {
     const { projectPath } = req.body;
-    const allCommands = [...builtInCommands];
+    // MYMU: built-in slash commands are hidden from the menu (the agents' own
+    // commands are what matter here); MYMU_SHOW_BUILTIN_COMMANDS=1 restores.
+    const allCommands = process.env.MYMU_SHOW_BUILTIN_COMMANDS === '1' ? [...builtInCommands] : [];
 
     // Scan project-level commands (.claude/commands/)
     if (projectPath) {

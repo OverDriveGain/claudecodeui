@@ -423,13 +423,12 @@ export default function ChatComposer({
           </PromptInputTools>
 
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <div
-              className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {submitHint}
-            </div>
+            {/* MYMU: static keyboard hint hidden; queue-state hints remain */}
+            {canQueueDraft && (
+              <div className="hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block">
+                {submitHint}
+              </div>
+            )}
 
             <ComposerModelMenu
               effort={effort}
