@@ -391,18 +391,29 @@ export function isRemoteControlConfigured() {
 // left by an interrupted turn, not real work. Safety net for the sidebar dot.
 const RUNNING_MAX_IDLE_MS = 90 * 1000;
 
+// An "open" turn whose upstream has been silent this long is a dead worker
+// (crashed/killed mid-turn — no result ever comes), not a silent tool call.
+// Without this bound a stale turnOpen entry reported running forever and pinned
+// clients' loaders overnight.
+const TURNOPEN_TRUST_MAX_MS =
+  Math.max(2 * 60_000, parseInt(process.env.RC_TURNOPEN_TRUST_MAX_MS || '', 10) || 30 * 60_000);
+
 function isWorkerRunning(s) {
   if (s.worker_status !== 'running') return false;
   if (s.connection_status !== 'connected') return false;
   if (s.status === 'archived') return false;
-  // A subscribed upstream's live turn state beats the idle heuristic: a long
-  // silent tool call (a 2-minute build emits nothing) tripped the 90s staleness
-  // cutoff and flipped the sidebar dot off mid-turn, then on again at the next
-  // event. turnOpen is maintained by the live socket + stall watchdog, so when we
-  // hold a subscription we KNOW the turn is open — the cutoff is only for
-  // sessions nobody here is subscribed to.
+  // A subscribed upstream's live turn state beats the idle heuristic — in BOTH
+  // directions. turnOpen=true survives a long silent tool call (a 2-minute build
+  // emits nothing) that trips the 90s cutoff; turnOpen=false means we SAW the
+  // turn end (result/command ack), while the relay's worker_status flag stays a
+  // stale 'running' long after (verified: still 'running' minutes after a
+  // /clear) — trusting the flag then re-armed pollers' loaders till next turn.
   const entry = activeRemoteSessions.get(s.id);
-  if (entry && entry.turnOpen) return true;
+  if (entry) {
+    if (!entry.turnOpen) return false;
+    if (Date.now() - (entry.lastUpstreamAt || 0) < TURNOPEN_TRUST_MAX_MS) return true;
+    // fall through: open-turn entry gone silent too long — dead worker
+  }
   const last = Date.parse(s.last_event_at || s.created_at || '');
   return Number.isFinite(last) && Date.now() - last < RUNNING_MAX_IDLE_MS;
 }
@@ -583,11 +594,43 @@ function eventsCacheFile(sessionId) {
   return path.join(EVENTS_CACHE_DIR, `${sessionId}.json`);
 }
 
+function eventKey(e) {
+  return e?.event_id || e?.uuid || null;
+}
+
+// Concurrent top-ups used to double-append the same relay suffix (two callers
+// read the same lastId before either advanced it), and a lagging disk cursor
+// re-fetches already-cached events on warm start. Both leaked duplicate rows
+// all the way to the clients (a sent message rendering twice). Events are
+// deduped by id here and on every append, and top-ups are serialized per entry.
+function dedupeEventList(events) {
+  const seen = new Set();
+  const out = [];
+  for (const e of events) {
+    const k = eventKey(e);
+    if (k) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+    }
+    out.push(e);
+  }
+  return out;
+}
+
+function eventIdSet(events) {
+  const ids = new Set();
+  for (const e of events) {
+    const k = eventKey(e);
+    if (k) ids.add(k);
+  }
+  return ids;
+}
+
 async function loadDiskEvents(sessionId) {
   try {
     const j = JSON.parse(await readFile(eventsCacheFile(sessionId), 'utf8'));
     if (j && Array.isArray(j.events) && j.events.length) {
-      return { events: j.events, lastId: typeof j.lastId === 'string' ? j.lastId : null };
+      return { events: dedupeEventList(j.events), lastId: typeof j.lastId === 'string' ? j.lastId : null };
     }
   } catch { /* missing/corrupt → caller pages from the relay */ }
   return null;
@@ -641,45 +684,65 @@ async function saveDiskEvents(sessionId, events, lastId) {
  * the last cursor — append-only transcripts make all of this safe. Returns the full
  * oldest-first raw event array; the caller windows/normalizes it.
  */
+// Serialized, id-deduped top-up: one relay fetch in flight per entry, and only
+// events whose id is unseen get appended. Concurrent callers await the same
+// promise instead of racing the cursor.
+function topUpEntry(sessionId, entry, { saveNow = false } = {}) {
+  if (entry.topUpPromise) return entry.topUpPromise;
+  entry.topUpPromise = (async () => {
+    try {
+      const { events: fresh, lastId } = await getSessionEvents(sessionId, { after: entry.lastId });
+      const newOnes = fresh.filter((e) => {
+        const k = eventKey(e);
+        return !k || !entry.ids.has(k);
+      });
+      if (newOnes.length) {
+        for (const e of newOnes) {
+          const k = eventKey(e);
+          if (k) entry.ids.add(k);
+        }
+        entry.events = entry.events.concat(newOnes);
+        if (lastId) entry.lastId = lastId;
+        // Throttle disk writes: an actively-watched big session tops up often, and
+        // the file is multi-MB. A lagging on-disk cursor just means a few
+        // re-fetched events next cold start — deduped on load, harmless.
+        if (saveNow || Date.now() - (entry.lastDiskSaveAt || 0) > EVENTS_DISK_SAVE_THROTTLE_MS) {
+          entry.lastDiskSaveAt = Date.now();
+          await saveDiskEvents(sessionId, entry.events, entry.lastId);
+        }
+      } else if (lastId) {
+        entry.lastId = lastId;
+      }
+      entry.fetchedAt = Date.now();
+    } catch { /* keep what we have; the next call retries */ }
+    finally { entry.topUpPromise = null; }
+  })();
+  return entry.topUpPromise;
+}
+
 export async function getSessionEventsCached(sessionId, { topUp = true } = {}) {
   let entry = sessionEventsCache.get(sessionId);
   if (!entry) {
     const disk = await loadDiskEvents(sessionId);
     if (disk) {
       // Warm-start from disk, then sync only the suffix the relay added since.
-      entry = { events: disk.events, lastId: disk.lastId, fetchedAt: Date.now(), lastDiskSaveAt: Date.now() };
-      let appended = false;
-      if (topUp) {
-        try {
-          const { events: fresh, lastId } = await getSessionEvents(sessionId, { after: entry.lastId });
-          if (fresh.length) { entry.events = entry.events.concat(fresh); if (lastId) entry.lastId = lastId; appended = true; }
-        } catch { /* keep the disk copy; the GUI dedups by uuid and the next call retries */ }
-      }
+      entry = { events: disk.events, ids: eventIdSet(disk.events), lastId: disk.lastId, fetchedAt: Date.now(), lastDiskSaveAt: Date.now(), topUpPromise: null };
+      // Register BEFORE the async top-up so concurrent callers share this entry
+      // (and its in-flight top-up) instead of racing a second cold load.
       sessionEventsCache.set(sessionId, entry);
       evictSessionEventsCache();
-      if (appended) await saveDiskEvents(sessionId, entry.events, entry.lastId);
+      if (topUp) await topUpEntry(sessionId, entry, { saveNow: true });
       return entry.events;
     }
     // No disk copy → original behaviour: page the whole history, then persist it.
     const { events, lastId } = await getSessionEvents(sessionId, {});
-    entry = { events, lastId, fetchedAt: Date.now(), lastDiskSaveAt: Date.now() };
+    entry = { events: dedupeEventList(events), lastId, fetchedAt: Date.now(), lastDiskSaveAt: Date.now(), topUpPromise: null };
+    entry.ids = eventIdSet(entry.events);
     sessionEventsCache.set(sessionId, entry);
     evictSessionEventsCache();
     await saveDiskEvents(sessionId, entry.events, entry.lastId);
   } else if (topUp) {
-    const { events: fresh, lastId } = await getSessionEvents(sessionId, { after: entry.lastId });
-    if (fresh.length) {
-      entry.events = entry.events.concat(fresh);
-      if (lastId) entry.lastId = lastId;
-      // Throttle disk writes: an actively-watched big session tops up often, and the
-      // file is multi-MB. A lagging on-disk cursor just means a few re-fetched
-      // (uuid-deduped) events next cold start — harmless.
-      if (Date.now() - (entry.lastDiskSaveAt || 0) > EVENTS_DISK_SAVE_THROTTLE_MS) {
-        entry.lastDiskSaveAt = Date.now();
-        await saveDiskEvents(sessionId, entry.events, entry.lastId);
-      }
-    }
-    entry.fetchedAt = Date.now();
+    await topUpEntry(sessionId, entry);
   }
   return entry.events;
 }
@@ -1211,6 +1274,21 @@ async function openRemoteUpstream(sessionId, entry) {
       // frames — a rebound client then sat on a stuck "working" loader forever.
       if (e) e.replayBuffer = [];
       emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
+    }
+
+    // A driven local command (/clear, /model, …) never produces a `result`: the
+    // CLI acks with record events only. The sender's client armed its loader on
+    // send and only `complete` clears it — without this, the loader spins until
+    // the NEXT turn ends. The ack arrives as a small burst of records, so
+    // debounce and only fire if no real turn opened meanwhile.
+    if (isCommandRecordEvent(m) && !entry.turnOpen) {
+      if (entry.commandAckTimer) clearTimeout(entry.commandAckTimer);
+      entry.commandAckTimer = setTimeout(() => {
+        entry.commandAckTimer = null;
+        const e = activeRemoteSessions.get(sessionId);
+        if (!e || e !== entry || e.turnOpen) return;
+        emit(createNormalizedMessage({ kind: 'complete', exitCode: 0, sessionId, provider: 'claude' }));
+      }, 1200);
     }
   });
 
