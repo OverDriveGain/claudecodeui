@@ -1,4 +1,4 @@
-import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose, Bot } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button, Input, Tooltip } from '../../../../shared/view/ui';
@@ -165,6 +165,20 @@ export default function SidebarHeader({
               >
                 <MessageSquare className="h-3 w-3" />
                 {t('search.modeConversations')}
+              </button>
+              {/* MYMU: live-agents tab (FORK.md F1) */}
+              <button
+                onClick={() => onSearchModeChange('agents')}
+                aria-pressed={searchMode === 'agents'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
+                  searchMode === 'agents'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Bot className="h-3 w-3" />
+                {t('search.modeAgents', 'Agents')}
               </button>
               <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
                 <button

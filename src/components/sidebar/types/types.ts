@@ -2,7 +2,8 @@ import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../.
 import type { SessionActivityMap } from '../../../hooks/useSessionProtection';
 
 export type ProjectSortOrder = 'name' | 'date';
-export type SidebarSearchMode = 'projects' | 'conversations' | 'running' | 'archived';
+// MYMU: 'agents' mode added — the live-agents tab (FORK.md F1)
+export type SidebarSearchMode = 'projects' | 'conversations' | 'agents' | 'running' | 'archived';
 export type ArchivedProjectListItem = Project & { isArchived: true };
 
 export type SessionWithProvider = ProjectSession & {

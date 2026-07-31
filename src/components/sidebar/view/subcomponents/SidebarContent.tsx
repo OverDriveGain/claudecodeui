@@ -321,6 +321,9 @@ export default function SidebarContent({
               ))}
             </div>
           ) : null
+        ) : searchMode === 'agents' ? (
+          /* MYMU: the live-agents tab — its own full list (FORK.md F1) */
+          <div className="py-1">{agentsSection}</div>
         ) : searchMode === 'running' ? (
           projectListProps.filteredProjects.length === 0 ? (
             <div className="px-4 py-12 text-center md:py-8">
@@ -608,10 +611,7 @@ export default function SidebarContent({
             </div>
           )
         ) : (
-          <>
-            {agentsSection /* MYMU: live-agents section above the project list */}
-            <SidebarProjectList {...projectListProps} />
-          </>
+          <SidebarProjectList {...projectListProps} />
         )}
       </ScrollArea>
 
