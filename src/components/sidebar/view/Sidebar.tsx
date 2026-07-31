@@ -14,6 +14,9 @@ import type { MCPServerStatus, SidebarProps } from '../types/types';
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
+// MYMU: live-agents section (FORK.md F1)
+import AgentsList from './subcomponents/AgentsList';
+import { useHiddenAgents } from '../../../hooks/useHiddenAgents';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
 
 type TaskMasterSidebarContext = {
@@ -53,6 +56,11 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const paletteOps = usePaletteOps();
+
+  // MYMU: agents are their own sidebar section — never mixed into projects.
+  const { isHidden, hideAgent } = useHiddenAgents();
+  const agentProjects = projects.filter((p) => p.isRemoteAgent && !isHidden(p));
+  const regularProjects = projects.filter((p) => !p.isRemoteAgent);
 
   const {
     isSidebarCollapsed,
@@ -113,7 +121,7 @@ function Sidebar({
     setSessionDeleteConfirmation,
     setShowVersionModal,
   } = useSidebarController({
-    projects,
+    projects: regularProjects,
     selectedProject,
     selectedSession,
     activeSessions,
@@ -145,7 +153,7 @@ function Sidebar({
   };
 
   const projectListProps: SidebarProjectListProps = {
-    projects,
+    projects: regularProjects,
     filteredProjects,
     selectedProject,
     selectedSession,
@@ -199,7 +207,7 @@ function Sidebar({
   return (
     <>
         <SidebarModals
-          projects={projects}
+          projects={regularProjects}
         showSettings={showSettings}
         settingsInitialTab={settingsInitialTab}
         onCloseSettings={onCloseSettings}
@@ -233,10 +241,21 @@ function Sidebar({
       ) : (
         <>
         <SidebarContent
+            agentsSection={
+              /* MYMU */
+              <AgentsList
+                agents={agentProjects}
+                selectedSession={selectedSession}
+                processingIds={new Set(activeSessions.keys())}
+                onSessionSelect={projectListProps.onSessionSelect}
+                onHideAgent={(agent) => { void hideAgent(agent); }}
+                t={t}
+              />
+            }
             isPWA={isPWA}
             isMobile={isMobile}
             isLoading={isLoading}
-            projects={projects}
+            projects={regularProjects}
             runningSessionsCount={runningSessionsCount}
             archivedProjects={archivedProjects}
             archivedSessions={archivedSessions}

@@ -70,6 +70,21 @@ export interface Project {
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  // Set only for virtual remote:<id> projects — a `claude --remote-control` agent.
+  // remoteSessionId is the session the composer drives; remoteConnected is the
+  // honest online/offline state.
+  isRemoteAgent?: boolean;
+  remoteSessionId?: string;
+  remoteConnected?: boolean;
+  // worker_status==='running' on the relay — the agent is mid-turn. Drives the
+  // sidebar running dot, exactly like claude.ai/code.
+  remoteRunning?: boolean;
+  // Owning claude.ai account label — present only when >1 account is configured
+  // (RC_ACCOUNTS). Used to badge which login the agent belongs to.
+  remoteAccount?: string;
+  // Multi-host mode: origin of the CONNECTED PEER host this project came from
+  // (see utils/remoteHosts). Absent/undefined = the primary host (page origin).
+  __hostUrl?: string;
   [key: string]: unknown;
 }
 

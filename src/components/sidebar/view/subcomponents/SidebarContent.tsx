@@ -112,6 +112,8 @@ function formatCompactArchivedAge(dateString: string | null): string {
 }
 
 type SidebarContentProps = {
+  /** MYMU: the live-agents section rendered above the project list (FORK.md F1). */
+  agentsSection?: React.ReactNode;
   isPWA: boolean;
   isMobile: boolean;
   isLoading: boolean;
@@ -152,6 +154,7 @@ type SidebarContentProps = {
 };
 
 export default function SidebarContent({
+  agentsSection, // MYMU
   isPWA,
   isMobile,
   isLoading,
@@ -348,6 +351,7 @@ export default function SidebarContent({
                   {runningSessionsCount}
                 </span>
               </div>
+              <>{agentsSection /* MYMU */}</>
               <SidebarProjectList {...projectListProps} />
             </div>
           )
