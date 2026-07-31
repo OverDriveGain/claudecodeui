@@ -17,6 +17,8 @@ import type {
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
+// MYMU
+import { isLockdownEnabled } from '@/modules/mymu/index.js';
 
 const router = express.Router();
 
@@ -597,8 +599,10 @@ router.delete(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    const force = parseOptionalBooleanQuery(req.query.force, 'force') ?? false;
-    const deletedFromDisk = parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force;
+    // MYMU: lockdown downgrades permanent deletion to archive (FORK.md S6)
+    const locked = isLockdownEnabled();
+    const force = locked ? false : (parseOptionalBooleanQuery(req.query.force, 'force') ?? false);
+    const deletedFromDisk = locked ? false : (parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force);
     const result = await sessionsService.deleteOrArchiveSessionById(sessionId, {
       force,
       deletedFromDisk,

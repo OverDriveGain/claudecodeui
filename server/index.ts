@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Load environment variables before other imports execute.
 import './load-env.js';
+// MYMU: MyMu-owned module (version endpoint, deployment policy)
+import { mymuRoutes } from './modules/mymu/index.js';
 import fs, { promises as fsPromises } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -148,6 +150,9 @@ app.use('/api', validateApiKey);
 
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
+
+// MYMU: MyMu module routes (/api/version — unauthenticated by design, see module)
+app.use('/api', mymuRoutes);
 
 // File Tree API Routes (protected)
 app.use('/api/file-tree', authenticateToken, fileTreeRoutes);

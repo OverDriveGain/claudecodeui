@@ -7,8 +7,20 @@ import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
+// MYMU
+import { isLockdownEnabled } from '@/modules/mymu/index.js';
 
 const router = express.Router();
+
+// MYMU: deployment lockdown — reject structural mutations when locked (FORK.md S6)
+function assertNotLocked(action: string): void {
+  if (isLockdownEnabled()) {
+    throw new AppError(`${action} is disabled on this deployment.`, {
+      code: 'DEPLOYMENT_LOCKED',
+      statusCode: 403,
+    });
+  }
+}
 
 type AuthenticatedUser = {
   id?: number | string;
@@ -104,6 +116,7 @@ router.get(
 router.post(
   '/create-project',
   asyncHandler(async (req, res) => {
+    assertNotLocked('Creating a project'); // MYMU
     const requestBody = req.body as Record<string, unknown>;
     const projectPath = typeof requestBody.path === 'string' ? requestBody.path : '';
     const customName = typeof requestBody.customName === 'string' ? requestBody.customName : null;
@@ -263,6 +276,7 @@ router.post(
 router.delete(
   '/:projectId',
   asyncHandler(async (req, res) => {
+    assertNotLocked('Removing a project'); // MYMU
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     const force = req.query.force === 'true';
     await deleteOrArchiveProject(projectId, force);

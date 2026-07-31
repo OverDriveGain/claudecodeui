@@ -124,7 +124,7 @@ demo mode for App Store review. Ships from this repo; xcodegen project.
 - [ ] S3 telemetry + injected classification into upstream fetchHistory
 - [ ] S4 residue: relay materialization + asset cap override
 - [ ] S5 file flows
-- [ ] S6 lockdown + version
+- [x] S6 lockdown + version (2026-07-31: mymu module, verified on :3099)
 - [ ] S7 web features onto upstream's current UI
 - [ ] S8 verify iOS app against ported server (contract should already hold)
 - [ ] S9 carry-over dirs
