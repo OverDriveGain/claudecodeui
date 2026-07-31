@@ -17,7 +17,7 @@ import {
     initializeSessionsWatcher,
     providerRuntimeService,
 } from '@/modules/providers/index.js';
-import { createWebSocketServer } from '@/modules/websocket/index.js';
+import { createWebSocketServer, setRelayDependencies } from '@/modules/websocket/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -53,6 +53,14 @@ import { browserUseService } from './modules/browser-use/browser-use.service.js'
 import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 import { IS_PLATFORM } from './constants/config.js';
+// MYMU: remote-control proxy (live relay agents)
+import {
+    queryRemoteChannel,
+    subscribeRemoteChannel,
+    isRemoteSession,
+    abortRemoteSession,
+    resolveRemotePermission,
+} from './rc-channel.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -97,6 +105,16 @@ const agentRoutes = createAgentModule({
 });
 
 // Single WebSocket server that handles chat, shell, and plugin proxy paths.
+// MYMU: wire the remote-control proxy into the chat gateway (root file may
+// import the rc-channel adapter directly; modules receive it injected).
+setRelayDependencies({
+    queryRemoteChannel,
+    subscribeRemoteChannel,
+    isRemoteSession,
+    abortRemoteSession,
+    resolveRemotePermission,
+});
+
 const wss = createWebSocketServer(server, {
     verifyClient: {
         isPlatform: IS_PLATFORM,

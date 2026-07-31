@@ -12,6 +12,11 @@ import type {
   NormalizedMessage,
 } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
+// Remote-control proxy — read-only history fetch for connected agent sessions.
+import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
+import { isAgentCaptureAllowed } from '@/services/rc.service.js';
+import { deriveContextUsage, usageContextTokens } from '@/modules/providers/list/claude/claude-sessions.provider.js';
+import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isPathOwnedByLinuxUser } from '@/services/user-context.js';
 
 type CreateAppSessionResult = {
   sessionId: string;
@@ -73,6 +78,46 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
  * archive API self-contained while still matching the project's stored display
  * name when one exists.
  */
+/**
+ * Real start of a still-open turn: the newest user PROMPT event with no `result`
+ * (turn end) after it. Synthetic rows (caveats, image sizing notes), tool_result
+ * carriers, and subagent sidechains are not prompts. Returns null when the last
+ * turn completed — the client only consumes this while the agent is running, so
+ * a stale open turn (interrupted, never produced a result) is harmless.
+ */
+function deriveOpenTurn(events: unknown[]): { turnStartedAt: string; turnStartContextTokens?: number } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i] as Record<string, unknown> | null;
+    if (!e || typeof e !== 'object') continue;
+    if (e.type === 'result') return null;
+    if (e.type !== 'user' || e.isSynthetic === true || e.parent_tool_use_id) continue;
+    const content = (e.message as Record<string, unknown> | undefined)?.content;
+    if (Array.isArray(content) && content.some((p) => (p as Record<string, unknown>)?.type === 'tool_result')) {
+      continue;
+    }
+    // Local-command RECORD rows (`<command-name>`, `<local-command-*>`) are appended
+    // AFTER their turn's result — /clear leaves one as the newest user row, which
+    // read as an open turn forever (stuck working loader / clear-time timer anchor).
+    const text = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? String((content.find((p) => (p as Record<string, unknown>)?.type === 'text') as Record<string, unknown> | undefined)?.text ?? '')
+        : '';
+    if (/^\s*<(?:command-name|local-command-)/.test(text)) continue;
+    const ts = e.created_at || e.timestamp;
+    if (typeof ts !== 'string' || !ts) return null;
+    // Baseline for the live "tokens this turn" counter: the context position of
+    // the last assistant message BEFORE this prompt.
+    for (let k = i - 1; k >= 0; k--) {
+      const prev = events[k] as Record<string, unknown> | null;
+      const tokens = usageContextTokens((prev?.message as Record<string, unknown> | undefined)?.usage);
+      if (tokens !== null) return { turnStartedAt: ts, turnStartContextTokens: tokens };
+    }
+    return { turnStartedAt: ts };
+  }
+  return null;
+}
+
 function resolveProjectDisplayName(
   projectPath: string | null,
   customProjectName: string | null | undefined,
@@ -188,12 +233,81 @@ export const sessionsService = {
     sessionId: string,
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
   ): Promise<FetchHistoryResult> {
+    // Remote-control connected agent session (cse_… / session_…): not a local DB
+    // session. The relay only pages oldest-first (no reverse), so the backend caches
+    // the whole transcript once and then serves it like a local file — honoring
+    // limit/offset so opening an agent loads just the recent tail (fast) instead of
+    // re-pulling the entire relay history on every open. "Load all" (limit === null)
+    // returns everything from the warm cache.
+    if (sessionId.startsWith('cse_') || sessionId.startsWith('session_')) {
+      // Capture policy: don't serve history for an agent this deployment can't surface.
+      if (!(await isAgentCaptureAllowed(sessionId))) {
+        return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
+      }
+
+      const limit = options.limit ?? null;
+      const offset = Math.max(0, options.offset ?? 0);
+
+      const events = await getRemoteSessionEventsCached(sessionId);
+      const normalized: NormalizedMessage[] = [];
+      for (const raw of events) {
+        // Skip subagent-internal events (Task sidechain): the relay stores a
+        // subagent's own prompt/thinking/tools/result inline, each tagged with the
+        // parent Task's tool_use_id. Locally these are folded under the Task tool,
+        // never shown as top-level messages — mirror that so history doesn't render
+        // the subagent's prompt as a user message or its thoughts as unsolicited output.
+        if (raw && typeof raw === 'object' && (raw as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
+          continue;
+        }
+        normalized.push(...this.normalizeMessage('claude', raw, sessionId));
+      }
+
+      // Display total counts conversation messages (drop tool_result rows), while
+      // windowing uses the full normalized length so offsets stay aligned — same
+      // semantics as the local provider's fetchHistory.
+      const totalNormalized = normalized.length;
+      let total = 0;
+      for (const msg of normalized) {
+        if (msg.kind !== 'tool_result') total += 1;
+      }
+
+      const context = deriveContextUsage(events) ?? undefined;
+      const openTurn = deriveOpenTurn(events) ?? undefined;
+      const turnStartedAt = openTurn?.turnStartedAt;
+      const turnStartContextTokens = openTurn?.turnStartContextTokens;
+      if (limit === null) {
+        return {
+          messages: normalized, total, hasMore: false, offset: 0, limit: null,
+          context, turnStartedAt, turnStartContextTokens,
+        };
+      }
+
+      const start = Math.max(0, totalNormalized - offset - limit);
+      const end = Math.max(0, totalNormalized - offset);
+      return {
+        messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit,
+        context, turnStartedAt, turnStartContextTokens,
+      };
+    }
+
     const session = sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
+    }
+
+    // MYMU: Agent-restricted users (agent_allow set) may read history for local
+    // projects that match their agent name OR live under their mapped linux
+    // user's home — the same scope the conversations list shows. Deny others
+    // rather than leak that the session exists.
+    if (
+      currentAgentAllow()?.length &&
+      !isNameAllowedForUser(path.basename(session.project_path ?? '')) &&
+      !isPathOwnedByLinuxUser(session.project_path ?? '', currentLinuxUser())
+    ) {
+      return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
     // App-created sessions that never produced a provider transcript yet

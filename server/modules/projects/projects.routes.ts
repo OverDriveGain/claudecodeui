@@ -9,6 +9,8 @@ import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projec
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
 // MYMU
 import { isLockdownEnabled } from '@/modules/mymu/index.js';
+// MYMU: live relay agents roster (FORK.md S1)
+import { listRemoteAgents, listAccountErrors } from '@/services/rc.service.js';
 
 const router = express.Router();
 
@@ -91,6 +93,31 @@ router.get(
       sessionsOffset,
     });
     res.json(projects);
+  }),
+);
+
+
+// MYMU: Lightweight live status for remote-control agents — { id, running,
+// connected } per connected agent. Cheap (rc.service cache), polled every few
+// seconds by clients to drive the running dot. Never throws.
+router.get(
+  '/agent-status',
+  asyncHandler(async (_req, res) => {
+    let agents: Array<{ id: string; running: boolean; connected: boolean }> = [];
+    try {
+      const list = await listRemoteAgents();
+      agents = list.map((a) => ({ id: a.id, running: a.running, connected: a.connected }));
+    } catch {
+      agents = [];
+    }
+    let accountErrors: Array<{ label: string; status: number; message: string }> = [];
+    try {
+      accountErrors = listAccountErrors();
+    } catch {
+      accountErrors = [];
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ agents, accountErrors });
   }),
 );
 

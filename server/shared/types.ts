@@ -33,6 +33,15 @@ export type AnyRecord = Record<string, any>;
 export type RealtimeClientConnection = {
   readyState: number;
   send(data: string): void;
+  /**
+   * The connected user's per-agent visibility (parsed `agent_allow` patterns), set
+   * at connection time. null/absent = unrestricted. Lets broadcaster services scope
+   * a realtime push (e.g. projects_updated) to each client the same way an HTTP
+   * request is scoped, instead of leaking the full list to every socket.
+   */
+  agentAllow?: string[] | null;
+  /** The linux user this connection's account maps to (path-based project visibility). */
+  linuxUser?: string | null;
 };
 
 /**
@@ -173,6 +182,7 @@ export type MessageKind =
   | 'stream_delta'
   | 'stream_end'
   | 'error'
+  | 'system'
   | 'complete'
   | 'status'
   | 'permission_request'
@@ -241,6 +251,10 @@ export type NormalizedMessage = {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  /** Harness-injected content (skill payloads, synthetic context) carried as a
+   *  user-role row — the person did NOT type it; clients render it as injected
+   *  context, not as a user bubble. */
+  isInjected?: boolean;
   images?: unknown;
   /** Non-image files attached to a user turn after provider history normalization. */
   files?: unknown;
@@ -255,6 +269,9 @@ export type NormalizedMessage = {
   isError?: boolean;
   text?: string;
   tokens?: number;
+  /** Absolute context position (tokens) at this assistant message — clients diff
+   *  it against the turn-start position for a live "tokens this turn" counter. */
+  contextTokens?: number;
   canInterrupt?: boolean;
   requestId?: string;
   input?: unknown;
@@ -351,6 +368,18 @@ export type FetchHistoryResult = {
   offset: number;
   limit: number | null;
   tokenUsage?: unknown;
+  /** Context-window fullness derived from the transcript's last usage-bearing
+   *  assistant message — lets clients show a "context X% full" meter. */
+  context?: { usedTokens: number; windowTokens: number };
+  /** ISO timestamp of the user prompt that opened a still-unfinished turn (no
+   *  `result` event after it), or absent when the last turn completed. Lets a
+   *  client that opens a mid-turn conversation anchor its elapsed-time indicator
+   *  to the REAL turn start instead of restarting from zero. Remote (relay)
+   *  sessions only. */
+  turnStartedAt?: string;
+  /** Context position (tokens) just before the open turn started — baseline for
+   *  the live "tokens this turn" counter. Set only alongside turnStartedAt. */
+  turnStartContextTokens?: number;
 };
 
 // ---------------------------

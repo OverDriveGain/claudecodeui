@@ -6,6 +6,8 @@ import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
+import { remoteProjectId, listRemoteAgents } from '@/services/rc.service.js';
+import { currentAgentAllow, currentLinuxUser, isNameAllowedFor, isPathOwnedByLinuxUser } from '@/services/user-context.js';
 
 type SessionSummary = {
   id: string;
@@ -13,6 +15,7 @@ type SessionSummary = {
   summary: string;
   messageCount: number;
   lastActivity: string;
+  createdAt: string | null;
 };
 
 type SessionRepositoryRow = {
@@ -34,6 +37,16 @@ export type ProjectListItem = {
     hasMore: boolean;
     total: number;
   };
+  // Remote-control agent metadata (only set for virtual remote:<id> projects):
+  // marks the leaf as a live agent, carries the session id to drive, and the honest
+  // online/offline state.
+  isRemoteAgent?: boolean;
+  remoteSessionId?: string;
+  remoteConnected?: boolean;
+  remoteRunning?: boolean;
+  // Owning claude.ai account label — set only when >1 account is configured, so the
+  // sidebar can badge which login an agent belongs to.
+  remoteAccount?: string;
 };
 
 export type ArchivedProjectListItem = ProjectListItem & {
@@ -51,6 +64,10 @@ type GetProjectsWithSessionsOptions = {
   skipSynchronization?: boolean;
   sessionsLimit?: number;
   sessionsOffset?: number;
+  // Suppress the loading_progress broadcast (which carries project paths to ALL
+  // clients). Set when computing the list for a background/per-client broadcast
+  // that no client is waiting on, so it neither spams nor leaks paths.
+  skipProgress?: boolean;
 };
 
 type SessionPaginationOptions = {
@@ -124,6 +141,7 @@ function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
     summary: row.custom_name || '',
     messageCount: 0,
     lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+    createdAt: row.created_at ?? null,
   };
 }
 
@@ -175,7 +193,33 @@ function broadcastProgress(progress: ProgressUpdate) {
 }
 
 /**
- * Reads all projects from DB and returns normalized session summaries.
+ * Filter a project list to what a user with `agentAllow` may see. null/empty =
+ * unrestricted (returns the list unchanged). Otherwise keeps a project when its
+ * agent name matches an allow pattern: the display name for any leaf (a remote
+ * agent's title or a local project's name) plus the path basename for local
+ * projects (covers custom-named / path-decoded names). One rule, used both by the
+ * HTTP fetch (request context) and the watcher's per-client broadcast, so a
+ * realtime push can never show a restricted user more than a refresh would.
+ */
+export function filterProjectsForUser<T extends ProjectListItem>(
+  projects: T[],
+  agentAllow: string[] | null | undefined,
+  linuxUser: string | null | undefined = null,
+): T[] {
+  if (!agentAllow || agentAllow.length === 0) return projects;
+  return projects.filter(
+    (p) =>
+      isNameAllowedFor(p.displayName, agentAllow) ||
+      (!p.isRemoteAgent && isNameAllowedFor(path.basename(p.path), agentAllow)) ||
+      // One-instance-per-host PATH rule: local projects inside the mapped linux
+      // user's home are theirs regardless of naming ("they have projects they
+      // see in their linux user") — no per-user pattern maintenance for locals.
+      (!p.isRemoteAgent && isPathOwnedByLinuxUser(p.fullPath || p.path, linuxUser)),
+  );
+}
+
+/**
+ * Reads all projects from DB and returns provider-bucketed session summaries.
  */
 export async function getProjectsWithSessions(
   options: GetProjectsWithSessionsOptions = {}
@@ -200,12 +244,14 @@ export async function getProjectsWithSessions(
     const projectId = row.project_id;
     const projectPath = row.project_path;
 
-    broadcastProgress({
-      phase: 'loading',
-      current: processedProjects,
-      total: totalProjects,
-      currentProject: projectPath,
-    });
+    if (!options.skipProgress) {
+      broadcastProgress({
+        phase: 'loading',
+        current: processedProjects,
+        total: totalProjects,
+        currentProject: projectPath,
+      });
+    }
 
     const displayName =
       row.custom_project_name && row.custom_project_name.trim().length > 0
@@ -231,13 +277,43 @@ export async function getProjectsWithSessions(
     });
   }
 
-  broadcastProgress({
-    phase: 'complete',
-    current: totalProjects,
-    total: totalProjects,
-  });
+  // Remote-control agents: surface the operator's CONNECTED live agents as virtual
+  // projects (projectId `remote:<sessionId>`). Each leaf drives the agent by
+  // attaching to its existing session. Additive + non-fatal — empty when the proxy
+  // is unconfigured/down or the capture policy hides everything.
+  try {
+    const agents = await listRemoteAgents();
+    for (const agent of agents) {
+      projects.push({
+        projectId: remoteProjectId(agent.id),
+        path: `remote://${agent.id}`,
+        displayName: agent.title,
+        fullPath: `remote://${agent.id}`,
+        isStarred: false,
+        sessions: [],
+        sessionMeta: { hasMore: false, total: 0 },
+        isRemoteAgent: true,
+        remoteSessionId: agent.id,
+        remoteConnected: agent.connected,
+        remoteRunning: agent.running,
+        remoteAccount: agent.account,
+      });
+    }
+  } catch {
+    // proxy unreachable — omit remote projects this round
+  }
 
-  return projects;
+  if (!options.skipProgress) {
+    broadcastProgress({
+      phase: 'complete',
+      current: totalProjects,
+      total: totalProjects,
+    });
+  }
+
+  // A user restricted by agent_allow sees the SAME list as the host, just filtered
+  // to their agent (see filterProjectsForUser).
+  return filterProjectsForUser(projects, currentAgentAllow(), currentLinuxUser());
 }
 
 /**

@@ -162,12 +162,27 @@ export default tseslint.config(
             "server/shared/frontmatter.ts",
             "server/shared/claude-cli-path.ts",
             "server/shared/image-attachments.ts",
+            "server/services/user-context.{js,ts}", // MYMU: per-request user context (agent visibility)
+            "server/services/local-sessions.{js,ts}", // MYMU: live-session registry lookup
+            "server/services/user-fs.{js,ts}", // MYMU: cross-user disk access via sudo
+            "server/services/federation.{js,ts}", // MYMU: cross-host peer file federation
+            "server/services/deployment-policy.{js,ts}", // MYMU: forwarding shim to modules/mymu
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },
         {
           type: "backend-legacy-runtime", // legacy runtime persistence modules used while providers migrate into server/modules
           pattern: ["server/projects.js"], // provider history loading still resolves session data through this legacy runtime file
+          mode: "file",
+        },
+        {
+          type: "backend-remote-control", // the remote-control proxy: drives live `claude --remote-control` agents over Anthropic's relay
+          pattern: [
+            "server/remote-control/*.{js,ts}",
+            "server/services/rc.service.{js,ts}",
+          ], // provider-agnostic engine + service that backend modules may depend on; the
+          // rc-channel adapter (server/rc-channel.js) stays an unclassified root file, like
+          // claude-sdk.js, so it can wire the provider normalizer into the engine.
           mode: "file",
         },
         {

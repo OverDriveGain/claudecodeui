@@ -22,6 +22,26 @@ import type {
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 // MYMU: per-user agent visibility on the chat socket (FORK.md S2)
 import { runWithUserContext, parseAgentAllow, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
+// MYMU: live relay agents (FORK.md S1) — relay sessions (Anthropic `cse_` ids)
+// are driven over the remote-control proxy, injected by the server root (the
+// rc-channel adapter is a root file outside the module graph, like claude-sdk).
+import { WebSocketWriter } from '@/modules/websocket/services/websocket-writer.service.js';
+
+type RelayDependencies = {
+  queryRemoteChannel: (command: string, options: unknown, writer: WebSocketWriter) => Promise<unknown>;
+  subscribeRemoteChannel: (sessionId: string, writer: WebSocketWriter) => Promise<unknown>;
+  isRemoteSession: (sessionId: string) => boolean;
+  abortRemoteSession: (sessionId: string) => boolean;
+  resolveRemotePermission: (requestId: string, decision: unknown) => boolean;
+};
+let relay: RelayDependencies | null = null;
+/** MYMU: called once from the server root to wire the remote-control proxy. */
+export function setRelayDependencies(deps: RelayDependencies): void {
+  relay = deps;
+}
+
+const isRelaySession = (id: string): boolean =>
+  id.startsWith('cse_') || (relay ? relay.isRemoteSession(id) : false);
 
 /**
  * Trust boundary for client-supplied image attachments: chat.send options come
@@ -157,6 +177,19 @@ async function handleChatSend(
     return;
   }
 
+  // MYMU: relay sessions bypass the local run registry — the agent's own
+  // machine owns the run; the proxy streams its frames back to this socket.
+  if (isRelaySession(sessionId)) {
+    const command = typeof data.content === 'string' ? data.content : '';
+    const clientOptions = (data.options ?? {}) as AnyRecord;
+    await relay?.queryRemoteChannel(
+      command,
+      { ...clientOptions, sessionId, resume: true, remoteControl: sessionId },
+      new WebSocketWriter(ws, userId)
+    );
+    return;
+  }
+
   const session = sessionsDb.getSessionById(sessionId);
   if (!session) {
     sendProtocolError(
@@ -260,6 +293,15 @@ async function handleChatAbort(
     return;
   }
 
+  // MYMU: relay sessions abort over the proxy
+  if (isRelaySession(sessionId)) {
+    const success = relay ? relay.abortRemoteSession(sessionId) : false;
+    (new WebSocketWriter(ws, null)).send({
+      kind: 'complete', sessionId, exitCode: success ? 0 : 1, success, aborted: true,
+    });
+    return;
+  }
+
   const run = chatRunRegistry.getRun(sessionId);
   if (!run || run.status !== 'running') {
     sendProtocolError(ws, 'NO_ACTIVE_RUN', `Session "${sessionId}" has no active run.`, sessionId);
@@ -298,6 +340,15 @@ function handleChatSubscribe(
       ? ((target as AnyRecord).sessionId as string).trim()
       : '';
     if (!sessionId) {
+      continue;
+    }
+
+    // MYMU: relay sessions attach via the remote-control proxy. isProcessing
+    // deliberately omitted — the agent-status poll is authoritative there and
+    // a wrong `false` in this ack would fight the client's loader.
+    if (isRelaySession(sessionId)) {
+      void relay?.subscribeRemoteChannel(sessionId, new WebSocketWriter(ws, null));
+      (new WebSocketWriter(ws, null)).send({ kind: 'chat_subscribed', sessionId });
       continue;
     }
 
@@ -350,10 +401,19 @@ function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDe
     return;
   }
 
-  dependencies.runtime.resolveToolApproval(data.requestId, {
+  // MYMU: relay prompts carry an `rc:` requestId — resolve over the proxy;
+  // returns false when it isn't a remote prompt, so the local path still runs.
+  const decision = {
     allow: Boolean(data.allow),
     updatedInput: data.updatedInput,
     message: typeof data.message === 'string' ? data.message : undefined,
+  };
+  if (relay && relay.resolveRemotePermission(data.requestId, decision)) {
+    return;
+  }
+
+  dependencies.runtime.resolveToolApproval(data.requestId, {
+    ...decision,
     rememberEntry: data.rememberEntry,
   });
 }
