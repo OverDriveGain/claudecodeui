@@ -3,6 +3,21 @@ import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '../utils/api';
 import type { ServerEvent } from '../contexts/WebSocketContext';
+import { sessionActivityStore } from '../stores/useSessionActivityStore';
+import { agentHealthStore, type AgentAccountError } from '../stores/agentHealthStore';
+import {
+  listRemoteHosts,
+  registerHostOwnership,
+  unregisterIds,
+  useRemoteHosts,
+  type RemoteHost,
+} from '../utils/remoteHosts';
+import {
+  assignedHostFor,
+  loadAgentHostAssignments,
+  subscribeAgentHostAssignments,
+} from '../utils/agentHostAssignments';
+import { agentDisplayKey } from '../utils/agentKey';
 import type {
   AppTab,
   LLMProvider,
@@ -79,6 +94,95 @@ type ProjectSessionPage = Pick<Project, 'sessions' | 'sessionMeta'>;
 const DEFAULT_PROVIDER: LLMProvider = 'claude';
 
 const serialize = (value: unknown) => JSON.stringify(value ?? null);
+
+// ── Multi-host helpers ──────────────────────────────────────────────────────
+// Projects from a connected peer host are tagged __hostUrl and live in the same
+// `projects` array; the primary host's items are untagged. A host's segment is
+// only ever replaced by data FROM that host (fetch or its own projects_updated
+// push) — so one host's update can never wipe another's agents from the view.
+
+const projectHostUrl = (p: Project): string | null => ((p as any).__hostUrl as string | undefined) ?? null;
+
+const allSessionIdsOf = (list: Project[]): string[] => {
+  const ids: string[] = [];
+  for (const p of list) {
+    const remoteId = (p as any).remoteSessionId;
+    if (typeof remoteId === 'string' && remoteId) ids.push(remoteId);
+    for (const s of getProjectSessions(p)) ids.push(String(s.id));
+  }
+  return ids;
+};
+
+/** Fetch one peer host's projects, tagged; null on failure (keep its old segment). */
+const fetchHostProjects = async (host: RemoteHost): Promise<Project[] | null> => {
+  try {
+    const r = await api.projectsFor(host);
+    if (!r.ok) return null;
+    const list = (await r.json()) as Project[];
+    return list.map((p) => ({ ...p, __hostUrl: host.url }) as Project);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Cross-account dedupe (Manar's rule): a connected host running under ANOTHER
+ * Claude account contributes agents the primary roster doesn't have — add them.
+ * A host on the SAME account shows agents the primary already lists — skip
+ * those. Matching by live session id makes this automatic and self-updating:
+ * peer agents whose session already appears untagged (primary) are dropped, and
+ * their ownership entries cleared so routing always favors the primary copy.
+ */
+const dedupeAgainstPrimary = (combined: Project[]): Project[] => {
+  // ONE winner per live session id, chosen by precedence:
+  //   1. the copy from the agent's admin-ASSIGNED host (routing follows it) —
+  //      sends and file landing then go to the machine the agent runs on;
+  //   2. the primary (untagged) copy;
+  //   3. the first peer copy, deterministically.
+  // Rule 3 matters: the same session can arrive from TWO connected peer hosts
+  // with no primary copy at all (e.g. two domains of one deployment, or two
+  // same-account hosts). The old peer-vs-primary-only rule let both peer
+  // copies through — duplicate rows sharing one `remote:<sid>` React key,
+  // which corrupted sibling sidebar state and made host-pinning feel flaky.
+  const bySession = new Map<string, Project[]>();
+  for (const p of combined) {
+    if (!p.isRemoteAgent || !p.remoteSessionId) continue;
+    const sid = p.remoteSessionId as string;
+    const copies = bySession.get(sid);
+    if (copies) copies.push(p);
+    else bySession.set(sid, [p]);
+  }
+  const winners = new Map<string, Project>();
+  for (const [sid, copies] of bySession) {
+    let winner = copies.find((p) => {
+      const h = projectHostUrl(p);
+      return h !== null && assignedHostFor(agentDisplayKey(p)) === h;
+    });
+    winner ??= copies.find((p) => projectHostUrl(p) === null);
+    winner ??= copies[0];
+    winners.set(sid, winner);
+  }
+  const dropped: Project[] = [];
+  const kept = combined.filter((p) => {
+    if (!p.isRemoteAgent || !p.remoteSessionId) return true;
+    const keep = winners.get(p.remoteSessionId as string) === p;
+    if (!keep) dropped.push(p);
+    return keep;
+  });
+  if (dropped.length > 0) {
+    // Both hosts' copies share ids (`remote:<sessionId>`), so never unregister
+    // an id a KEPT peer copy still owns — that would silently reroute the
+    // surviving copy back to the primary.
+    const keptPeer = kept.filter((p) => projectHostUrl(p) !== null);
+    const keptPeerProjectIds = new Set(keptPeer.map((p) => p.projectId));
+    const keptPeerSessionIds = new Set(allSessionIdsOf(keptPeer));
+    unregisterIds(
+      dropped.map((p) => p.projectId).filter((id) => !keptPeerProjectIds.has(id)),
+      allSessionIdsOf(dropped).filter((id) => !keptPeerSessionIds.has(id)),
+    );
+  }
+  return kept;
+};
 
 const readSelectedProvider = (): LLMProvider => {
   try {
@@ -489,11 +593,41 @@ export function useProjectsState({
       if (showLoadingState) {
         setIsLoadingProjects(true);
       }
-      const response = await api.projects();
+      const remoteHostList = listRemoteHosts();
+      const [response, ...remoteResults] = await Promise.all([
+        api.projects(),
+        ...remoteHostList.map((host) => fetchHostProjects(host)),
+        // Dedupe consults the agent→host assignments synchronously; make sure
+        // they're loaded before the first roster is built.
+        loadAgentHostAssignments(),
+      ]);
       const projectData = (await response.json()) as Project[];
 
       setProjects((prevProjects) => {
-        const projectsWithTaskMaster = mergeTaskMasterCache(projectData, prevProjects);
+        // Union of every host's fresh segment; a host whose fetch failed keeps
+        // its previous segment (a flaky peer must not blank its agents), and
+        // segments of disconnected hosts drop out.
+        const connected = new Set(remoteHostList.map((h) => h.url));
+        const combined: Project[] = [...projectData];
+        remoteHostList.forEach((host, i) => {
+          const fresh = remoteResults[i];
+          if (fresh) combined.push(...fresh);
+          else combined.push(...prevProjects.filter((p) => projectHostUrl(p) === host.url));
+        });
+        const kept = dedupeAgainstPrimary(
+          combined.filter((p) => {
+            const h = projectHostUrl(p);
+            return h === null || connected.has(h);
+          }),
+        );
+        // Register ownership AFTER dedupe so a session visible via the primary
+        // account never routes to a peer host.
+        for (const host of remoteHostList) {
+          const segment = kept.filter((p) => projectHostUrl(p) === host.url);
+          registerHostOwnership(host.url, segment.map((p) => p.projectId), allSessionIdsOf(segment));
+        }
+
+        const projectsWithTaskMaster = mergeTaskMasterCache(kept, prevProjects);
         const mergedProjects = mergeExpandedSessionPages(prevProjects, projectsWithTaskMaster);
 
         if (prevProjects.length === 0) {
@@ -587,6 +721,27 @@ export function useProjectsState({
     ));
   }, []);
 
+  // An admin (re)assigning an agent's host must re-run the dedupe so the kept
+  // copy — and with it all routing — switches hosts immediately. The dedupe is
+  // applied to the CURRENT roster synchronously: the background refetch below
+  // waits on every connected host, and a slow peer (box on a degraded uplink)
+  // left the admin watching a click that visibly did nothing.
+  useEffect(
+    () =>
+      subscribeAgentHostAssignments(() => {
+        setProjects((prev) => {
+          const kept = dedupeAgainstPrimary(prev);
+          for (const host of listRemoteHosts()) {
+            const segment = kept.filter((p) => projectHostUrl(p) === host.url);
+            registerHostOwnership(host.url, segment.map((p) => p.projectId), allSessionIdsOf(segment));
+          }
+          return projectsHaveChanges(prev, kept) ? kept : prev;
+        });
+        void fetchProjects({ showLoadingState: false });
+      }),
+    [fetchProjects],
+  );
+
   // Hydrates TaskMaster details for the given `projectId`. The project
   // identifier comes directly from the DB-driven /api/projects response.
   const hydrateProjectTaskMaster = useCallback(async (projectId: string) => {
@@ -637,6 +792,72 @@ export function useProjectsState({
   useEffect(() => {
     void fetchProjects();
   }, [fetchProjects]);
+
+  // Refetch when the connected-hosts list changes (a host was added/removed in
+  // the Hosts dialog) so its agents appear/disappear without a reload. The
+  // mount fetch above already covers the initial list — skip the first run.
+  const remoteHosts = useRemoteHosts();
+  const remoteHostsInitRef = useRef(true);
+  useEffect(() => {
+    if (remoteHostsInitRef.current) {
+      remoteHostsInitRef.current = false;
+      return;
+    }
+    void fetchProjects({ showLoadingState: false });
+  }, [remoteHosts, fetchProjects]);
+
+  // Live running state for remote-control agents. claude.ai/code polls its session
+  // list for each agent's worker_status; we mirror that with a cheap status poll and
+  // patch remoteRunning/remoteConnected in place — driving the sidebar running dot
+  // without re-fetching the whole project tree. Only patches when something changed.
+  // Multi-host: every connected host is polled and patches ONLY its own segment.
+  useEffect(() => {
+    let cancelled = false;
+    const pollHost = async (host: RemoteHost | null) => {
+      try {
+        const response = host ? await api.agentStatusFor(host) : await api.agentStatus();
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          agents?: Array<{ id: string; running: boolean; connected: boolean }>;
+          accountErrors?: AgentAccountError[];
+        };
+        const byId = new Map((data.agents ?? []).map((a) => [a.id, a]));
+        if (cancelled) return;
+        // Roster-reader health rides along on the same poll — the sidebar banner
+        // needs it when a reader login dies and the agent list silently degrades.
+        // (Primary host only; a peer's reader problems are that host's story.)
+        if (!host) agentHealthStore.setAccountErrors(data.accountErrors ?? []);
+        const hostUrl = host?.url ?? null;
+        setProjects((prev) => {
+          let changed = false;
+          const next = prev.map((project) => {
+            if (projectHostUrl(project) !== hostUrl) return project;
+            if (!project.isRemoteAgent || !project.remoteSessionId) return project;
+            const status = byId.get(project.remoteSessionId);
+            if (!status) return project;
+            if (
+              project.remoteRunning === status.running &&
+              project.remoteConnected === status.connected
+            ) {
+              return project;
+            }
+            changed = true;
+            return { ...project, remoteRunning: status.running, remoteConnected: status.connected };
+          });
+          return changed ? next : prev;
+        });
+      } catch {
+        // transient — try again next tick
+      }
+    };
+    const poll = () => Promise.all([null, ...listRemoteHosts()].map((h) => pollHost(h)));
+    void poll();
+    const interval = setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedProject?.projectId) {

@@ -36,8 +36,11 @@ One client logged into several MyMu hosts; every resource served by its
 owning host; deployment-global agent→host pinning.
 - Server: `server/routes/agent-hosts.js` + `agent_host_assignments` table
   (schema/repository marked in database module).
-- Web UI (Hosts dialog + merged views): **not yet re-grafted** onto the new
-  frontend — open item.
+- Web UI: Hosts dialog (sidebar footer), per-host WebSocket pool with queued
+  sends + loud failure (`WebSocketContext` marked hunks, frames tagged
+  `__hostUrl` through the dispatch pipeline), multi-host project fetch union +
+  cross-account dedupe + host-pin routing (`useProjectsState` marked hunks),
+  host-aware api layer (`api.js`).
 
 ### F3 — Multi-user model (linux-user mapping)
 Accounts map to linux users; visibility and process identity follow the
@@ -102,7 +105,7 @@ Everything else in the chat pipeline is upstream's, untouched.
 6. Update this file if the pull moved any touchpoint.
 
 ## Open items (not yet on this branch)
-- F2 Hosts dialog UI + F4 delivered-file renderer + injected-content chips +
-  hidden-agents sidebar toggle on the new frontend; extra i18n keys.
+- "Show online" reveal toggle UI for hidden agents (server supports
+  includeHidden=1); relay statusText into the activity indicator.
 - `ios-native/` + `tools/demo-server/` live on the old branch until the swap.
 - Full parity pass, then the three live hosts swap to this lineage.
