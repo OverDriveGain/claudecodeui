@@ -10,8 +10,8 @@ import { useFileTreeOperations } from '../hooks/useFileTreeOperations';
 import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
-import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
-import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
+import type { FileTreeImageSelection, FileTreeVideoSelection, FileTreeAudioSelection, FileTreeNode } from '../types/types';
+import { formatFileSize, formatRelativeTime, isImageFile, isVideoFile, isAudioFile } from '../utils/fileTreeUtils';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
 
@@ -21,6 +21,8 @@ import FileTreeHeader from './FileTreeHeader';
 import FileTreeLoadingState from './FileTreeLoadingState';
 import FileTreeUploadProgress from './FileTreeUploadProgress';
 import ImageViewer from './ImageViewer';
+import VideoViewer from './VideoViewer';
+import AudioViewer from './AudioViewer';
 
 
 type FileTreeProps = {
@@ -31,6 +33,8 @@ type FileTreeProps = {
 export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<FileTreeVideoSelection | null>(null);
+  const [selectedAudio, setSelectedAudio] = useState<FileTreeAudioSelection | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const newItemInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -48,7 +52,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     }
   }, [toast]);
 
-  const { files, loading, refreshFiles } = useFileTreeData(selectedProject);
+  const { files, loading, refreshFiles, loadSubtree } = useFileTreeData(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
@@ -96,6 +100,11 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   const handleItemClick = useCallback(
     (item: FileTreeNode) => {
       if (item.type === 'directory') {
+        // Truncated dir (depth cutoff / network mount): fetch its contents on
+        // first expand — this is what keeps the initial tree load instant.
+        if (item.truncated) {
+          void loadSubtree(item.path);
+        }
         toggleDirectory(item.path);
         return;
       }
@@ -112,9 +121,32 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         return;
       }
 
+      if (isVideoFile(item.name) && selectedProject) {
+        setSelectedVideo({
+          name: item.name,
+          path: item.path,
+          projectPath: selectedProject.path,
+          // Same content endpoint as images; VideoViewer streams it via
+          // native HTTP Range requests for scrubbing.
+          projectId: selectedProject.projectId,
+        });
+        return;
+      }
+
+      if (isAudioFile(item.name) && selectedProject) {
+        setSelectedAudio({
+          name: item.name,
+          path: item.path,
+          projectPath: selectedProject.path,
+          // Same content endpoint; AudioViewer streams via native Range requests.
+          projectId: selectedProject.projectId,
+        });
+        return;
+      }
+
       onFileOpen?.(item.path);
     },
-    [onFileOpen, selectedProject, toggleDirectory],
+    [onFileOpen, selectedProject, toggleDirectory, loadSubtree],
   );
 
   const formatRelativeTimeLabel = useCallback(
@@ -230,6 +262,20 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         <ImageViewer
           file={selectedImage}
           onClose={() => setSelectedImage(null)}
+        />
+      )}
+
+      {selectedVideo && (
+        <VideoViewer
+          file={selectedVideo}
+          onClose={() => setSelectedVideo(null)}
+        />
+      )}
+
+      {selectedAudio && (
+        <AudioViewer
+          file={selectedAudio}
+          onClose={() => setSelectedAudio(null)}
         />
       )}
 

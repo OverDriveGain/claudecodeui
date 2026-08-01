@@ -58,7 +58,11 @@ remote agents' files, sudo-aware cross-user reads, 200MB attachment caps.
   `server/services/federation.ts`, `server/services/incoming-files.ts`.
 - **Marked touchpoints**: `assets.routes.ts` (cap override via
   `MYMU_MAX_ASSET_MB`), `rc-channel.js` (attachment landing + token frames).
-- Web delivered-file renderer: **not yet re-grafted** — open item.
+- Web delivered-file renderer: `FileDeliveryContent` wired via ToolRenderer.
+- File-tree binary layer (MyMu): download buttons + PDF open + `VideoViewer`/
+  `AudioViewer` (ours-only files) + binary/Range reads; remote agents' files
+  serve through the stock file-tree paths via gated aliases in
+  `server/routes/remote-files.js` (tree, file, files/content).
 
 ### F5 — Operations & identity
 - Deployment lockdown (`CCUI_LOCKDOWN`) — `server/modules/mymu/

@@ -561,7 +561,7 @@ async function federateBytesResponse(req, res, sessionId, peerPathAndQuery) {
 }
 
 // Read file content endpoint
-app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => {
+const mymuReadFileHandler = async (req, res) => {
     try {
         const { projectId } = req.params;
         const { filePath } = req.query;
@@ -613,10 +613,11 @@ app.get('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
             res.status(500).json({ error: error.message });
         }
     }
-});
+};
+app.get('/api/projects/:projectId/file', authenticateToken, mymuReadFileHandler);
 
 // Serve raw file bytes for previews and downloads.
-app.get('/api/projects/:projectId/files/content', authenticateToken, async (req, res) => {
+const mymuFileContentHandler = async (req, res) => {
     try {
         const { projectId } = req.params;
         const { path: filePath } = req.query;
@@ -664,7 +665,8 @@ app.get('/api/projects/:projectId/files/content', authenticateToken, async (req,
             res.status(500).json({ error: error.message });
         }
     }
-});
+};
+app.get('/api/projects/:projectId/files/content', authenticateToken, mymuFileContentHandler);
 
 // Serve a file an agent explicitly delivered via the SendUserFile tool.
 //
@@ -805,6 +807,14 @@ app.put('/api/projects/:projectId/file', authenticateToken, async (req, res) => 
 app.get('/api/file-tree/projects/:projectId/files', authenticateToken, (req, res, next) => {
     if (!String(req.params.projectId || '').startsWith('remote:')) return next();
     return mymuProjectFilesHandler(req, res);
+});
+app.get('/api/file-tree/projects/:projectId/file', authenticateToken, (req, res, next) => {
+    if (!String(req.params.projectId || '').startsWith('remote:')) return next();
+    return mymuReadFileHandler(req, res);
+});
+app.get('/api/file-tree/projects/:projectId/files/content', authenticateToken, (req, res, next) => {
+    if (!String(req.params.projectId || '').startsWith('remote:')) return next();
+    return mymuFileContentHandler(req, res);
 });
 const mymuProjectFilesHandler = async (req, res) => {
     try {
