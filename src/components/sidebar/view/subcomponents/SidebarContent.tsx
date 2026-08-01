@@ -118,6 +118,8 @@ type SidebarContentProps = {
   isMobile: boolean;
   isLoading: boolean;
   projects: Project[];
+  /** MYMU: count of visible agents — feeds the nav-reveal gate for agent-only users. */
+  agentsCount: number;
   runningSessionsCount: number;
   archivedProjects: ArchivedProjectListItem[];
   archivedSessions: ArchivedSessionListItem[];
@@ -159,6 +161,7 @@ export default function SidebarContent({
   isMobile,
   isLoading,
   projects,
+  agentsCount,
   runningSessionsCount,
   archivedProjects,
   archivedSessions,
@@ -209,6 +212,7 @@ export default function SidebarContent({
         isMobile={isMobile}
         isLoading={isLoading}
         projectsCount={projects.length}
+        agentsCount={agentsCount}
         runningSessionsCount={runningSessionsCount}
         archivedSessionsCount={archivedSessionsCount}
         isArchivedSessionsLoading={isArchivedSessionsLoading}

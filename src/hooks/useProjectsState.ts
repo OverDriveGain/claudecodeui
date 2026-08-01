@@ -11,6 +11,7 @@ import {
   unregisterIds,
   useRemoteHosts,
   type RemoteHost,
+  keyMatchesHostUrl,
 } from '../utils/remoteHosts';
 import {
   assignedHostFor,
@@ -119,7 +120,7 @@ const fetchHostProjects = async (host: RemoteHost): Promise<Project[] | null> =>
     const r = await api.projectsFor(host);
     if (!r.ok) return null;
     const list = (await r.json()) as Project[];
-    return list.map((p) => ({ ...p, __hostUrl: host.url }) as Project);
+    return list.map((p) => ({ ...p, __hostUrl: host.key }) as Project); // tenant key
   } catch {
     return null;
   }
@@ -156,7 +157,8 @@ const dedupeAgainstPrimary = (combined: Project[]): Project[] => {
   for (const [sid, copies] of bySession) {
     let winner = copies.find((p) => {
       const h = projectHostUrl(p);
-      return h !== null && assignedHostFor(agentDisplayKey(p)) === h;
+      const assigned = assignedHostFor(agentDisplayKey(p));
+      return h !== null && !!assigned && keyMatchesHostUrl(h, assigned);
     });
     winner ??= copies.find((p) => projectHostUrl(p) === null);
     winner ??= copies[0];
@@ -607,12 +609,12 @@ export function useProjectsState({
         // Union of every host's fresh segment; a host whose fetch failed keeps
         // its previous segment (a flaky peer must not blank its agents), and
         // segments of disconnected hosts drop out.
-        const connected = new Set(remoteHostList.map((h) => h.url));
+        const connected = new Set(remoteHostList.map((h) => h.key));
         const combined: Project[] = [...projectData];
         remoteHostList.forEach((host, i) => {
           const fresh = remoteResults[i];
           if (fresh) combined.push(...fresh);
-          else combined.push(...prevProjects.filter((p) => projectHostUrl(p) === host.url));
+          else combined.push(...prevProjects.filter((p) => projectHostUrl(p) === host.key));
         });
         const kept = dedupeAgainstPrimary(
           combined.filter((p) => {
@@ -623,8 +625,8 @@ export function useProjectsState({
         // Register ownership AFTER dedupe so a session visible via the primary
         // account never routes to a peer host.
         for (const host of remoteHostList) {
-          const segment = kept.filter((p) => projectHostUrl(p) === host.url);
-          registerHostOwnership(host.url, segment.map((p) => p.projectId), allSessionIdsOf(segment));
+          const segment = kept.filter((p) => projectHostUrl(p) === host.key);
+          registerHostOwnership(host.key, segment.map((p) => p.projectId), allSessionIdsOf(segment));
         }
 
         const projectsWithTaskMaster = mergeTaskMasterCache(kept, prevProjects);
@@ -732,8 +734,8 @@ export function useProjectsState({
         setProjects((prev) => {
           const kept = dedupeAgainstPrimary(prev);
           for (const host of listRemoteHosts()) {
-            const segment = kept.filter((p) => projectHostUrl(p) === host.url);
-            registerHostOwnership(host.url, segment.map((p) => p.projectId), allSessionIdsOf(segment));
+            const segment = kept.filter((p) => projectHostUrl(p) === host.key);
+            registerHostOwnership(host.key, segment.map((p) => p.projectId), allSessionIdsOf(segment));
           }
           return projectsHaveChanges(prev, kept) ? kept : prev;
         });
@@ -827,7 +829,7 @@ export function useProjectsState({
         // needs it when a reader login dies and the agent list silently degrades.
         // (Primary host only; a peer's reader problems are that host's story.)
         if (!host) agentHealthStore.setAccountErrors(data.accountErrors ?? []);
-        const hostUrl = host?.url ?? null;
+        const hostUrl = host?.key ?? null; // tenant key
         setProjects((prev) => {
           let changed = false;
           const next = prev.map((project) => {

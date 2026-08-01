@@ -263,7 +263,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
 
   useEffect(() => {
     const sockets = remoteSocketsRef.current;
-    const wanted = new Set(remoteHosts.map((h) => h.url));
+    const wanted = new Set(remoteHosts.map((h) => h.key));
 
     for (const [url, entry] of sockets) {
       if (!wanted.has(url)) {
@@ -273,7 +273,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     }
 
     for (const host of remoteHosts) {
-      if (sockets.has(host.url)) continue;
+      if (sockets.has(host.key)) continue;
       const entry: PeerSocketEntry = {
         ws: null,
         timer: null,
@@ -282,7 +282,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         queue: [],
         openNow: () => {},
       };
-      sockets.set(host.url, entry);
+      sockets.set(host.key, entry);
       const open = () => {
         if (entry.closed) return;
         if (entry.timer) {
@@ -315,7 +315,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
           socket.onmessage = (event) => {
             try {
               const data = JSON.parse(event.data);
-              dispatch({ ...data, __hostUrl: host.url });
+              dispatch({ ...data, __hostUrl: host.key });
             } catch {
               /* malformed frame from peer — drop */
             }
@@ -363,7 +363,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     // to the primary. Call sites stay host-unaware.
     const target = targetHostFor(message);
     if (target) {
-      const entry = remoteSocketsRef.current.get(target.url);
+      const entry = remoteSocketsRef.current.get(target.key);
       if (entry?.ws && entry.ws.readyState === WebSocket.OPEN) {
         entry.ws.send(JSON.stringify(message));
       } else if (entry && !entry.closed) {

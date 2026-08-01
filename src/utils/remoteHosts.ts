@@ -21,7 +21,17 @@ export interface RemoteHost {
   url: string; // origin, no trailing slash, e.g. https://code.kikhia.ae
   token: string;
   username: string;
+  /** Tenant identity: one entry per (host, account) — the SAME host can be
+   *  connected under several accounts, each with its own scope (multi-tenant,
+   *  Manar 2026-08-01). */
+  key: string;
 }
+
+/** Tenant key for a (host, account) pair. US separator never collides with URLs. */
+export const tenantKey = (url: string, username: string): string => `${url}\u001f${username}`;
+/** Does a tenant key belong to this host URL? (assignments store plain URLs). */
+export const keyMatchesHostUrl = (key: string | null | undefined, url: string): boolean =>
+  key === url || (typeof key === 'string' && key.startsWith(`${url}\u001f`));
 
 const STORAGE_KEY = 'remote-hosts';
 
@@ -30,10 +40,12 @@ function loadHosts(): RemoteHost[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (h): h is RemoteHost =>
-        h && typeof h.url === 'string' && typeof h.token === 'string' && typeof h.username === 'string',
-    );
+    return parsed
+      .filter(
+        (h): h is RemoteHost =>
+          h && typeof h.url === 'string' && typeof h.token === 'string' && typeof h.username === 'string',
+      )
+      .map((h) => ({ ...h, key: h.key || tenantKey(h.url, h.username) }));
   } catch {
     return [];
   }
@@ -44,8 +56,8 @@ let hosts: RemoteHost[] = loadHosts();
 // Ownership maps: which connected host a project / session came from. Rebuilt
 // on every projects fetch; entries are never load-bearing for the PRIMARY host
 // (absence = primary), so staleness only ever misroutes toward the default.
-const projectHostMap = new Map<string, string>(); // projectId -> host url
-const sessionHostMap = new Map<string, string>(); // sessionId -> host url
+const projectHostMap = new Map<string, string>(); // projectId -> tenant key
+const sessionHostMap = new Map<string, string>(); // sessionId -> tenant key
 
 const listeners = new Set<() => void>();
 function emit(): void {
@@ -66,7 +78,7 @@ export function normalizeHostUrl(input: string): string | null {
   if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
   try {
     const u = new URL(raw);
-    if (u.origin === window.location.origin) return null; // that's the primary host
+    // Same-origin IS allowed: a second account (tenant) on the primary host.
     return u.origin;
   } catch {
     return null;
@@ -77,9 +89,9 @@ export function listRemoteHosts(): RemoteHost[] {
   return hosts;
 }
 
-export function getRemoteHost(url: string | null | undefined): RemoteHost | null {
-  if (!url) return null;
-  return hosts.find((h) => h.url === url) ?? null;
+export function getRemoteHost(keyOrUrl: string | null | undefined): RemoteHost | null {
+  if (!keyOrUrl) return null;
+  return hosts.find((h) => h.key === keyOrUrl) ?? hosts.find((h) => h.url === keyOrUrl) ?? null;
 }
 
 /** Authenticate against a peer host and remember the session. */
@@ -95,17 +107,17 @@ export async function connectRemoteHost(urlInput: string, username: string, pass
   if (!r.ok || !body.token) {
     throw new Error(body.error || `Login failed (${r.status})`);
   }
-  const host: RemoteHost = { url, token: body.token, username };
-  hosts = [...hosts.filter((h) => h.url !== url), host];
+  const host: RemoteHost = { url, token: body.token, username, key: tenantKey(url, username) };
+  hosts = [...hosts.filter((h) => h.key !== host.key), host];
   persist();
   emit();
   return host;
 }
 
-export function disconnectRemoteHost(url: string): void {
-  hosts = hosts.filter((h) => h.url !== url);
-  for (const [k, v] of projectHostMap) if (v === url) projectHostMap.delete(k);
-  for (const [k, v] of sessionHostMap) if (v === url) sessionHostMap.delete(k);
+export function disconnectRemoteHost(key: string): void {
+  hosts = hosts.filter((h) => h.key !== key && h.url !== key);
+  for (const [k, v] of projectHostMap) if (v === key) projectHostMap.delete(k);
+  for (const [k, v] of sessionHostMap) if (v === key) sessionHostMap.delete(k);
   persist();
   emit();
 }

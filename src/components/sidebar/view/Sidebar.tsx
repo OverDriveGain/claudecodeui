@@ -260,6 +260,7 @@ function Sidebar({
             isMobile={isMobile}
             isLoading={isLoading}
             projects={regularProjects}
+            agentsCount={agentProjects.length}
             runningSessionsCount={runningSessionsCount}
             archivedProjects={archivedProjects}
             archivedSessions={archivedSessions}

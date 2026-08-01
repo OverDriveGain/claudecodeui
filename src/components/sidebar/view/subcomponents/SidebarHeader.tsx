@@ -16,6 +16,8 @@ type SidebarHeaderProps = {
   isMobile: boolean;
   isLoading: boolean;
   projectsCount: number;
+  // MYMU: agent-only scoped users have 0 projects but still need the nav (FORK.md F1).
+  agentsCount: number;
   runningSessionsCount: number;
   archivedSessionsCount: number;
   isArchivedSessionsLoading: boolean;
@@ -36,6 +38,7 @@ export default function SidebarHeader({
   isMobile,
   isLoading,
   projectsCount,
+  agentsCount,
   runningSessionsCount,
   archivedSessionsCount,
   isArchivedSessionsLoading,
@@ -53,7 +56,7 @@ export default function SidebarHeader({
   // MYMU: locked deployments hide creation affordances (context gains the flag
   // when the AuthContext port lands; until then it is simply undefined=false).
   const lockdown = Boolean((useAuth() as unknown as { lockdown?: boolean }).lockdown);
-  const showSearchTools = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
+  const showSearchTools = (projectsCount > 0 || agentsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
   const searchPlaceholder = searchMode === 'conversations'
     ? t('search.conversationsPlaceholder')
     : searchMode === 'archived'

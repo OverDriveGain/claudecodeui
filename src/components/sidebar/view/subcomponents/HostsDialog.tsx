@@ -124,11 +124,11 @@ export default function HostsDialog() {
               </div>
               {hosts.map((h) => (
                 <div
-                  key={h.url}
+                  key={h.key}
                   className="flex items-center justify-between gap-2 rounded-lg border border-border/60 px-3 py-2"
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-sm text-foreground">{h.url}</div>
+                    <div className="truncate text-sm text-foreground">{h.url} <span className="text-muted-foreground">({h.username})</span></div>
                     <div className="text-[11px] text-muted-foreground">as {h.username}</div>
                     {versionLabel(versions[h.url] ?? null) && (
                       <div className="truncate text-[10px] text-muted-foreground/70">{versionLabel(versions[h.url] ?? null)}</div>
@@ -136,7 +136,7 @@ export default function HostsDialog() {
                   </div>
                   <button
                     className="flex-shrink-0 rounded-md px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"
-                    onClick={() => disconnectRemoteHost(h.url)}
+                    onClick={() => disconnectRemoteHost(h.key)}
                   >
                     Disconnect
                   </button>
