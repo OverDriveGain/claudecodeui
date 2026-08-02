@@ -149,20 +149,20 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <ChatMessageFiles files={message.files} />
             )}
             {userCopyContent.trim().length > 0 || (!message.images?.length && !message.files?.length) ? (
-              <div className="group max-w-full rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:px-4">
-                <div dir="auto" className="break-words font-serif text-sm">
+              <div className="group max-w-full rounded-2xl rounded-br-md bg-gray-100 px-3 py-2 text-gray-900 shadow-sm dark:bg-[#131313] dark:text-white sm:px-4">
+                <div dir="auto" className="break-words font-sans text-[17px] italic">
                   <Markdown
                     breaks
-                    className="prose prose-sm prose-invert max-w-none font-serif [&_a]:text-blue-100 [&_a]:underline"
+                    className="prose prose-base text-[17px] max-w-none font-sans italic leading-[1.4] [&_p]:!leading-[1.4] dark:prose-invert [&_a]:underline"
                   >
                     {message.content}
                   </Markdown>
                 </div>
-                <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
+                <div className="mt-1 flex items-center justify-end gap-1 text-xs text-gray-500 dark:text-gray-400">
                   {shouldShowUserCopyControl && (
                     <MessageCopyControl content={userCopyContent} messageType="user" />
                   )}
-                  <span>{formattedTime}</span>
+                  <span className="text-gray-500 dark:text-gray-400">{formattedTime}</span>
                 </div>
               </div>
             ) : (
@@ -238,7 +238,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <>
                 <div className="flex flex-col">
                   <div className="flex flex-col">
-                    <Markdown className="prose prose-sm max-w-none font-serif dark:prose-invert">
+                    <Markdown className="prose prose-base text-[17px] max-w-none font-serif leading-[1.5] [&_p]:!leading-[1.5] dark:prose-invert">
                       {String(message.displayText || '')}
                     </Markdown>
                   </div>
@@ -374,7 +374,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <Reasoning defaultOpen={false}>
                 <ReasoningTrigger />
                 <ReasoningContent>
-                  <Markdown className="prose prose-sm prose-gray max-w-none font-serif dark:prose-invert">
+                  <Markdown className="prose prose-base text-[17px] prose-gray max-w-none font-serif leading-[1.5] [&_p]:!leading-[1.5] dark:prose-invert">
                     {message.content}
                   </Markdown>
                   <div className="mt-3 flex items-center text-[11px]">
@@ -431,7 +431,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
 
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
-                    <Markdown className="prose prose-sm prose-gray max-w-none font-serif dark:prose-invert">
+                    <Markdown className="prose prose-base text-[17px] prose-gray max-w-none font-serif leading-[1.5] [&_p]:!leading-[1.5] dark:prose-invert">
                       {content}
                     </Markdown>
                   ) : (

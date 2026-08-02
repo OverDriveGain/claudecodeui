@@ -10,7 +10,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon } from 'lucide-react';
+import { PaperclipIcon, Loader2, ArrowUpIcon } from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
@@ -34,8 +34,8 @@ import ActivityIndicator from './ActivityIndicator';
 import ComposerAttachment from './ComposerAttachment';
 import VoiceInputButton from './VoiceInputButton';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
-import TokenUsageSummary from './TokenUsageSummary';
 import QueuedMessageCard from './QueuedMessageCard';
+import TokenUsageSummary from './TokenUsageSummary';
 import ComposerModelMenu from './ComposerModelMenu';
 import ComposerPermissionMenu from './ComposerPermissionMenu';
 
@@ -358,7 +358,7 @@ export default function ChatComposer({
 
           <PromptInputBody>
             <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">
-              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words px-4 py-2 text-sm leading-6 text-transparent">
+              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words px-5 py-3.5 font-sans text-[17px] leading-6 text-transparent">
                 {renderInputWithMentions(input)}
               </div>
             </div>
@@ -381,6 +381,7 @@ export default function ChatComposer({
 
         <PromptInputFooter>
           <PromptInputTools className="min-w-0">
+            {/* MYMU: claude.ai-simple composer — attach + token usage on the left. */}
             <PromptInputButton
               tooltip={{ content: t('input.attachFiles') }}
               onClick={openAttachmentPicker}
@@ -389,37 +390,7 @@ export default function ChatComposer({
               <PaperclipIcon />
             </PromptInputButton>
 
-            {onVoiceTranscript && voiceAvailable && (
-              <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
-            )}
-
             <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
-
-            <PromptInputButton
-              tooltip={{ content: t('input.showAllCommands') }}
-              onClick={onToggleCommandMenu}
-              className="relative"
-            >
-              <MessageSquareIcon />
-              {slashCommandsCount > 0 && (
-                <span
-                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
-                >
-                  {slashCommandsCount}
-                </span>
-              )}
-            </PromptInputButton>
-
-            {hasInput && (
-              <PromptInputButton
-                tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
-                onClick={onClearInput}
-                className="hidden sm:flex"
-              >
-                <XIcon />
-              </PromptInputButton>
-            )}
-
           </PromptInputTools>
 
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
@@ -446,6 +417,11 @@ export default function ChatComposer({
               onSelectPermissionMode={onSelectPermissionMode}
               providerLabel={providerLabel}
             />
+
+            {/* MYMU: mic sits next to send, claude.ai-style. */}
+            {onVoiceTranscript && voiceAvailable && (
+              <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
+            )}
 
             <PromptInputSubmit
               onClick={
