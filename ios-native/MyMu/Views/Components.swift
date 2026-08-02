@@ -57,9 +57,22 @@ struct ProfileMenu: View {
     @State private var serverVersion: String?
     var body: some View {
         Menu {
+            // Each saved account is a submenu: switch to it (if not already active)
+            // or sign it out directly from the list — one, several, or the last one.
             ForEach(appState.accounts) { acct in
-                Button {
-                    appState.switchTo(acct)
+                Menu {
+                    if acct.id != appState.activeAccountId {
+                        Button {
+                            appState.switchTo(acct)
+                        } label: {
+                            Label("Switch to this account", systemImage: "arrow.left.arrow.right")
+                        }
+                    }
+                    Button(role: .destructive) {
+                        appState.removeAccount(acct)
+                    } label: {
+                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
                 } label: {
                     if acct.id == appState.activeAccountId {
                         Label("\(acct.username) · \(acct.hostLabel)", systemImage: "checkmark")
@@ -74,7 +87,6 @@ struct ProfileMenu: View {
             } label: {
                 Label("Add account", systemImage: "plus")
             }
-            Button("Sign out", role: .destructive) { appState.logout() }
             Divider()
             // Which build is on this phone — version from the marketing string,
             // build stamped per dev install (CURRENT_PROJECT_VERSION on the CLI).

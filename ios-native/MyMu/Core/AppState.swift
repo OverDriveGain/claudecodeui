@@ -173,8 +173,13 @@ final class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: accountUserKey(account.id))
         persistAccounts()
         if account.id == activeAccountId {
-            if let next = accounts.first {
-                activeAccountId = nil
+            // Fall over to the next account that still has a usable token. Clear the
+            // stale active token FIRST so we can never end up "authenticated"
+            // (token != nil) with no active account when no fallover token survives —
+            // that stranded the app on a dead session instead of the login screen.
+            activeAccountId = nil
+            token = nil
+            if let next = accounts.first(where: { Keychain.get(accountTokenKey($0.id)) != nil }) {
                 switchTo(next)
             } else {
                 clearActive()
