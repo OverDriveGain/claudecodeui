@@ -182,9 +182,28 @@ async function handleChatSend(
   if (isRelaySession(sessionId)) {
     const command = typeof data.content === 'string' ? data.content : '';
     const clientOptions = (data.options ?? {}) as AnyRecord;
+    // MYMU: live agents take the SAME attachment pipeline as project sessions —
+    // the client uploads through POST /api/assets/files and the descriptors are
+    // re-verified against the upload store here. Before this, relay options went
+    // through raw and only legacy inline data-URLs could land, so files uploaded
+    // to a live agent were silently dropped. Legacy inline images stay untouched
+    // in `images` (App Store 1.0.x, demo server) and still land downstream.
+    const relayAttachments = filterAttachmentsToUploadStore([
+      ...normalizeAttachmentDescriptors(clientOptions.images),
+      ...normalizeAttachmentDescriptors(clientOptions.files),
+      ...normalizeAttachmentDescriptors(clientOptions.attachments),
+    ]).filter(
+      (descriptor, index, all) => all.findIndex((candidate) => candidate.path === descriptor.path) === index,
+    );
     await relay?.queryRemoteChannel(
       command,
-      { ...clientOptions, sessionId, resume: true, remoteControl: sessionId },
+      {
+        ...clientOptions,
+        attachments: relayAttachments,
+        sessionId,
+        resume: true,
+        remoteControl: sessionId,
+      },
       new WebSocketWriter(ws, userId)
     );
     return;

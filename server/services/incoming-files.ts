@@ -21,6 +21,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { getGlobalImageAssetsDir } from '../shared/image-attachments.js';
 import { resolveLocalSession } from './local-sessions.js';
 import { writeFileAsUser } from './user-fs.js';
 
@@ -34,7 +35,10 @@ export interface LandedFile {
 
 export interface IncomingAttachment {
   name?: string;
-  data?: string; // data:<mime>;base64,<b64> (upload-images shape)
+  /** Stored asset in `~/.cloudcli/assets` — what POST /api/assets/files returns. */
+  path?: string;
+  /** Legacy inline shape `data:<mime>;base64,<b64>` (App Store 1.0.x, demo server). */
+  data?: string;
 }
 
 /** Relay ids share a suffix across `session_`/`cse_` prefixes — stable dir key. */
@@ -90,6 +94,40 @@ function decodeDataUrl(att: IncomingAttachment): { name: string; buffer: Buffer 
 }
 
 /**
+ * Read an attachment the client already uploaded through POST /api/assets/files
+ * — the SAME store project sessions use, so live agents and projects share one
+ * upload path. The path is re-verified here (direct child of the asset store)
+ * because this runs on bytes the client named: nothing outside the store, and
+ * no traversal, can be read.
+ */
+async function readStoredAsset(att: IncomingAttachment): Promise<{ name: string; buffer: Buffer } | null> {
+  const candidate = typeof att?.path === 'string' ? att.path.trim() : '';
+  if (!candidate) return null;
+
+  const root = path.resolve(getGlobalImageAssetsDir());
+  const resolved = path.resolve(root, candidate);
+  const relative = path.relative(root, resolved);
+  const isDirectChild =
+    relative.length > 0 &&
+    !relative.startsWith('..') &&
+    !path.isAbsolute(relative) &&
+    !relative.includes(path.sep);
+  if (!isDirectChild) return null;
+
+  try {
+    const buffer = await fs.readFile(resolved);
+    return { name: att?.name || path.basename(resolved), buffer };
+  } catch {
+    return null;
+  }
+}
+
+/** Stored asset first (current clients), inline data URL second (legacy). */
+async function materialize(att: IncomingAttachment): Promise<{ name: string; buffer: Buffer } | null> {
+  return (await readStoredAsset(att)) ?? decodeDataUrl(att);
+}
+
+/**
  * Land every attachment on the session's host and return the landed paths, or
  * null when landing isn't possible (unknown host / a write failed) — all or
  * nothing, so the caller either refers the agent to complete files or falls
@@ -100,7 +138,8 @@ export async function landAttachments(
   attachments: IncomingAttachment[] | undefined,
 ): Promise<LandedFile[] | null> {
   const list = Array.isArray(attachments) ? attachments : [];
-  const decoded = list.map(decodeDataUrl).filter((d): d is { name: string; buffer: Buffer } => d !== null);
+  const materialized = await Promise.all(list.map((att) => materialize(att)));
+  const decoded = materialized.filter((d): d is { name: string; buffer: Buffer } => d !== null);
   if (decoded.length === 0) return null;
 
   try {

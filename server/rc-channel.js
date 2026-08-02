@@ -107,7 +107,14 @@ export async function queryRemoteChannel(command, options, writer) {
   // we fall back to the old content-block embedding so nothing regresses.
   let outCommand = command;
   let outImages = opts.images;
-  const landed = await landAttachments(sessionId, opts.images);
+  // Verified upload-store descriptors (the same pipeline project sessions use)
+  // come first; legacy inline data-URLs are only appended when they aren't
+  // already represented as a stored asset, so a file never lands twice.
+  const verified = Array.isArray(opts.attachments) ? opts.attachments : [];
+  const legacyInline = (Array.isArray(opts.images) ? opts.images : []).filter(
+    (att) => att && typeof att.data === 'string' && !att.path,
+  );
+  const landed = await landAttachments(sessionId, [...verified, ...legacyInline]);
   if (landed && landed.length > 0) {
     outCommand = [command || '', fileReferralText(landed)].filter(Boolean).join('\n\n');
     outImages = undefined;
