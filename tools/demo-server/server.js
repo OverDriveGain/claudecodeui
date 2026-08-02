@@ -16,6 +16,10 @@
  *   POST /api/providers/sessions                          -> session pre-create (build 11+)
  *   GET  /api/projects/:id/files  /api/projects/:id/file  /api/projects/:id/files/content
  *   GET  /api/file-tree/projects/:id/…                    -> rewritten onto the above (build 11+)
+ *   POST /api/assets/images  /api/assets/files            -> composer attachments
+ *   GET  /api/assets/images/:name  /api/assets/files/:name-> serves them back
+ *   GET  /api/version                                     -> shown in the accounts sheet
+ *   GET  /api/agent-hosts                                 -> no pinning in the demo
  *   WS   /ws   chat.subscribe / chat.send / chat.abort    (build 11+ stock dialect)
  *              rc-subscribe / claude-command              (legacy — published 1.0, still live)
  *
@@ -29,6 +33,7 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const nowISO = () => new Date().toISOString();
+const BUILT_AT = nowISO();
 
 // MyMu privacy policy (served here so its URL is on the proagenten front).
 let PRIVACY_HTML = '<h1>MyMu Privacy Policy</h1>';
@@ -102,6 +107,105 @@ function fileTree() {
   ];
 }
 
+// ---- attachment store -----------------------------------------------------
+//
+// The app uploads composer attachments before it sends, then references them by
+// path (the stock claudecodeui flow). Without these routes the upload 404s and
+// the whole send fails, so a reviewer attaching a photo hits a dead end. Bytes
+// are held in memory only — the demo never writes to disk — and the newest
+// uploads evict the oldest so a long session can't grow without bound.
+
+const assets = new Map(); // filename -> { buffer, mimeType, name }
+const MAX_ASSETS = 40;
+
+function putAsset(filename, record) {
+  assets.set(filename, record);
+  while (assets.size > MAX_ASSETS) assets.delete(assets.keys().next().value);
+}
+
+/**
+ * Minimal multipart/form-data reader — enough for the app's uploads, which send
+ * one part per file. Returns [{ field, filename, contentType, body }].
+ */
+function parseMultipart(buffer, boundary) {
+  const parts = [];
+  const delimiter = Buffer.from(`--${boundary}`);
+  const positions = [];
+  let at = buffer.indexOf(delimiter);
+  while (at !== -1) {
+    positions.push(at);
+    at = buffer.indexOf(delimiter, at + delimiter.length);
+  }
+  for (let i = 0; i < positions.length - 1; i++) {
+    // Skip the delimiter and its trailing CRLF, then split headers from body.
+    const start = positions[i] + delimiter.length + 2;
+    const end = positions[i + 1];
+    if (start >= end) continue;
+    const chunk = buffer.subarray(start, end);
+    const split = chunk.indexOf('\r\n\r\n');
+    if (split === -1) continue;
+    const headers = chunk.subarray(0, split).toString('utf8');
+    const disposition = /name="([^"]*)"(?:;\s*filename="([^"]*)")?/i.exec(headers);
+    const type = /content-type:\s*([^\r\n]+)/i.exec(headers);
+    parts.push({
+      field: disposition ? disposition[1] : '',
+      filename: disposition && disposition[2] ? disposition[2] : null,
+      contentType: type ? type[1].trim() : 'application/octet-stream',
+      // Drop the trailing CRLF, which belongs to the next delimiter, not the file.
+      body: chunk.subarray(split + 4, chunk.length - 2),
+    });
+  }
+  return parts;
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+/**
+ * Stores the uploaded parts and answers in the shape the app decodes:
+ * `{ images: [...] }` for the images route, `{ attachments: [...] }` otherwise.
+ */
+async function handleAssetUpload(req, res, field) {
+  const contentType = req.headers['content-type'] || '';
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  if (!boundary) return sendJSON(res, 400, { error: 'expected multipart/form-data' });
+
+  const parts = parseMultipart(await readBody(req), (boundary[1] || boundary[2]).trim());
+  const records = parts
+    .filter((part) => part.filename)
+    .map((part) => {
+      const safe = String(part.filename).replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'file';
+      const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}-${safe}`;
+      putAsset(filename, { buffer: part.body, mimeType: part.contentType, name: part.filename });
+      return {
+        name: part.filename,
+        // Mirrors the real store's absolute path; the demo only ever echoes it back.
+        path: `/home/demo/.cloudcli/assets/${filename}`,
+        size: part.body.length,
+        mimeType: part.contentType,
+      };
+    });
+
+  if (records.length === 0) return sendJSON(res, 400, { error: 'no files provided' });
+  return sendJSON(res, 200, field === 'images' ? { images: records } : { attachments: records });
+}
+
+function serveAsset(res, filename) {
+  const asset = assets.get(filename);
+  if (!asset) return sendJSON(res, 404, { error: 'asset not found' });
+  res.writeHead(200, {
+    'Content-Type': asset.mimeType,
+    'X-Content-Type-Options': 'nosniff',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(asset.buffer);
+}
+
 // ---- REST -----------------------------------------------------------------
 
 function sendJSON(res, code, obj) {
@@ -130,6 +234,17 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (p === '/api/auth/status') return sendJSON(res, 200, { user: { id: 1, username: 'demo' } });
+  if (p === '/api/version') return sendJSON(res, 200, { version: 'demo', builtAt: BUILT_AT });
+  // No agent/host pinning in the demo — one canned agent, one origin.
+  if (p === '/api/agent-hosts') return sendJSON(res, 200, { assignments: {} });
+  if (req.method === 'POST' && (p === '/api/assets/images' || p === '/api/assets/files')) {
+    handleAssetUpload(req, res, p.endsWith('/images') ? 'images' : 'files');
+    return;
+  }
+  {
+    const am = p.match(/^\/api\/assets\/(?:images|files)\/([^/]+)$/);
+    if (am) return serveAsset(res, decodeURIComponent(am[1]));
+  }
   if (p === '/api/projects') return sendJSON(res, 200, { projects: projects() });
   if (p === '/api/projects/archived') return sendJSON(res, 200, { projects: [] });
   if (p === '/api/projects/agent-status')
@@ -169,8 +284,18 @@ wss.on('connection', (ws) => {
   // Echo the user's line, then stream a short canned assistant reply. Persist the
   // turn (liveTurns) so the app's end-of-turn history refetch keeps it instead of
   // wiping the reply back to the base transcript.
-  const streamReply = (sid, userText) => {
-    const reply = "This is the MyMu demo backend — everything here is sample " +
+  const streamReply = (sid, userText, attachments) => {
+    // Name what was attached — otherwise an upload looks ignored, and the
+    // reviewer can't tell the attachment path worked.
+    const names = (Array.isArray(attachments) ? attachments : [])
+      .map((a) => (a && (a.name || a.path)) || '')
+      .filter(Boolean)
+      .map((n) => String(n).split('/').pop());
+    const received = names.length
+      ? `I received ${names.length === 1 ? 'your file' : `${names.length} files`} (${names.join(', ')}). `
+      : '';
+    const reply = received +
+                  "This is the MyMu demo backend — everything here is sample " +
                   "data. Point the app at your own Claude Code UI server to drive real agents.";
     (liveTurns[sid] || (liveTurns[sid] = [])).push(
       { id: 'u' + (++seq), kind: 'text', role: 'user', content: (userText || '').toString() },
@@ -197,7 +322,9 @@ wss.on('connection', (ws) => {
     // --- current stock dialect (build 11+): chat.* ---
     if (msg.type === 'chat.subscribe') { send({ type: 'session-status', isProcessing: false }); return; }
     if (msg.type === 'chat.send') {
-      streamReply(msg.sessionId || LOCAL_SESSION, msg.content);
+      const opts = msg.options || {};
+      streamReply(msg.sessionId || LOCAL_SESSION, msg.content,
+                  [].concat(opts.attachments || [], opts.images || [], opts.files || []));
       return;
     }
     if (msg.type === 'chat.abort') { send({ kind: 'complete' }); return; }
@@ -205,8 +332,9 @@ wss.on('connection', (ws) => {
     // --- legacy dialect (published 1.0 app, still live): rc-subscribe / claude-command ---
     if (msg.type === 'rc-subscribe') { send({ type: 'session-status', isProcessing: false }); return; }
     if (msg.type === 'claude-command') {
-      const sid = (msg.options && (msg.options.sessionId || msg.options.remoteControl)) || LOCAL_SESSION;
-      streamReply(sid, msg.command);
+      const opts = msg.options || {};
+      const sid = opts.sessionId || opts.remoteControl || LOCAL_SESSION;
+      streamReply(sid, msg.command, [].concat(opts.attachments || [], opts.images || [], opts.files || []));
       return;
     }
     if (msg.type === 'abort-session') { send({ kind: 'complete' }); return; }
