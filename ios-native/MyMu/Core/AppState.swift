@@ -8,28 +8,11 @@ struct SavedAccount: Codable, Identifiable, Equatable {
     let serverOrigin: String
     let username: String
     var id: String { "\(serverOrigin)|\(username)" }
-    /// Full display host, e.g. "code.kaxtus.com".
+    /// Short display host, e.g. "code.kaxtus.com".
     var hostLabel: String {
         serverOrigin
             .replacingOccurrences(of: "https://", with: "")
             .replacingOccurrences(of: "http://", with: "")
-    }
-
-    /// One-word host for menu rows, e.g. "kaxtus", "thinkpad", "box", "ccuitest".
-    /// Full FQDNs hyphen-wrap across three lines in a Menu, which makes the
-    /// account list unreadable once you have more than a couple of logins.
-    /// Hosts with a port (dev/IP origins) are kept verbatim — there's no
-    /// meaningful name to shorten to.
-    var shortHostLabel: String {
-        let host = hostLabel
-        guard !host.contains(":") else { return host }
-        let parts = host.split(separator: ".").map(String.init)
-        guard let first = parts.first else { return host }
-        // "code.kaxtus.com" → the domain ("kaxtus"); "code-box.kaxtus.com" →
-        // the machine ("box"); anything else → its own first label.
-        if first == "code" { return parts.count > 1 ? parts[1] : first }
-        if first.hasPrefix("code-") { return String(first.dropFirst("code-".count)) }
-        return first
     }
 }
 

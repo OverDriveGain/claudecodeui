@@ -57,39 +57,24 @@ struct ProfileMenu: View {
     @State private var serverVersion: String?
     var body: some View {
         Menu {
-            // Switching is the common action, so accounts stay a FLAT one-tap
-            // list. Signing out is rare and destructive — it lives in a single
-            // grouped submenu below, which keeps any-account sign-out (incl. the
-            // last one) without nesting every row.
             ForEach(appState.accounts) { acct in
                 Button {
-                    guard acct.id != appState.activeAccountId else { return }
                     appState.switchTo(acct)
                 } label: {
                     if acct.id == appState.activeAccountId {
-                        Label("\(acct.username) · \(acct.shortHostLabel)", systemImage: "checkmark")
+                        Label("\(acct.username) · \(acct.hostLabel)", systemImage: "checkmark")
                     } else {
-                        Text("\(acct.username) · \(acct.shortHostLabel)")
+                        Text("\(acct.username) · \(acct.hostLabel)")
                     }
                 }
             }
             Divider()
-            Menu {
-                ForEach(appState.accounts) { acct in
-                    Button(role: .destructive) {
-                        appState.removeAccount(acct)
-                    } label: {
-                        Text("\(acct.username) · \(acct.shortHostLabel)")
-                    }
-                }
-            } label: {
-                Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-            }
             Button {
                 showAddAccount = true
             } label: {
                 Label("Add account", systemImage: "plus")
             }
+            Button("Sign out", role: .destructive) { appState.logout() }
             Divider()
             // Which build is on this phone — version from the marketing string,
             // build stamped per dev install (CURRENT_PROJECT_VERSION on the CLI).
