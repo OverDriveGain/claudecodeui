@@ -57,31 +57,34 @@ struct ProfileMenu: View {
     @State private var serverVersion: String?
     var body: some View {
         Menu {
-            // Each saved account is a submenu: switch to it (if not already active)
-            // or sign it out directly from the list — one, several, or the last one.
+            // Switching is the common action, so accounts stay a FLAT one-tap
+            // list. Signing out is rare and destructive — it lives in a single
+            // grouped submenu below, which keeps any-account sign-out (incl. the
+            // last one) without nesting every row.
             ForEach(appState.accounts) { acct in
-                Menu {
-                    if acct.id != appState.activeAccountId {
-                        Button {
-                            appState.switchTo(acct)
-                        } label: {
-                            Label("Switch to this account", systemImage: "arrow.left.arrow.right")
-                        }
-                    }
-                    Button(role: .destructive) {
-                        appState.removeAccount(acct)
-                    } label: {
-                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
+                Button {
+                    guard acct.id != appState.activeAccountId else { return }
+                    appState.switchTo(acct)
                 } label: {
                     if acct.id == appState.activeAccountId {
-                        Label("\(acct.username) · \(acct.hostLabel)", systemImage: "checkmark")
+                        Label("\(acct.username) · \(acct.shortHostLabel)", systemImage: "checkmark")
                     } else {
-                        Text("\(acct.username) · \(acct.hostLabel)")
+                        Text("\(acct.username) · \(acct.shortHostLabel)")
                     }
                 }
             }
             Divider()
+            Menu {
+                ForEach(appState.accounts) { acct in
+                    Button(role: .destructive) {
+                        appState.removeAccount(acct)
+                    } label: {
+                        Text("\(acct.username) · \(acct.shortHostLabel)")
+                    }
+                }
+            } label: {
+                Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
             Button {
                 showAddAccount = true
             } label: {
