@@ -338,20 +338,28 @@ struct ChatView: View {
                         MyMuLoader()
                         // Live activity — what the agent is doing right now,
                         // derived from the newest transcript frame. A long turn
-                        // reads as motion, not a frozen loader.
-                        Text(turnActivity + "…")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Theme.text.opacity(0.75))
-                            .lineLimit(1)
+                        // reads as motion, not a frozen loader. A bare "Working"
+                        // says nothing the spinner doesn't, so it's dropped;
+                        // only a specific activity earns the words.
+                        if let activity = visibleActivity {
+                            Text(activity + "…")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Theme.text.opacity(0.75))
+                                .lineLimit(1)
+                        }
                         if let t = relay.turnStartedAt {
                             TimelineView(.periodic(from: t, by: 1)) { ctx in
-                                Text("· " + Self.elapsedLabel(from: t, to: ctx.date))
+                                Text((visibleActivity != nil ? "· " : "") + Self.elapsedLabel(from: t, to: ctx.date))
                                     .font(.system(size: 12, design: .monospaced))
                                     .foregroundColor(Theme.mutedText)
                             }
                         }
                         if let tok = relay.turnTokens, tok > 0 {
-                            Text("· \(Self.tokensLabel(tok)) tokens")
+                            // Separators only ever sit BETWEEN items, so the row
+                            // never opens with a stray "·" when the parts above
+                            // are absent.
+                            let needsSeparator = visibleActivity != nil || relay.turnStartedAt != nil
+                            Text((needsSeparator ? "· " : "") + "\(Self.tokensLabel(tok)) tokens")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(Theme.mutedText)
                         }
@@ -449,6 +457,14 @@ struct ChatView: View {
     /// action row (the apps keep older messages clean; long-press still copies).
     private var lastAssistantTextId: String? {
         relay.messages.last(where: { $0.kind == "text" && $0.role != "user" })?.id
+    }
+
+    /// The activity worth spelling out. A generic "Working" duplicates the
+    /// spinner beside it and reads as message text, so it shows nothing —
+    /// only a specific activity ("Reading files", "Running a command") does.
+    private var visibleActivity: String? {
+        let activity = turnActivity
+        return activity == "Working" ? nil : activity
     }
 
     /// What the agent is doing right now, from the newest transcript frame.
