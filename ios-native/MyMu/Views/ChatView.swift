@@ -98,16 +98,27 @@ struct ChatView: View {
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 12) {
+            // Agent name over its token count — the standard two-line inline
+            // title. The meter used to sit in the trailing group next to Files,
+            // where it competed with the title for the same row, so a long agent
+            // name pushed it onto a second line. As a subtitle it owns its own
+            // row and the name gets the full width back.
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 1) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if let ctx = relay.context {
                         ContextMeter(usage: ctx)
                     }
-                    NavigationLink {
-                        FilesView(projectId: projectId, token: chatToken, title: title, origin: origin)
-                    } label: {
-                        Image(systemName: "folder").foregroundColor(Theme.primary)
-                    }
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink {
+                    FilesView(projectId: projectId, token: chatToken, title: title, origin: origin)
+                } label: {
+                    Image(systemName: "folder").foregroundColor(Theme.primary)
                 }
             }
         }
@@ -794,14 +805,13 @@ struct ContextMeter: View {
     }
 
     var body: some View {
-        Text(label)
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+        // Subtitle under the agent name: plain text, no capsule. The pill
+        // chrome existed to separate it from the toolbar buttons it used to sit
+        // beside; under the title it would just crowd the nav bar.
+        Text("\(label) tokens")
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
             .foregroundColor(Theme.mutedText)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Theme.surface)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
+            .lineLimit(1)
             .accessibilityLabel("\(usage.usedTokens) context tokens used")
     }
 }

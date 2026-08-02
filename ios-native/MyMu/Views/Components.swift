@@ -48,42 +48,35 @@ struct EmptyStateView: View {
     }
 }
 
-/// Account switcher menu — Gmail-style multiple logins. Each saved account is a
-/// (server, user) pair; tapping one switches the WHOLE environment to it. "Add
-/// account" opens the same login screen pointed at any server.
+/// Account switcher — Gmail-style multiple logins. Each saved account is a
+/// (server, user) pair; tapping one switches the WHOLE environment to it.
+///
+/// A LIST in a sheet rather than a menu: with several logins a menu can't show
+/// a monogram, can't mark the active row with anything but a checkmark, and —
+/// decisively — can't offer a per-row destructive action, because menu items
+/// support neither swipe nor long-press. The list gives one-tap switching,
+/// swipe-to-sign-out, and a long-press context menu, which is how every
+/// multi-account client does this.
 struct ProfileMenu: View {
     @EnvironmentObject var appState: AppState
+    @State private var showAccounts = false
     @State private var showAddAccount = false
     @State private var serverVersion: String?
     var body: some View {
-        Menu {
-            ForEach(appState.accounts) { acct in
-                Button {
-                    appState.switchTo(acct)
-                } label: {
-                    if acct.id == appState.activeAccountId {
-                        Label("\(acct.username) · \(acct.hostLabel)", systemImage: "checkmark")
-                    } else {
-                        Text("\(acct.username) · \(acct.hostLabel)")
-                    }
-                }
-            }
-            Divider()
-            Button {
-                showAddAccount = true
-            } label: {
-                Label("Add account", systemImage: "plus")
-            }
-            Button("Sign out", role: .destructive) { appState.logout() }
-            Divider()
-            // Which build is on this phone — version from the marketing string,
-            // build stamped per dev install (CURRENT_PROJECT_VERSION on the CLI).
-            Text("App v\(Bundle.main.appVersionLabel)")
-            if let serverVersion {
-                Text("Server \(serverVersion)")
-            }
+        Button {
+            showAccounts = true
         } label: {
             Image(systemName: "person.crop.circle").foregroundColor(Theme.primary)
+        }
+        .sheet(isPresented: $showAccounts) {
+            AccountsSheet(
+                serverVersion: serverVersion,
+                onAddAccount: {
+                    showAccounts = false
+                    showAddAccount = true
+                }
+            )
+            .environmentObject(appState)
         }
         .sheet(isPresented: $showAddAccount) {
             LoginView(onSuccess: { showAddAccount = false })
@@ -107,6 +100,130 @@ struct ProfileMenu: View {
             }
             serverVersion = parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
+    }
+}
+
+/// The account list itself. Tap a row to switch; swipe it or long-press for
+/// "Sign out" — including the last remaining account, which drops the app back
+/// to the login screen.
+struct AccountsSheet: View {
+    let serverVersion: String?
+    let onAddAccount: () -> Void
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    /// Signing out is destructive and unrecoverable without the password, so it
+    /// asks first — the swipe/long-press only arms it.
+    @State private var pendingSignOut: SavedAccount?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(appState.accounts) { acct in
+                        Button {
+                            if acct.id != appState.activeAccountId { appState.switchTo(acct) }
+                            dismiss()
+                        } label: {
+                            AccountRow(account: acct, isActive: acct.id == appState.activeAccountId)
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                pendingSignOut = acct
+                            } label: {
+                                Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                pendingSignOut = acct
+                            } label: {
+                                Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    Button(action: onAddAccount) {
+                        Label("Add account", systemImage: "plus")
+                    }
+                }
+
+                Section {
+                    Text("App v\(Bundle.main.appVersionLabel)")
+                    if let serverVersion {
+                        Text("Server \(serverVersion)")
+                    }
+                }
+                .font(.footnote)
+                .foregroundColor(Theme.mutedText)
+            }
+            .navigationTitle("Accounts")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .confirmationDialog(
+            pendingSignOut.map { "Sign out \($0.username) · \($0.hostLabel)?" } ?? "",
+            isPresented: Binding(get: { pendingSignOut != nil }, set: { if !$0 { pendingSignOut = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Sign out", role: .destructive) {
+                if let acct = pendingSignOut { appState.removeAccount(acct) }
+                pendingSignOut = nil
+            }
+            Button("Cancel", role: .cancel) { pendingSignOut = nil }
+        }
+    }
+}
+
+/// One account row: monogram, user, host, and a tint/checkmark when it's the
+/// active login.
+struct AccountRow: View {
+    let account: SavedAccount
+    let isActive: Bool
+
+    /// First letter of the username — the conventional stand-in for an avatar.
+    private var monogram: String {
+        account.username.first.map { String($0).uppercased() } ?? "?"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(monogram)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(isActive ? .white : Theme.primary)
+                .frame(width: 34, height: 34)
+                .background(isActive ? Theme.primary : Theme.primary.opacity(0.15))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(account.username)
+                    .font(.body)
+                    .fontWeight(isActive ? .semibold : .regular)
+                    .lineLimit(1)
+                Text(account.hostLabel)
+                    .font(.caption)
+                    .foregroundColor(Theme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            if isActive {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.primary)
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
     }
 }
 
