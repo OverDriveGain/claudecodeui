@@ -455,6 +455,11 @@ final class RelayClient: ObservableObject {
             appendOrReplace(ChatMessage(id: messageId(obj), kind: "tool_result", role: "assistant",
                                         content: obj["content"] as? String, isError: obj["isError"] as? Bool))
         case "status":
+            // A `token_budget` status frame carries a token-usage payload, NOT a
+            // human status label — the web client routes it to its usage meter.
+            // iOS has no usage meter yet, so swallow it; rendering its literal
+            // "token_budget" text in the progress line was the bug.
+            if (obj["text"] as? String) == "token_budget" { break }
             statusText = obj["text"] as? String
             isLoading = true
         case "permission_request":
