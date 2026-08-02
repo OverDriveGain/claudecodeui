@@ -398,6 +398,17 @@ const RUNNING_MAX_IDLE_MS = 90 * 1000;
 const TURNOPEN_TRUST_MAX_MS =
   Math.max(2 * 60_000, parseInt(process.env.RC_TURNOPEN_TRUST_MAX_MS || '', 10) || 30 * 60_000);
 
+// A turn ends with a `result` event, which we translate into the `complete` that
+// clears the chat loader. But an INTERRUPTED turn (Stop button, or stopped from
+// the agent's own terminal) never writes a `result` to the relay — so no `complete`
+// is ever synthesized, and the chat loader (which has NO client-side timeout) spins
+// forever. Two nets fix this: an explicit finalize on abort (deterministic, we know
+// we interrupted), and this watchdog bound for stops that never passed through the
+// GUI. The bound sits ABOVE the documented "2-minute silent build emits nothing"
+// case so a legitimately-quiet long tool call is never mistaken for a dead turn.
+const RC_TURN_FINALIZE_MS =
+  Math.max(3 * 60_000, parseInt(process.env.RC_TURN_FINALIZE_MS || '', 10) || 5 * 60_000);
+
 function isWorkerRunning(s) {
   if (s.worker_status !== 'running') return false;
   if (s.connection_status !== 'connected') return false;
@@ -1039,6 +1050,27 @@ function emitRawEvents(sessionId, entry, rawEvents) {
 }
 
 /**
+ * Force a turn to END and push a terminal `complete` to EVERY subscriber (and into
+ * the replay buffer so a reconnecting client learns it too). Used when a turn ends
+ * WITHOUT a relay `result` — an interrupt/abort, or a turn stopped outside the GUI.
+ * The chat loader clears only on `complete` and has no client-side timeout, so
+ * without this synthesized end an interrupted turn spins the loader forever. Fanning
+ * out (not just replying to the aborting socket) clears it for every open viewer.
+ * No-op if the turn is already closed, so a real `result` racing the abort wins.
+ */
+function finalizeRemoteTurn(sessionId, entry, { aborted = false } = {}) {
+  const target = activeRemoteSessions.get(sessionId) || entry;
+  if (!target) return false;
+  target.turnOpen = false;
+  const frame = createNormalizedMessage({
+    kind: 'complete', exitCode: aborted ? 1 : 0, aborted, sessionId, provider: 'claude',
+  });
+  target.replayBuffer = [frame];
+  fanOut(target, frame);
+  return true;
+}
+
+/**
  * Stall recovery: a turn is open but the upstream socket has been silent past the
  * quiet threshold. Pull the events API (HTTP — independent of the socket, and with
  * the account-fallback auth path), emit anything the socket demonstrably missed,
@@ -1163,7 +1195,19 @@ async function openRemoteUpstream(sessionId, entry) {
     if (entry.turnOpen) {
       // Mid-turn: a working agent emits constantly, so a quiet socket past the
       // threshold is suspect — cross-check the events API (original behaviour).
-      if (now - (entry.lastUpstreamAt || 0) < RC_STALL_QUIET_MS) return;
+      const quiet = now - (entry.lastUpstreamAt || 0);
+      if (quiet < RC_STALL_QUIET_MS) return;
+      // Past the FINALIZE bound with no event at all: a real `result` would have
+      // flushed to the events API by now (syncStalledUpstream ran on the ticks in
+      // between and found nothing). Treat it as an interrupted turn that never
+      // produced a result and synthesize the turn-end so the loader releases. The
+      // bound is above the documented 2-minute silent-build case, so genuine long
+      // tool calls are never finalized early.
+      if (quiet >= RC_TURN_FINALIZE_MS) {
+        console.log('[rc] finalizing silent open turn (no result — interrupted?)', { sessionId, quietMs: quiet });
+        finalizeRemoteTurn(sessionId, entry);
+        return;
+      }
     } else {
       // Idle: quiet is normal, so quiet-time proves nothing — instead probe the
       // events API on a slow cadence to catch a turn started OUTSIDE the GUI on a
@@ -1541,6 +1585,13 @@ export function abortRemoteSession(sessionId) {
     request_id: crypto.randomUUID(),
     request: { subtype: 'interrupt' },
   }));
+  // Clear the loader for EVERY viewer of this session now — an interrupted turn
+  // often never writes a `result` to the relay, so the live `result`→`complete`
+  // path can't be relied on to end it. The WS handler also replies `complete` to
+  // the aborting socket; a duplicate `complete` is idempotent (both just clear the
+  // loader). If a real `result` is already racing in, it wins — finalize only marks
+  // the turn closed, and a late `result` re-emits its own complete harmlessly.
+  finalizeRemoteTurn(sessionId, entry, { aborted: true });
   return true;
 }
 
