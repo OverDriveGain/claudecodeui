@@ -12,6 +12,7 @@ import type {
 import { useDropzone } from 'react-dropzone';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { pickErrorMessage } from '../../../utils/readError';
 import type { MarkSessionProcessing, SessionActivityMap } from '../../../hooks/useSessionProtection';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import {
@@ -179,7 +180,10 @@ const uploadAttachmentFiles = async (files: File[]): Promise<unknown[]> => {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.error || 'Failed to upload files');
+    // MYMU: the backend answers with either the structured envelope
+    // ({ error: { message } }) or a flat { error }; pickErrorMessage surfaces
+    // whichever so a failed share never shows "[object Object]" or nothing.
+    throw new Error(pickErrorMessage(body, response.status, response.statusText, 'Failed to upload files'));
   }
 
   const result = await response.json();
@@ -440,14 +444,11 @@ export function useChatComposerState({
         });
 
         if (!response.ok) {
-          let errorMessage = `Failed to execute command (${response.status})`;
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData?.message || errorData?.error || errorMessage;
-          } catch {
-            // Ignore JSON parse failures and use fallback message.
-          }
-          throw new Error(errorMessage);
+          const errorData = await response.json().catch(() => null);
+          // MYMU: surface the backend's real reason across both envelope shapes.
+          throw new Error(
+            pickErrorMessage(errorData, response.status, response.statusText, 'Failed to execute command'),
+          );
         }
 
         const result = (await response.json()) as CommandExecutionResult;

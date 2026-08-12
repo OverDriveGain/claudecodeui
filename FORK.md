@@ -76,6 +76,24 @@ remote agents' files, sudo-aware cross-user reads, 200MB attachment caps.
   `src/index.css`; all user-visible strings renamed by
   `scripts/mymu-rebrand.mjs` (idempotent — see runbook).
 
+### F6 — Error feedback (cross-cutting)
+Every MyMu feature surfaces a specific failure reason — never "[object Object]",
+never a blank, never a silent drop. Decided by Manar 2026-08-12.
+- **MyMu-owned** (merge-clean): `src/utils/readError.ts` (`errorText` /
+  `pickErrorMessage` / `readErrorResponse` — normalize ANY backend shape, the
+  structured envelope `{ error:{ message } }` OR flat `{ error }` OR a dead
+  network, into a guaranteed non-empty string) + `src/utils/readError.test.ts`;
+  `src/shared/view/ui/ErrorText.tsx` (render chokepoint that cannot print an
+  object). New client failure paths route through these two.
+- **Marked touchpoints (`MYMU:`)**: `remoteHosts.ts` (connect surfaces the real
+  login error + dead-host reason — fixes the `[object Object]` on a
+  not-configured user), `HostsDialog.tsx` (renders via `ErrorText`),
+  `useChatComposerState.ts` (upload + command errors via `pickErrorMessage`),
+  `FileDeliveryContent.tsx` (surfaces the host's real reason on a failed fetch),
+  `rc-channel.js` (LOUD error when stored-asset attachments can't land on a
+  cross-host agent — they used to vanish while the loader showed success),
+  `assets.routes.ts` (`uploadErrorMessage` — names the MB cap on oversize).
+
 ## Conversation send/receive: what we touch (and nothing else)
 1. Relay detour in the chat gateway for `cse_` sessions (F1).
 2. Transcript normalizer merge in `claude-sessions.provider.ts` (injected/

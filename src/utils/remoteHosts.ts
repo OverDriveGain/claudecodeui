@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
+import { pickErrorMessage } from './readError';
+
 /**
  * Multi-host sessions — the "login inside the host I'm in, with the user from
  * the other host" paradigm (Manar, 2026-07-25).
@@ -98,16 +100,25 @@ export function getRemoteHost(keyOrUrl: string | null | undefined): RemoteHost |
 export async function connectRemoteHost(urlInput: string, username: string, password: string): Promise<RemoteHost> {
   const url = normalizeHostUrl(urlInput);
   if (!url) throw new Error('Invalid host URL (or it is this host)');
-  const r = await fetch(`${url}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
-  const body = (await r.json().catch(() => ({}))) as { token?: string; error?: string };
-  if (!r.ok || !body.token) {
-    throw new Error(body.error || `Login failed (${r.status})`);
+  let r: Response;
+  try {
+    r = await fetch(`${url}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    // Dead host / DNS / TLS / CORS — fetch rejects with no response body.
+    throw new Error(`Couldn't reach ${url} — check the URL and that the host is online`);
   }
-  const host: RemoteHost = { url, token: body.token, username, key: tenantKey(url, username) };
+  const body = (await r.json().catch(() => null)) as unknown;
+  const token = (body as { token?: string } | null)?.token;
+  if (!r.ok || !token) {
+    // Backend may answer with the structured envelope or a flat { error }; let
+    // pickErrorMessage surface whichever, and fall back to the HTTP status.
+    throw new Error(pickErrorMessage(body, r.status, r.statusText, 'Login failed'));
+  }
+  const host: RemoteHost = { url, token, username, key: tenantKey(url, username) };
   hosts = [...hosts.filter((h) => h.key !== host.key), host];
   persist();
   emit();

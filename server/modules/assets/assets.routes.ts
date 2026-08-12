@@ -13,8 +13,21 @@ const router = express.Router();
 
 // MYMU: attachment size policy — stock caps (5/10MB) are too small for this
 // deployment's use cases (large zips to agents). Env-tunable per host.
-const MYMU_MAX_ASSET_SIZE_BYTES =
-  (Number.parseInt(process.env.MYMU_MAX_ASSET_MB ?? '', 10) || 200) * 1024 * 1024;
+const MYMU_MAX_ASSET_MB = Number.parseInt(process.env.MYMU_MAX_ASSET_MB ?? '', 10) || 200;
+const MYMU_MAX_ASSET_SIZE_BYTES = MYMU_MAX_ASSET_MB * 1024 * 1024;
+
+/**
+ * MYMU: turn a multer/upload rejection into a specific, user-facing reason.
+ * The bare multer messages ("File too large") omit the actual cap, so the user
+ * can't tell what limit they hit; spell it out.
+ */
+function uploadErrorMessage(err: unknown): string {
+  const code = (err as { code?: string })?.code;
+  if (code === 'LIMIT_FILE_SIZE') return `File too large — max ${MYMU_MAX_ASSET_MB}MB per file.`;
+  if (code === 'LIMIT_FILE_COUNT') return 'Too many files — up to 10 at once.';
+  if (err instanceof Error && err.message) return err.message;
+  return 'Upload failed';
+}
 
 // Multer writes uploads straight into the global assets folder; the service
 // owns the folder location and the response record shape.
@@ -62,8 +75,7 @@ const attachmentUpload = multer({
 router.post('/images', (req, res) => {
   upload.array('images', 5)(req, res, (err: unknown) => {
     if (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
-      return res.status(400).json({ error: message });
+      return res.status(400).json({ error: uploadErrorMessage(err) });
     }
 
     const files = Array.isArray(req.files) ? req.files : [];
@@ -83,8 +95,7 @@ router.post('/images', (req, res) => {
 router.post('/files', (req, res) => {
   attachmentUpload.array('files', 10)(req, res, (err: unknown) => {
     if (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
-      return res.status(400).json({ error: message });
+      return res.status(400).json({ error: uploadErrorMessage(err) });
     }
 
     const files = Array.isArray(req.files) ? req.files : [];

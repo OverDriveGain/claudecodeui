@@ -118,6 +118,20 @@ export async function queryRemoteChannel(command, options, writer) {
   if (landed && landed.length > 0) {
     outCommand = [command || '', fileReferralText(landed)].filter(Boolean).join('\n\n');
     outImages = undefined;
+  } else if (verified.length > 0 && writer) {
+    // Stored-asset attachments reach the agent ONLY by landing as real files on
+    // its host — unlike inline data-URLs there is no content-block fallback for
+    // them. When landing yields nothing (the session is owned by another host,
+    // or the write failed) they would vanish while the loader showed success;
+    // surface it LOUDLY (same principle as the out-of-scope refusal above). The
+    // text message still goes through.
+    const n = verified.length;
+    writer.send(createNormalizedMessage({
+      kind: 'error',
+      content: `Couldn't attach ${n === 1 ? 'the file' : `${n} files`} to this agent — it likely runs on another host, and cross-host file delivery isn't available yet. Your message was sent without ${n === 1 ? 'it' : 'them'}.`,
+      sessionId,
+      provider: 'claude',
+    }));
   }
   return driveRemoteSession({ ws: writer, sessionId, command: outCommand, images: outImages, normalize: normalizeClaude });
 }

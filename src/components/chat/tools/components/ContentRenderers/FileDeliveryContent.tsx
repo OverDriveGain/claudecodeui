@@ -1,9 +1,10 @@
 import { useState, useCallback } from 'react';
 import { Download, FileText, ExternalLink, Loader2 } from 'lucide-react';
 
-import { api, authenticatedFetch } from '../../../../../utils/api';
+import { authenticatedFetch } from '../../../../../utils/api';
 import { AUTH_TOKEN_STORAGE_KEY } from '../../../../auth/constants';
 import { hostForProject } from '../../../../../utils/remoteHosts';
+import { errorText, readErrorResponse } from '../../../../../utils/readError';
 
 type FileDeliveryContentProps = {
   /** Absolute file paths the agent delivered (SendUserFile `files`). */
@@ -82,7 +83,9 @@ export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryC
       try {
         const res = await authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/delivered-file?path=${encodeURIComponent(path)}`);
         if (!res.ok) {
-          setError(res.status === 404 ? 'File no longer on disk.' : `Couldn’t fetch file (HTTP ${res.status}).`);
+          // 404 gets the friendly line; for everything else surface the host's
+          // real reason (e.g. a federation/peer failure) instead of a bare code.
+          setError(res.status === 404 ? 'File no longer on disk.' : await readErrorResponse(res, `Couldn’t fetch file (HTTP ${res.status}).`));
           return;
         }
         const blob = await res.blob();
@@ -95,7 +98,8 @@ export function FileDeliveryContent({ files, caption, projectId }: FileDeliveryC
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } catch (e) {
-        setError((e as Error).message);
+        // Network/CORS throw — no Response. errorText never yields blank.
+        setError(errorText(e, 'Download failed'));
       } finally {
         setBusy(null);
       }
