@@ -25,8 +25,14 @@ import { getGlobalImageAssetsDir } from '../shared/image-attachments.js';
 import { resolveLocalSession } from './local-sessions.js';
 import { writeFileAsUser } from './user-fs.js';
 
-/** Per-file cap. Attachments travel base64 over the chat WS; keep it sane. */
-export const MAX_INCOMING_FILE_BYTES = 64 * 1024 * 1024;
+/**
+ * Per-file cap for chat attachments (they travel base64 over the chat WS; keep
+ * it sane). Server-authoritative and env-tunable — set `CCUI_MAX_ATTACHMENT_MB`
+ * and restart to change it fleet-wide with NO client/app rebuild. Clients read
+ * the effective value from `GET /api/limits`.
+ */
+export const MAX_ATTACHMENT_MB = Math.max(1, Number.parseInt(process.env.CCUI_MAX_ATTACHMENT_MB ?? '', 10) || 64);
+export const MAX_INCOMING_FILE_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
 
 export interface LandedFile {
   name: string;

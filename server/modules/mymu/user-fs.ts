@@ -251,6 +251,22 @@ export async function overwriteFileAsUser(user: string, filePath: string, conten
   });
 }
 
+/**
+ * Move/rename a path as the owning user. The caller MUST jail both ends to the
+ * project root and confirm the destination is free (`mv` would clobber).
+ */
+export async function renameAsUser(user: string, oldPath: string, newPath: string): Promise<void> {
+  await execFileAsync('sudo', sudoArgs(user, ['mv', '--', oldPath, newPath]));
+}
+
+/**
+ * Recursively remove a path as the owning user. The caller MUST jail it to the
+ * project root and never pass the root itself (`rm -rf` is unforgiving).
+ */
+export async function removeAsUser(user: string, targetPath: string): Promise<void> {
+  await execFileAsync('sudo', sudoArgs(user, ['rm', '-rf', '--', targetPath]));
+}
+
 /** Directory entry names as the owning user (flat, like fs.readdir). */
 export async function listDirNamesAsUser(user: string, dir: string): Promise<string[]> {
   const { stdout } = await execFileAsync(

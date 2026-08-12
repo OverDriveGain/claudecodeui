@@ -16,7 +16,9 @@ import type {
 } from '@/shared/types.js';
 import { WORKSPACES_ROOT, validateWorkspacePath } from '@/shared/utils.js';
 
-const MAXIMUM_UPLOAD_SIZE_MEGABYTES = 200;
+// Files-view upload cap. Env-tunable (`CCUI_MAX_UPLOAD_MB`) so it can change
+// server-side with no client rebuild; clients read it from `GET /api/limits`.
+const MAXIMUM_UPLOAD_SIZE_MEGABYTES = Math.max(1, Number.parseInt(process.env.CCUI_MAX_UPLOAD_MB ?? '', 10) || 200);
 const MAXIMUM_UPLOAD_SIZE_BYTES = MAXIMUM_UPLOAD_SIZE_MEGABYTES * 1024 * 1024;
 const MAXIMUM_UPLOAD_FILE_COUNT = 20;
 

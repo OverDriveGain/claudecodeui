@@ -20,6 +20,7 @@ import {
 import { createWebSocketServer, setRelayDependencies } from '@/modules/websocket/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
+import { MAX_INCOMING_FILE_BYTES } from '@/services/incoming-files.js';
 
 import { createGitModule } from './modules/git/index.js';
 import {
@@ -252,6 +253,20 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 // API Routes (protected)
 // /api/config endpoint removed - no longer needed
 // Frontend now uses window.location for WebSocket URLs
+
+// Server-authoritative file-size limits. Clients (web + native app) read these
+// at runtime instead of hardcoding a cap, so the limit can be changed with a
+// server env + restart and NO client/app resubmission. Unauthenticated: it is
+// just the effective numbers, needed by the composer before any upload.
+app.get('/api/limits', (_req: express.Request, res: express.Response) => {
+    const uploadMb = Math.max(1, Number.parseInt(process.env.CCUI_MAX_UPLOAD_MB ?? '', 10) || 200);
+    res.json({
+        attachmentBytes: MAX_INCOMING_FILE_BYTES,
+        attachmentMB: Math.floor(MAX_INCOMING_FILE_BYTES / (1024 * 1024)),
+        filesUploadBytes: uploadMb * 1024 * 1024,
+        filesUploadMB: uploadMb,
+    });
+});
 
 // Chat uploads live under /api/assets (server/modules/assets), which stores
 // images and general files in the global ~/.cloudcli/assets folder.

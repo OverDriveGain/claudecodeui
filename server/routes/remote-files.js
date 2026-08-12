@@ -13,7 +13,8 @@ import { federationToken, inboundFederationEnabled, federationPeers, peerFetch }
 import { resolveLocalSession } from '../services/local-sessions.js';
 import { getRemoteAgentCwd, isRemoteProjectId, sessionIdFromProjectId, isAgentCaptureAllowed } from '../services/rc.service.js';
 import { getSessionEventsCached } from '../remote-control/rc-client.js';
-import { ownerForPath, readFileAsUser, existsAsUser, treeAsUser, overwriteFileAsUser } from '../services/user-fs.js';
+import { ownerForPath, readFileAsUser, existsAsUser, isDirAsUser, treeAsUser, overwriteFileAsUser, writeFileAsUser, mkdirAsUser, renameAsUser, removeAsUser } from '../services/user-fs.js';
+import multer from 'multer';
 
 // Helper: permissions to rwx format
 function permToRwx(perm) {
@@ -816,6 +817,185 @@ app.get('/api/file-tree/projects/:projectId/files/content', authenticateToken, (
     if (!String(req.params.projectId || '').startsWith('remote:')) return next();
     return mymuFileContentHandler(req, res);
 });
+// MYMU: remote agents' file-tree WRITES (upload / create / rename / delete). The
+// stock file-tree module resolves a project root via a plain DB lookup that
+// returns null for `remote:cse_` ids — so only READS were remote-aware (the GET
+// overrides above). These mirror that: resolve the agent's cwd, jail every path
+// to it, and — when the target lives in a mapped foreign user's home — perform
+// the mutation AS that linux user (sudo, same mechanism as the reads). Local
+// projects fall through to the stock module via next(). Response shapes match the
+// module's service exactly so the web client's UI updates unchanged.
+const isRemoteReq = (req) => String(req.params.projectId || '').startsWith('remote:');
+const remoteFileUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, os.tmpdir()),
+        filename: (req, file, cb) => cb(null, `upload-${Date.now()}-${Math.round(Math.random() * 1e9)}`),
+    }),
+    limits: { fileSize: 200 * 1024 * 1024, files: 20 },
+});
+
+app.post('/api/file-tree/projects/:projectId/files/upload', authenticateToken, (req, res, next) => {
+    if (!isRemoteReq(req)) return next();
+    remoteFileUpload.array('files', 20)(req, res, async (err) => {
+        const cleanup = async () => {
+            for (const f of (req.files || [])) { try { await fsPromises.unlink(f.path); } catch {} }
+        };
+        if (err) {
+            await cleanup();
+            if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large. Maximum size is 200MB.' });
+            if (err.code === 'LIMIT_FILE_COUNT') return res.status(400).json({ error: 'Too many files. Maximum is 20 files.' });
+            return res.status(500).json({ error: err.message });
+        }
+        try {
+            const files = req.files || [];
+            if (files.length === 0) return res.status(400).json({ error: 'No files provided' });
+            const projectRoot = await resolveProjectRootById(req.params.projectId);
+            if (!projectRoot) { await cleanup(); return res.status(404).json({ error: 'Project not found' }); }
+
+            let relativePaths = [];
+            if (req.body.relativePaths) { try { relativePaths = JSON.parse(req.body.relativePaths); } catch {} }
+            const rawTarget = req.body.targetPath || '';
+            const targetValidation = (!rawTarget || rawTarget === '.' || rawTarget === './')
+                ? { valid: true, resolved: path.resolve(projectRoot) }
+                : validatePathInProject(projectRoot, rawTarget);
+            if (!targetValidation.valid) { await cleanup(); return res.status(403).json({ error: targetValidation.error }); }
+            const targetDir = targetValidation.resolved;
+            const owner = ownerForPath(targetDir);
+
+            const uploaded = [];
+            for (let i = 0; i < files.length; i += 1) {
+                const f = files[i];
+                const name = relativePaths[i] || f.originalname;
+                const dest = validatePathInProject(projectRoot, path.join(targetDir, name));
+                if (!dest.valid) { try { await fsPromises.unlink(f.path); } catch {} continue; }
+                const destDir = path.dirname(dest.resolved);
+                const baseName = path.basename(dest.resolved);
+                if (owner) {
+                    await mkdirAsUser(owner, destDir);
+                    const data = await fsPromises.readFile(f.path);
+                    const written = await writeFileAsUser(owner, destDir, baseName, data);
+                    uploaded.push({ name: baseName, path: written, size: f.size, mimeType: f.mimetype });
+                } else {
+                    await fsPromises.mkdir(destDir, { recursive: true });
+                    await fsPromises.copyFile(f.path, dest.resolved);
+                    uploaded.push({ name: baseName, path: dest.resolved, size: f.size, mimeType: f.mimetype });
+                }
+                try { await fsPromises.unlink(f.path); } catch {}
+            }
+
+            const requested = Number.parseInt(req.body.requestedFileCount, 10);
+            return res.json({
+                success: true,
+                files: uploaded,
+                uploadedCount: uploaded.length,
+                requestedFileCount: Number.isFinite(requested) && requested > 0 ? requested : files.length,
+                targetPath: targetDir,
+                message: `Uploaded ${uploaded.length} ${uploaded.length === 1 ? 'file' : 'files'} successfully`,
+            });
+        } catch (error) {
+            await cleanup();
+            if (error.code === 'EACCES') return res.status(403).json({ error: 'Permission denied' });
+            console.error('[ERROR] Remote upload:', error.message);
+            return res.status(500).json({ error: error.message });
+        }
+    });
+});
+
+app.post('/api/file-tree/projects/:projectId/files/create', authenticateToken, async (req, res, next) => {
+    if (!isRemoteReq(req)) return next();
+    try {
+        const { name, type } = req.body;
+        const parentPath = req.body.path || '';
+        if (!name || !type) return res.status(400).json({ error: 'Name and type are required' });
+        if (type !== 'file' && type !== 'directory') return res.status(400).json({ error: 'Invalid type' });
+        if (name.includes('/') || name.includes('\\') || name === '.' || name === '..') return res.status(400).json({ error: 'Invalid name' });
+        const projectRoot = await resolveProjectRootById(req.params.projectId);
+        if (!projectRoot) return res.status(404).json({ error: 'Project not found' });
+        const v = validatePathInProject(projectRoot, parentPath ? path.join(parentPath, name) : name);
+        if (!v.valid) return res.status(403).json({ error: v.error });
+        const resolved = v.resolved;
+        const label = type === 'file' ? 'File' : 'Directory';
+        const owner = ownerForPath(resolved);
+        if (owner) {
+            if (await existsAsUser(owner, resolved)) return res.status(409).json({ error: `${label} already exists` });
+            if (type === 'directory') await mkdirAsUser(owner, resolved);
+            else { await mkdirAsUser(owner, path.dirname(resolved)); await writeFileAsUser(owner, path.dirname(resolved), path.basename(resolved), Buffer.alloc(0)); }
+        } else {
+            try { await fsPromises.access(resolved); return res.status(409).json({ error: `${label} already exists` }); } catch {}
+            if (type === 'directory') await fsPromises.mkdir(resolved, { recursive: false });
+            else { await fsPromises.mkdir(path.dirname(resolved), { recursive: true }); await fsPromises.writeFile(resolved, ''); }
+        }
+        return res.json({ success: true, path: resolved, name, type, message: `${label} created successfully` });
+    } catch (error) {
+        if (error.code === 'EACCES') return res.status(403).json({ error: 'Permission denied' });
+        if (error.code === 'ENOENT') return res.status(404).json({ error: 'Parent directory not found' });
+        console.error('[ERROR] Remote create:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/file-tree/projects/:projectId/files/rename', authenticateToken, async (req, res, next) => {
+    if (!isRemoteReq(req)) return next();
+    try {
+        const { oldPath, newName } = req.body;
+        if (!oldPath || !newName) return res.status(400).json({ error: 'oldPath and newName are required' });
+        if (newName.includes('/') || newName.includes('\\') || newName === '.' || newName === '..') return res.status(400).json({ error: 'Invalid name' });
+        const projectRoot = await resolveProjectRootById(req.params.projectId);
+        if (!projectRoot) return res.status(404).json({ error: 'Project not found' });
+        const ov = validatePathInProject(projectRoot, oldPath);
+        if (!ov.valid) return res.status(403).json({ error: ov.error });
+        const resolvedOld = ov.resolved;
+        const nv = validatePathInProject(projectRoot, path.join(path.dirname(resolvedOld), newName));
+        if (!nv.valid) return res.status(403).json({ error: nv.error });
+        const resolvedNew = nv.resolved;
+        const owner = ownerForPath(resolvedOld);
+        if (owner) {
+            if (!(await existsAsUser(owner, resolvedOld))) return res.status(404).json({ error: 'File or directory not found' });
+            if (await existsAsUser(owner, resolvedNew)) return res.status(409).json({ error: 'A file or directory with this name already exists' });
+            await renameAsUser(owner, resolvedOld, resolvedNew);
+        } else {
+            try { await fsPromises.access(resolvedOld); } catch { return res.status(404).json({ error: 'File or directory not found' }); }
+            try { await fsPromises.access(resolvedNew); return res.status(409).json({ error: 'A file or directory with this name already exists' }); } catch {}
+            await fsPromises.rename(resolvedOld, resolvedNew);
+        }
+        return res.json({ success: true, oldPath: resolvedOld, newPath: resolvedNew, newName, message: 'Renamed successfully' });
+    } catch (error) {
+        if (error.code === 'EACCES') return res.status(403).json({ error: 'Permission denied' });
+        console.error('[ERROR] Remote rename:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/file-tree/projects/:projectId/files', authenticateToken, async (req, res, next) => {
+    if (!isRemoteReq(req)) return next();
+    try {
+        const targetPath = req.body.path;
+        if (!targetPath) return res.status(400).json({ error: 'Path is required' });
+        const projectRoot = await resolveProjectRootById(req.params.projectId);
+        if (!projectRoot) return res.status(404).json({ error: 'Project not found' });
+        const v = validatePathInProject(projectRoot, targetPath);
+        if (!v.valid) return res.status(403).json({ error: v.error });
+        const resolved = v.resolved;
+        if (resolved === path.resolve(projectRoot)) return res.status(403).json({ error: 'Cannot delete project root directory' });
+        const owner = ownerForPath(resolved);
+        if (owner) {
+            if (!(await existsAsUser(owner, resolved))) return res.status(404).json({ error: 'File or directory not found' });
+            const isDir = await isDirAsUser(owner, resolved);
+            await removeAsUser(owner, resolved);
+            return res.json({ success: true, path: resolved, type: isDir ? 'directory' : 'file', message: 'Deleted successfully' });
+        }
+        let stats;
+        try { stats = await fsPromises.stat(resolved); } catch { return res.status(404).json({ error: 'File or directory not found' }); }
+        if (stats.isDirectory()) await fsPromises.rm(resolved, { recursive: true, force: true });
+        else await fsPromises.unlink(resolved);
+        return res.json({ success: true, path: resolved, type: stats.isDirectory() ? 'directory' : 'file', message: 'Deleted successfully' });
+    } catch (error) {
+        if (error.code === 'EACCES') return res.status(403).json({ error: 'Permission denied' });
+        console.error('[ERROR] Remote delete:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
 const mymuProjectFilesHandler = async (req, res) => {
     try {
 
