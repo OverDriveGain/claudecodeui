@@ -10,7 +10,9 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { PaperclipIcon, Loader2, ArrowUpIcon } from 'lucide-react';
+import { PaperclipIcon, Loader2, ArrowUpIcon, X } from 'lucide-react';
+
+import { ErrorText } from '../../../../shared/view/ui/ErrorText';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
@@ -90,6 +92,8 @@ interface ChatComposerProps {
   onRemoveAttachment: (index: number) => void;
   uploadingFiles: Map<string, number>;
   fileErrors: Map<string, string>;
+  rejectedAttachments: { name: string; message: string }[];
+  dismissRejectedAttachment: (name: string) => void;
   showFileDropdown: boolean;
   filteredFiles: MentionableFile[];
   selectedFileIndex: number;
@@ -154,6 +158,8 @@ export default function ChatComposer({
   onRemoveAttachment,
   uploadingFiles,
   fileErrors,
+  rejectedAttachments,
+  dismissRejectedAttachment,
   showFileDropdown,
   filteredFiles,
   selectedFileIndex,
@@ -334,6 +340,26 @@ export default function ChatComposer({
                 <p className="text-sm font-medium">Drop files here</p>
               </div>
             </div>
+          )}
+
+          {rejectedAttachments.length > 0 && (
+            <PromptInputHeader>
+              <div className="flex flex-col gap-1.5 rounded-xl border border-red-500/30 bg-red-500/5 p-2">
+                {rejectedAttachments.map((rejection) => (
+                  <div key={rejection.name} className="flex items-start justify-between gap-2">
+                    <ErrorText error={rejection.message} className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => dismissRejectedAttachment(rejection.name)}
+                      className="mt-0.5 shrink-0 rounded p-0.5 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                      aria-label="Dismiss"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </PromptInputHeader>
           )}
 
           {attachedFiles.length > 0 && (

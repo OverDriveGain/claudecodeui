@@ -170,6 +170,8 @@ function ChatInterface({
     setAttachedFiles,
     uploadingFiles,
     fileErrors,
+    rejectedAttachments,
+    dismissRejectedAttachment,
     getRootProps,
     getInputProps,
     isDragActive,
@@ -429,6 +431,8 @@ function ChatInterface({
           }
           uploadingFiles={uploadingFiles}
           fileErrors={fileErrors}
+          rejectedAttachments={rejectedAttachments}
+          dismissRejectedAttachment={dismissRejectedAttachment}
           showFileDropdown={showFileDropdown}
           filteredFiles={filteredFiles}
           selectedFileIndex={selectedFileIndex}

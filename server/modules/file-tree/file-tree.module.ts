@@ -16,9 +16,12 @@ import type {
 } from '@/shared/types.js';
 import { WORKSPACES_ROOT, validateWorkspacePath } from '@/shared/utils.js';
 
-// Files-view upload cap. Env-tunable (`CCUI_MAX_UPLOAD_MB`) so it can change
+// Files-view upload cap. Unlike chat attachments (buffered in memory, capped at
+// 1 GB), this path streams straight to disk, so it is the escape hatch we point
+// users to for files bigger than the attachment cap — its default is
+// deliberately large (10 GB). Env-tunable (`CCUI_MAX_UPLOAD_MB`) so it can change
 // server-side with no client rebuild; clients read it from `GET /api/limits`.
-const MAXIMUM_UPLOAD_SIZE_MEGABYTES = Math.max(1, Number.parseInt(process.env.CCUI_MAX_UPLOAD_MB ?? '', 10) || 200);
+const MAXIMUM_UPLOAD_SIZE_MEGABYTES = Math.max(1, Number.parseInt(process.env.CCUI_MAX_UPLOAD_MB ?? '', 10) || 10240);
 const MAXIMUM_UPLOAD_SIZE_BYTES = MAXIMUM_UPLOAD_SIZE_MEGABYTES * 1024 * 1024;
 const MAXIMUM_UPLOAD_FILE_COUNT = 20;
 

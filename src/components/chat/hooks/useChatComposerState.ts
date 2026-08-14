@@ -155,7 +155,24 @@ const createFakeSubmitEvent = () => {
 };
 
 const MAX_ATTACHMENT_COUNT = 10;
-const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+// MyMu attachment cap. The AUTHORITATIVE value is the server's (`GET /api/limits`,
+// env `CCUI_MAX_ATTACHMENT_MB`, default 1 GB); this is only the fallback used
+// before that fetch resolves or if it fails, so the client never rejects a file
+// the server would accept and never lets one through the server would reject.
+const DEFAULT_ATTACHMENT_LIMIT_BYTES = 1024 * 1024 * 1024;
+
+/** A file the user tried to attach but which was refused before it could be sent. */
+interface RejectedAttachment {
+  name: string;
+  message: string;
+}
+
+const formatByteCap = (bytes: number): string => {
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1 && Number.isInteger(gb)) return `${gb} GB`;
+  const mb = bytes / (1024 * 1024);
+  return `${Math.round(mb)} MB`;
+};
 
 const isImageAttachment = (attachment: ChatAttachment) => {
   if (attachment.mimeType?.startsWith('image/')) return true;
@@ -179,6 +196,15 @@ const uploadAttachmentFiles = async (files: File[]): Promise<unknown[]> => {
   });
 
   if (!response.ok) {
+    // 413 comes from the reverse proxy (nginx `client_max_body_size`), not the
+    // app, and its body is HTML — pickErrorMessage would only surface a bare
+    // status line. Give the same actionable guidance as an over-cap pick so the
+    // user is never left with a confusing "Request Entity Too Large".
+    if (response.status === 413) {
+      throw new Error(
+        'That file is too large to send in a message. Open the project\'s Files and upload it there instead.',
+      );
+    }
     const body = await response.json().catch(() => null);
     // MYMU: the backend answers with either the structured envelope
     // ({ error: { message } }) or a flat { error }; pickErrorMessage surfaces
@@ -274,6 +300,33 @@ export function useChatComposerState({
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState<Map<string, number>>(new Map());
   const [fileErrors, setFileErrors] = useState<Map<string, string>>(new Map());
+  // Files refused at pick time (too large / too many / wrong type). These are
+  // NOT chips — a rejected file never becomes an attachment — so they have their
+  // own visible surface below the composer. This is the fix for the silent drop:
+  // an oversize pick used to write into `fileErrors` under a name with no chip to
+  // render it, so the user saw nothing at all.
+  const [rejectedAttachments, setRejectedAttachments] = useState<RejectedAttachment[]>([]);
+  // Server-authoritative attachment cap (bytes). Starts at the 1 GB fallback and
+  // is refined from `GET /api/limits` so the client agrees with the server.
+  const [attachmentLimitBytes, setAttachmentLimitBytes] = useState<number>(DEFAULT_ATTACHMENT_LIMIT_BYTES);
+
+  useEffect(() => {
+    let cancelled = false;
+    authenticatedFetch('/api/limits')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((limits) => {
+        const bytes = Number(limits?.attachmentBytes);
+        if (!cancelled && Number.isFinite(bytes) && bytes > 0) {
+          setAttachmentLimitBytes(bytes);
+        }
+      })
+      .catch(() => {
+        // Keep the 1 GB fallback; never block attaching because the probe failed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [commandModalPayload, setCommandModalPayload] = useState<CommandModalPayload | null>(null);
 
@@ -559,35 +612,70 @@ export function useChatComposerState({
     lastAutosizedInputRef.current = target.value;
   }, []);
 
-  const handleAttachmentFiles = useCallback((files: File[]) => {
-    const validFiles = files.filter((file) => {
-      try {
-        if (!file || typeof file !== 'object') {
-          console.warn('Invalid file object:', file);
-          return false;
-        }
-
-        if (file.size > MAX_ATTACHMENT_SIZE) {
-          const fileName = file.name || 'Unknown file';
-          setFileErrors((previous) => {
-            const next = new Map(previous);
-            next.set(fileName, 'File too large (max 10MB)');
-            return next;
-          });
-          return false;
-        }
-
-        return true;
-      } catch (error) {
-        console.error('Error validating file:', error, file);
-        return false;
-      }
-    });
-
-    if (validFiles.length > 0) {
-      setAttachedFiles((previous) => [...previous, ...validFiles].slice(0, MAX_ATTACHMENT_COUNT));
-    }
+  const rejectAttachment = useCallback((name: string, message: string) => {
+    // Replace any earlier verdict for the same name so a file the user re-picks
+    // doesn't stack duplicate lines, and guarantee the reason is always visible.
+    setRejectedAttachments((previous) => [
+      ...previous.filter((entry) => entry.name !== name),
+      { name: name || 'Unknown file', message },
+    ]);
   }, []);
+
+  const dismissRejectedAttachment = useCallback((name: string) => {
+    setRejectedAttachments((previous) => previous.filter((entry) => entry.name !== name));
+  }, []);
+
+  const handleAttachmentFiles = useCallback(
+    (files: File[]) => {
+      const capLabel = formatByteCap(attachmentLimitBytes);
+      const validFiles = files.filter((file) => {
+        try {
+          if (!file || typeof file !== 'object') {
+            console.warn('Invalid file object:', file);
+            rejectAttachment('Unknown file', 'That item could not be read as a file.');
+            return false;
+          }
+
+          if (file.size > attachmentLimitBytes) {
+            // Over the cap: NEVER silent. Point the user at the escape hatch that
+            // actually handles bigger files (project Files upload streams to disk).
+            rejectAttachment(
+              file.name || 'Unknown file',
+              `"${file.name || 'This file'}" is too large (max ${capLabel}). To send a bigger file, open the project's Files and upload it there.`,
+            );
+            return false;
+          }
+
+          return true;
+        } catch (error) {
+          console.error('Error validating file:', error, file);
+          rejectAttachment(
+            (file && file.name) || 'Unknown file',
+            error instanceof Error ? error.message : 'That file could not be attached.',
+          );
+          return false;
+        }
+      });
+
+      if (validFiles.length === 0) return;
+
+      setAttachedFiles((previous) => {
+        const combined = [...previous, ...validFiles];
+        if (combined.length > MAX_ATTACHMENT_COUNT) {
+          // Dropping past the count cap must also be visible, not silent.
+          rejectAttachment(
+            'file-count',
+            `You can attach up to ${MAX_ATTACHMENT_COUNT} files at once — the extra ${combined.length - MAX_ATTACHMENT_COUNT} were not added.`,
+          );
+        } else {
+          // A successful pick clears any stale count warning.
+          dismissRejectedAttachment('file-count');
+        }
+        return combined.slice(0, MAX_ATTACHMENT_COUNT);
+      });
+    },
+    [attachmentLimitBytes, rejectAttachment, dismissRejectedAttachment],
+  );
 
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -615,9 +703,21 @@ export function useChatComposerState({
   );
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    maxSize: MAX_ATTACHMENT_SIZE,
-    maxFiles: MAX_ATTACHMENT_COUNT,
+    // NOTE: no `maxSize`/`maxFiles` here on purpose. react-dropzone enforces
+    // those by silently diverting files into `fileRejections` and only passing
+    // the survivors to `onDrop` — which is precisely the silent drop we're
+    // killing. Instead ALL picked files reach `handleAttachmentFiles`, which
+    // surfaces every rejection visibly; `onDropRejected` is a belt-and-suspenders
+    // catch for any other refusal (it should never fire given no caps are set).
     onDrop: handleAttachmentFiles,
+    onDropRejected: (rejections) => {
+      rejections.forEach((rejection) => {
+        rejectAttachment(
+          rejection.file?.name || 'Unknown file',
+          rejection.errors?.map((e) => e.message).join(' ') || 'That file could not be attached.',
+        );
+      });
+    },
     noClick: true,
     noKeyboard: true,
   });
@@ -766,6 +866,7 @@ export function useChatComposerState({
         setAttachedFiles([]);
         setUploadingFiles(new Map());
         setFileErrors(new Map());
+        setRejectedAttachments([]);
         resetCommandMenuState();
         setIsTextareaExpanded(false);
         if (textareaRef.current) {
@@ -802,6 +903,7 @@ export function useChatComposerState({
           setAttachedFiles([]);
           setUploadingFiles(new Map());
           setFileErrors(new Map());
+        setRejectedAttachments([]);
           resetCommandMenuState();
           setIsTextareaExpanded(false);
           if (textareaRef.current) {
@@ -918,6 +1020,7 @@ export function useChatComposerState({
       setAttachedFiles([]);
       setUploadingFiles(new Map());
       setFileErrors(new Map());
+        setRejectedAttachments([]);
       setIsTextareaExpanded(false);
 
       if (textareaRef.current) {
@@ -1285,6 +1388,9 @@ export function useChatComposerState({
     setAttachedFiles,
     uploadingFiles,
     fileErrors,
+    rejectedAttachments,
+    dismissRejectedAttachment,
+    attachmentLimitBytes,
     getRootProps,
     getInputProps,
     isDragActive,

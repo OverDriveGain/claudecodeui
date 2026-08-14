@@ -11,9 +11,16 @@ import {
 
 const router = express.Router();
 
-// MYMU: attachment size policy — stock caps (5/10MB) are too small for this
-// deployment's use cases (large zips to agents). Env-tunable per host.
-const MYMU_MAX_ASSET_MB = Number.parseInt(process.env.MYMU_MAX_ASSET_MB ?? '', 10) || 200;
+// MYMU: attachment size policy. Derived from the SAME env contract as the
+// landing path (`CCUI_MAX_ATTACHMENT_MB`, default 1 GB) and reported by
+// `GET /api/limits`, so the upload gate here, the lander, and the client all
+// agree — the upload endpoint never accepts a file the landing step would later
+// reject. (Read from env rather than importing the constant so this module keeps
+// its architectural boundary; the env var is the single source of truth.)
+const MYMU_MAX_ASSET_MB = Math.max(
+  1,
+  Number.parseInt(process.env.CCUI_MAX_ATTACHMENT_MB ?? '', 10) || 1024,
+);
 const MYMU_MAX_ASSET_SIZE_BYTES = MYMU_MAX_ASSET_MB * 1024 * 1024;
 
 /**
@@ -23,7 +30,12 @@ const MYMU_MAX_ASSET_SIZE_BYTES = MYMU_MAX_ASSET_MB * 1024 * 1024;
  */
 function uploadErrorMessage(err: unknown): string {
   const code = (err as { code?: string })?.code;
-  if (code === 'LIMIT_FILE_SIZE') return `File too large — max ${MYMU_MAX_ASSET_MB}MB per file.`;
+  if (code === 'LIMIT_FILE_SIZE') {
+    const cap = MYMU_MAX_ASSET_MB >= 1024 && MYMU_MAX_ASSET_MB % 1024 === 0
+      ? `${MYMU_MAX_ASSET_MB / 1024} GB`
+      : `${MYMU_MAX_ASSET_MB} MB`;
+    return `File too large — max ${cap} per file. To send a bigger file, open the project's Files and upload it there.`;
+  }
   if (code === 'LIMIT_FILE_COUNT') return 'Too many files — up to 10 at once.';
   if (err instanceof Error && err.message) return err.message;
   return 'Upload failed';
@@ -90,7 +102,8 @@ router.post('/images', (req, res) => {
 /**
  * Stores provider-neutral chat attachments. Files of any MIME type are
  * accepted because providers inspect them as data through their file-reading
- * tools; uploads are capped at 10 files and 10MB per file.
+ * tools; uploads are capped at 10 files and the MyMu attachment cap (1 GB) per
+ * file — bigger files go through the project Files upload, which streams to disk.
  */
 router.post('/files', (req, res) => {
   attachmentUpload.array('files', 10)(req, res, (err: unknown) => {

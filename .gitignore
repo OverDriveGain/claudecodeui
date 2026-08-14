@@ -151,3 +151,6 @@ tasks/
 cloudcli-sidebar-app-source.tar.gz
 cloudcli-sidebar.html
 electron/*.tar.gz
+
+# Fleet agent runtime scratch (session hooks, task state) — never commit
+.agent/

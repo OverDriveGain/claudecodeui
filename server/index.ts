@@ -259,7 +259,7 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 // server env + restart and NO client/app resubmission. Unauthenticated: it is
 // just the effective numbers, needed by the composer before any upload.
 app.get('/api/limits', (_req: express.Request, res: express.Response) => {
-    const uploadMb = Math.max(1, Number.parseInt(process.env.CCUI_MAX_UPLOAD_MB ?? '', 10) || 200);
+    const uploadMb = Math.max(1, Number.parseInt(process.env.CCUI_MAX_UPLOAD_MB ?? '', 10) || 10240);
     res.json({
         attachmentBytes: MAX_INCOMING_FILE_BYTES,
         attachmentMB: Math.floor(MAX_INCOMING_FILE_BYTES / (1024 * 1024)),
