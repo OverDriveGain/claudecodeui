@@ -17,6 +17,10 @@ import SidebarModals from './subcomponents/SidebarModals';
 // MYMU: live-agents section (FORK.md F1)
 import AgentsList from './subcomponents/AgentsList';
 import { useHiddenAgents } from '../../../hooks/useHiddenAgents';
+import { useAuth } from '../../auth/context/AuthContext';
+import { agentDisplayKey } from '../../../utils/agentKey';
+import { useRemoteHosts } from '../../../utils/remoteHosts';
+import { agentHostKey, useHiddenHosts } from '../../../utils/hostFocus';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
 
 type TaskMasterSidebarContext = {
@@ -58,8 +62,24 @@ function Sidebar({
   const paletteOps = usePaletteOps();
 
   // MYMU: agents are their own sidebar section — never mixed into projects.
-  const { isHidden, hideAgent } = useHiddenAgents();
-  const agentProjects = projects.filter((p) => p.isRemoteAgent && !isHidden(p));
+  const { isHidden, hideAgent, hiddenKeys, unhideAgent, unhideKey } = useHiddenAgents();
+  // MYMU: multi-user focus — label each agent by the login that surfaced it,
+  // hide a user's/host's agents. Same-host is the norm, so labels read as usernames.
+  const { user } = useAuth();
+  const remoteHosts = useRemoteHosts();
+  const hiddenHosts = useHiddenHosts();
+  const showHostLabels = remoteHosts.length > 0; // more than the primary login
+  const allAgentProjects = projects.filter((p) => p.isRemoteAgent);
+  const agentProjects = allAgentProjects.filter((p) => !isHidden(p));
+  // Per-agent hidden ones, so the Agents tab can offer an in-UI "restore" (else a
+  // hidden agent is a dead end). Roster-present ones keep their real name; keys
+  // with no live roster match (offline/removed) are surfaced as orphan keys.
+  const hiddenAgentProjects = allAgentProjects.filter((p) => isHidden(p));
+  const rosterAgentKeys = new Set(allAgentProjects.map((p) => agentDisplayKey(p)));
+  const orphanHiddenKeys = [...hiddenKeys].filter((k) => !rosterAgentKeys.has(k));
+  // Host-focus filter (drops a whole host's agents); the list drops them, the
+  // Agents tab surfaces a "N host hidden — show" restore.
+  const visibleAgentProjects = agentProjects.filter((p) => !hiddenHosts.has(agentHostKey(p)));
   const regularProjects = projects.filter((p) => !p.isRemoteAgent);
 
   const {
@@ -244,15 +264,21 @@ function Sidebar({
             agentsSection={
               /* MYMU */
               <AgentsList
-                agents={agentProjects.filter(
+                agents={visibleAgentProjects.filter(
                   (p) =>
                     !searchFilter.trim() ||
                     (p.displayName || '').toLowerCase().includes(searchFilter.trim().toLowerCase()),
                 )}
+                showHostLabels={showHostLabels}
+                primaryLabel={user?.username}
+                hiddenAgents={hiddenAgentProjects}
+                orphanHiddenKeys={orphanHiddenKeys}
                 selectedSession={selectedSession}
                 processingIds={new Set(activeSessions.keys())}
                 onSessionSelect={projectListProps.onSessionSelect}
                 onHideAgent={(agent) => { void hideAgent(agent); }}
+                onUnhideAgent={(agent) => { void unhideAgent(agent); }}
+                onUnhideKey={(key) => { void unhideKey(key); }}
                 t={t}
               />
             }
@@ -260,7 +286,7 @@ function Sidebar({
             isMobile={isMobile}
             isLoading={isLoading}
             projects={regularProjects}
-            agentsCount={agentProjects.length}
+            agentsCount={allAgentProjects.length}
             runningSessionsCount={runningSessionsCount}
             archivedProjects={archivedProjects}
             archivedSessions={archivedSessions}

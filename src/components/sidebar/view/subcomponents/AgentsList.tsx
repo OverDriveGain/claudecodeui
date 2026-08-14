@@ -1,32 +1,61 @@
 // MYMU: the live-agents tab (FORK.md F1) — every row is one running `claude
 // --remote-control` session surfaced by the relay; clicking opens its
 // conversation through the exact same session-select flow project sessions use.
-import { useMemo } from 'react';
-import { EyeOff } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import type { Project, ProjectSession } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { cn } from '../../../../lib/utils';
+import { useRemoteHosts } from '../../../../utils/remoteHosts';
+import { agentHostKey, hostKeyLabel, toggleHostHidden, useHiddenHosts } from '../../../../utils/hostFocus';
 
 type AgentsListProps = {
   agents: Project[];
   selectedSession: ProjectSession | null;
   /** Session ids with an active run — drives the working spinner. */
   processingIds: ReadonlySet<string>;
+  /** Show a per-user label on each row (only when more than one login is connected). */
+  showHostLabels?: boolean;
+  /** The primary login's username — labels the agents this session owns. */
+  primaryLabel?: string;
+  /** Individually-hidden agents still present in the roster (real names). */
+  hiddenAgents?: Project[];
+  /** Hidden agent keys with no live roster match (offline/removed). */
+  orphanHiddenKeys?: string[];
   onSessionSelect: (session: SessionWithProvider, projectId: string) => void;
   onHideAgent?: (agent: Project) => void;
+  onUnhideAgent?: (agent: Project) => void;
+  onUnhideKey?: (key: string) => void;
   t: TFunction;
 };
+
+/** Title portion of a stable agent key (`account␟title` | `title`). */
+function titleFromKey(key: string): string {
+  const sep = String.fromCharCode(0x1f);
+  const i = key.indexOf(sep);
+  return i >= 0 ? key.slice(i + 1) : key;
+}
 
 export default function AgentsList({
   agents,
   selectedSession,
   processingIds,
+  showHostLabels,
+  primaryLabel,
+  hiddenAgents = [],
+  orphanHiddenKeys = [],
   onSessionSelect,
   onHideAgent,
+  onUnhideAgent,
+  onUnhideKey,
   t,
 }: AgentsListProps) {
+  const [showHiddenList, setShowHiddenList] = useState(false);
+  const remoteHosts = useRemoteHosts();
+  const hiddenHosts = useHiddenHosts();
+
   const sorted = useMemo(
     () =>
       [...agents].sort((a, b) => {
@@ -39,68 +68,161 @@ export default function AgentsList({
     [agents],
   );
 
-  if (agents.length === 0) {
-    return (
-      <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-        {t('agents.empty', { defaultValue: 'No agents visible' })}
-      </p>
-    );
-  }
+  // Host-focus recovery: which currently-connected hosts (incl. the primary '')
+  // the user has focus-hidden. Stale keys for disconnected hosts are ignored.
+  const hiddenHostKeys = useMemo(() => {
+    const connected = new Set<string>(['', ...remoteHosts.map((h) => h.key)]);
+    return [...hiddenHosts].filter((k) => connected.has(k));
+  }, [hiddenHosts, remoteHosts]);
+
+  const hiddenAgentCount = hiddenAgents.length + orphanHiddenKeys.length;
 
   return (
     <div className="px-2 pb-2">
-      <div className="space-y-0.5">
-        {sorted.map((agent) => {
-          const session = agent.sessions?.[0];
-          if (!session) return null;
-          const isSelected = selectedSession?.id === session.id;
-          const isWorking = processingIds.has(session.id);
-          return (
-            <div
-              key={agent.projectId}
-              className={cn(
-                'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer',
-                isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
-              )}
-              onClick={() => onSessionSelect({ ...session, provider: 'claude' } as SessionWithProvider, agent.projectId)}
+      {/* Per-user focus recovery — hiding a login's agents is never a dead end. */}
+      {hiddenHostKeys.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-1 rounded-md bg-muted/40 px-2 py-1.5 text-[11px] text-muted-foreground">
+          <span className="mr-0.5">Hidden:</span>
+          {hiddenHostKeys.map((k) => (
+            <button
+              key={k || 'primary'}
+              type="button"
+              title="Show this user’s agents"
+              className="inline-flex items-center gap-1 rounded bg-background px-1.5 py-0.5 font-medium text-primary transition-colors hover:bg-primary/10"
+              onClick={() => toggleHostHidden(k)}
             >
-              {/* Liveliness: spinner while working, dot otherwise */}
-              {isWorking ? (
-                <span className="h-2 w-2 shrink-0 animate-spin rounded-full border border-primary border-t-transparent" />
-              ) : (
-                <span
-                  className={cn(
-                    'h-2 w-2 shrink-0 rounded-full',
-                    agent.remoteConnected ? 'bg-green-500' : 'bg-muted-foreground/40',
-                  )}
-                />
-              )}
-              <span className="truncate">{agent.displayName}</span>
-              {agent.remoteAccount ? (
-                <span className="ml-auto shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
-                  {agent.remoteAccount}
-                </span>
-              ) : null}
-              {onHideAgent ? (
-                <button
-                  type="button"
-                  title={t('agents.hide', { defaultValue: 'Remove from view' })}
-                  className={cn(
-                    'shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100',
-                    agent.remoteAccount ? '' : 'ml-auto',
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onHideAgent(agent);
-                  }}
+              <Eye className="h-3 w-3" />
+              {hostKeyLabel(k, primaryLabel)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {agents.length === 0 ? (
+        <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+          {t('agents.empty', { defaultValue: 'No agents visible' })}
+        </p>
+      ) : (
+        <div className="space-y-0.5">
+          {sorted.map((agent) => {
+            const session = agent.sessions?.[0];
+            if (!session) return null;
+            const isSelected = selectedSession?.id === session.id;
+            const isWorking = processingIds.has(session.id);
+            return (
+              <div
+                key={agent.projectId}
+                className={cn(
+                  'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer',
+                  isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
+                )}
+                onClick={() => onSessionSelect({ ...session, provider: 'claude' } as SessionWithProvider, agent.projectId)}
+              >
+                {/* Liveliness: spinner while working, dot otherwise */}
+                {isWorking ? (
+                  <span className="h-2 w-2 shrink-0 animate-spin rounded-full border border-primary border-t-transparent" />
+                ) : (
+                  <span
+                    className={cn(
+                      'h-2 w-2 shrink-0 rounded-full',
+                      agent.remoteConnected ? 'bg-green-500' : 'bg-muted-foreground/40',
+                    )}
+                  />
+                )}
+                <span className="truncate">{agent.displayName}</span>
+                {showHostLabels ? (
+                  <span className="shrink-0 rounded bg-primary/10 px-1 text-[10px] font-medium text-primary/80">
+                    {hostKeyLabel(agentHostKey(agent), primaryLabel)}
+                  </span>
+                ) : null}
+                {agent.remoteAccount ? (
+                  <span className="ml-auto shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                    {agent.remoteAccount}
+                  </span>
+                ) : null}
+                {onHideAgent ? (
+                  <button
+                    type="button"
+                    title={t('agents.hide', { defaultValue: 'Remove from view' })}
+                    className={cn(
+                      'shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100',
+                      agent.remoteAccount ? '' : 'ml-auto',
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onHideAgent(agent);
+                    }}
+                  >
+                    <EyeOff className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Per-agent recovery: reveal + restore individually-hidden agents. */}
+      {hiddenAgentCount > 0 && (
+        <div className="mt-1.5 border-t border-border/40 pt-1.5">
+          <button
+            type="button"
+            className="flex w-full items-center gap-1 px-1 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            aria-expanded={showHiddenList}
+            onClick={() => setShowHiddenList((v) => !v)}
+          >
+            {showHiddenList ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            {hiddenAgentCount} hidden {hiddenAgentCount === 1 ? 'agent' : 'agents'}
+            <span className="ml-1 text-muted-foreground/70">{showHiddenList ? '· hide list' : '· show'}</span>
+          </button>
+          {showHiddenList && (
+            <div className="mt-0.5 space-y-0.5">
+              {hiddenAgents.map((agent) => (
+                <div
+                  key={agent.projectId}
+                  className="group flex items-center gap-2 rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-accent/40"
                 >
-                  <EyeOff className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
+                  <EyeOff className="h-3 w-3 shrink-0 opacity-60" />
+                  <span className="truncate">{agent.displayName}</span>
+                  {agent.remoteAccount ? (
+                    <span className="ml-auto shrink-0 rounded bg-muted px-1 text-[10px]">{agent.remoteAccount}</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    title="Restore to view"
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10',
+                      agent.remoteAccount ? '' : 'ml-auto',
+                    )}
+                    onClick={() => onUnhideAgent?.(agent)}
+                  >
+                    <Eye className="h-3 w-3" />
+                    Show
+                  </button>
+                </div>
+              ))}
+              {orphanHiddenKeys.map((key) => (
+                <div
+                  key={key}
+                  className="flex items-center gap-2 rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-accent/40"
+                >
+                  <EyeOff className="h-3 w-3 shrink-0 opacity-60" />
+                  <span className="truncate">{titleFromKey(key)}</span>
+                  <button
+                    type="button"
+                    title="Restore to view"
+                    className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10"
+                    onClick={() => onUnhideKey?.(key)}
+                  >
+                    <Eye className="h-3 w-3" />
+                    Show
+                  </button>
+                </div>
+              ))}
             </div>
-          );
-        })}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

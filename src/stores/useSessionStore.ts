@@ -10,6 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { authenticatedFetch } from '../utils/api';
+import { hostForSession } from '../utils/remoteHosts';
 import type { LLMProvider } from '../types/app';
 
 import { removeOptimisticUserEchoes } from './sessionMessageReconciliation';
@@ -446,7 +447,10 @@ export function useSessionStore() {
 
       const qs = params.toString();
       const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
-      const response = await authenticatedFetch(url);
+      // Route by session ownership so a peer-user/peer-host agent's transcript is
+      // fetched from the host that owns it, with THAT user's token — not the
+      // primary login (which may be scoped out of the agent → empty history).
+      const response = await authenticatedFetch(url, {}, hostForSession(sessionId));
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -508,7 +512,10 @@ export function useSessionStore() {
     const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
 
     try {
-      const response = await authenticatedFetch(url);
+      // Route by session ownership so a peer-user/peer-host agent's transcript is
+      // fetched from the host that owns it, with THAT user's token — not the
+      // primary login (which may be scoped out of the agent → empty history).
+      const response = await authenticatedFetch(url, {}, hostForSession(sessionId));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.json();
       const data = body?.data ?? body;
@@ -624,7 +631,10 @@ export function useSessionStore() {
     const fetchTicket = ++slot._fetchSeq;
     try {
       const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
-      const response = await authenticatedFetch(url);
+      // Route by session ownership so a peer-user/peer-host agent's transcript is
+      // fetched from the host that owns it, with THAT user's token — not the
+      // primary login (which may be scoped out of the agent → empty history).
+      const response = await authenticatedFetch(url, {}, hostForSession(sessionId));
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.json();

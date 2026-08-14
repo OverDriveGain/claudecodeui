@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MutableRefObject } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { hostForSession } from '../../../utils/remoteHosts';
 import type { MarkSessionIdle, SessionActivityMap } from '../../../hooks/useSessionProtection';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -714,7 +715,8 @@ export function useChatSessionState({
       try {
         // The provider module resolves storage and provider details from the session id.
         const url = `/api/providers/sessions/${encodeURIComponent(selectedSession.id)}/token-usage`;
-        const response = await authenticatedFetch(url);
+        // Route to the owning host/user (peer agents live on another login's scope).
+        const response = await authenticatedFetch(url, {}, hostForSession(selectedSession.id));
         if (response.ok) {
           const payload = await response.json();
           setTokenBudget(payload.data ?? null);

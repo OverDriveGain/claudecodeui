@@ -60,8 +60,9 @@ export function useHiddenAgents() {
     }
   }, []);
 
-  const unhideAgent = useCallback(async (project: HiddenAgentProject) => {
-    const key = agentDisplayKey(project);
+  // Restore by raw agent_key — used to recover an agent that is hidden but no
+  // longer in the live roster (so we can't reconstruct a project object for it).
+  const unhideKey = useCallback(async (key: string) => {
     if (!key) return;
     setHiddenKeys((prev) => {
       const next = new Set(prev);
@@ -80,5 +81,10 @@ export function useHiddenAgents() {
     }
   }, []);
 
-  return { hiddenKeys, isHidden, hideAgent, unhideAgent };
+  const unhideAgent = useCallback(
+    (project: HiddenAgentProject) => unhideKey(agentDisplayKey(project)),
+    [unhideKey],
+  );
+
+  return { hiddenKeys, isHidden, hideAgent, unhideAgent, unhideKey };
 }
