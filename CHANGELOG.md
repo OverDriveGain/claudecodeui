@@ -2,6 +2,17 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.7] — MyMu (2026-08-15)
+
+### New Features
+
+* **Live OpenCode agents (F7)** — attach to running OpenCode agents exactly like Claude relay agents, with the unchanged frontend: agents launched via `scripts/oc-agent-launch.sh` (stock `opencode serve` + a registration file) appear in the live roster with online/running state, stream their transcripts in real time, and can be driven from the chat — send, abort, tool-permission prompts answered from the UI, file attachments landing as real files on the agent's host, and slash commands (`/new`, `/clear`, `/compact`, `/abort`, `/help`, plus every command registered on the agent's server). Offline history is served from a MyMu-side event cache, so dead agents keep their transcripts. Nothing is added to opencode or the tenant; launch-time registration is the only requirement.
+
+### Bug Fixes
+
+* live-agent streams deduplicate subscriber writers by underlying socket (repeated sends no longer multiply streamed tokens)
+* empty live-agent conversations no longer show the provider-selection screen
+
 
 ## [1.37.0](https://github.com/siteboon/claudecodeui/compare/v1.36.3...v1.37.0) (2026-07-29)
 

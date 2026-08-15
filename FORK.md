@@ -94,6 +94,31 @@ never a blank, never a silent drop. Decided by Manar 2026-08-12.
   cross-host agent — they used to vanish while the loader showed success),
   `assets.routes.ts` (`uploadErrorMessage` — names the MB cap on oversize).
 
+### F7 — Live OpenCode agents (added 2026-08-15, shipped in 1.37.7)
+The second live harness beside the claude relay: attach to registered
+tenant-local `opencode serve` servers with the SAME frontend contract —
+stream, send, abort, permission prompts, slash commands, attachments,
+offline history. Zero changes inside the tenant or opencode itself; the only
+requirement is launch-time registration (analog of `--remote-control`).
+- **MyMu-owned files** (merge-clean): `server/remote-control/oc-client.js`
+  (engine: registry, SSE attach + reconnect, prompt_async send, abort,
+  permission reply, slash commands via `POST /session/:id/command`,
+  MyMu-side offline event cache `~/.cache/ccui-oc-events`, replay buffer,
+  fan-out deduped by underlying socket), `server/oc-channel.js` (adapter),
+  `scripts/oc-agent-launch.sh` (launch + registration).
+- **Marked touchpoints in upstream files**: `server/index.ts` (relay-deps mux
+  on the `ocs_` prefix), `chat-websocket.service.ts` (`ocs_` in
+  isRelaySession), `rc.service.ts` (roster/capture/cwd merge),
+  `sessions.service.ts` (ocs history branch),
+  `opencode-sessions.provider.ts` (`normalizeApiMessages` — API-row
+  normalizer shared by live + history), `provider.routes.ts` (running feed),
+  `incoming-files.ts` (ocs attachment landing from the registration file),
+  `remote-files.js` (delivered-path guard), `ChatMessagesPane.tsx` (no
+  provider picker on empty live-agent chats).
+- **Registration**: `OC_REGISTRY_DIR` (default `~/.cloudcli/opencode-agents`),
+  one JSON per agent `{name, port, host, cwd, user}`; session ids
+  `ocs_<agent>_<ses_…>`. Env: `OC_REGISTRY_DIR`, `OC_EVENTS_CACHE_DIR`.
+
 ## Conversation send/receive: what we touch (and nothing else)
 1. Relay detour in the chat gateway for `cse_` sessions (F1).
 2. Transcript normalizer merge in `claude-sessions.provider.ts` (injected/
