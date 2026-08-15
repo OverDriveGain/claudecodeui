@@ -181,6 +181,13 @@ function ChatMessagesPane({
           </div>
         </div>
       ) : chatMessages.length === 0 ? (
+        // MYMU: live agent sessions (relay cse_/session_, opencode ocs_) have no
+        // provider choice — the agent IS the harness. Showing the picker on an
+        // empty agent conversation (e.g. right after /new) is meaningless noise.
+        typeof currentSessionId === 'string'
+          && (currentSessionId.startsWith('cse_')
+            || currentSessionId.startsWith('session_')
+            || currentSessionId.startsWith('ocs_')) ? null : (
         <ProviderSelectionEmptyState
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -202,7 +209,7 @@ function ChatMessagesPane({
           onShowAllTasks={onShowAllTasks}
           setInput={setInput}
         />
-      ) : (
+      )) : (
         <>
           {/* Loading indicator for older messages (hide when load-all is active) */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
