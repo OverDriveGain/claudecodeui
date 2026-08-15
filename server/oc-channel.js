@@ -16,6 +16,7 @@ import {
   isOcSessionId,
 } from './remote-control/oc-client.js';
 import { isAgentCaptureAllowed } from './services/rc.service.js';
+import { landAttachments, fileReferralText } from './services/incoming-files.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerRegistry } from './modules/providers/provider.registry.js';
 import { createNormalizedMessage } from './shared/utils.js';
@@ -56,19 +57,27 @@ export async function queryOcChannel(command, options, writer) {
     }
     return;
   }
-  // Attachment landing (real files on the agent host) is a claude-relay feature
-  // for now; surface the gap loudly instead of dropping files silently.
-  const attachmentCount = (Array.isArray(opts.attachments) ? opts.attachments.length : 0)
-    + (Array.isArray(opts.images) ? opts.images.length : 0);
-  if (attachmentCount > 0 && writer) {
+  // Attachments land as REAL FILES on the agent's host (registration file gives
+  // owner + host) and the message refers the agent to the saved paths — same
+  // model as claude agents. If landing fails, say so LOUDLY; the text still goes.
+  let outCommand = command;
+  const verified = Array.isArray(opts.attachments) ? opts.attachments : [];
+  const legacyInline = (Array.isArray(opts.images) ? opts.images : []).filter(
+    (att) => att && typeof att.data === 'string' && !att.path,
+  );
+  const landed = await landAttachments(sessionId, [...verified, ...legacyInline]);
+  if (landed && landed.length > 0) {
+    outCommand = [command || '', fileReferralText(landed)].filter(Boolean).join('\n\n');
+  } else if ((verified.length > 0 || legacyInline.length > 0) && writer) {
+    const n = verified.length + legacyInline.length;
     writer.send(createNormalizedMessage({
       kind: 'error',
-      content: `Couldn't attach ${attachmentCount === 1 ? 'the file' : `${attachmentCount} files`} — file delivery to OpenCode agents isn't available yet. Your message was sent without ${attachmentCount === 1 ? 'it' : 'them'}.`,
+      content: `Couldn't attach ${n === 1 ? 'the file' : `${n} files`} to this agent — the write to its host failed. Your message was sent without ${n === 1 ? 'it' : 'them'}.`,
       sessionId,
       provider: 'opencode',
     }));
   }
-  return driveOcSession({ ws: writer, sessionId, command, normalize: normalizeOpenCode });
+  return driveOcSession({ ws: writer, sessionId, command: outCommand, normalize: normalizeOpenCode });
 }
 
 /** Read-only live mirror of an agent session (GUI opened the conversation). */

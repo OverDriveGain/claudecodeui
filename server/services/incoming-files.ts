@@ -23,6 +23,9 @@ import path from 'node:path';
 
 import { getGlobalImageAssetsDir } from '../shared/image-attachments.js';
 import { resolveLocalSession } from './local-sessions.js';
+// OpenCode agents: the registration file (name/port/cwd/user) is the local
+// ownership record — the exact analog of ~/.claude/sessions for bridge agents.
+import { isOcSessionId, parseOcId, listRegistrations } from '../remote-control/oc-client.js';
 import { writeFileAsUser } from './user-fs.js';
 
 /**
@@ -151,6 +154,29 @@ export async function landAttachments(
   if (decoded.length === 0) return null;
 
   try {
+    // OpenCode agent on this host: ownership comes from the registration file.
+    // Same landing model as claude — foreign linux user gets the file in ITS
+    // home written as that user; same-user agents use this user's uploads dir.
+    if (isOcSessionId(sessionId)) {
+      const parsed = parseOcId(sessionId);
+      const reg = parsed
+        ? (listRegistrations() as Array<{ name: string; user?: string | null }>).find((r) => r.name === parsed.agent)
+        : null;
+      if (!reg) return null;
+      const currentUser = os.userInfo().username;
+      const owner = reg.user && reg.user !== currentUser ? reg.user : null;
+      const out: LandedFile[] = [];
+      for (const d of decoded) {
+        if (d.buffer.length > MAX_INCOMING_FILE_BYTES) return null;
+        if (owner) {
+          const dir = path.join('/home', owner, '.claudecodeui', 'uploads', sessionSuffix(sessionId));
+          out.push({ name: d.name, path: await writeFileAsUser(owner, dir, sanitizeName(d.name), d.buffer) });
+        } else {
+          out.push({ name: d.name, path: await saveIncomingFile(sessionId, d.name, d.buffer) });
+        }
+      }
+      return out;
+    }
     // Same host only: write straight to disk. A session owned elsewhere returns
     // null and the caller embeds content blocks instead (cross-host paradigm TBD).
     const local = resolveLocalSession(sessionId);
