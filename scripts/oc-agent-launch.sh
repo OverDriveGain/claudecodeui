@@ -21,6 +21,9 @@ PORT="${3:-}"
 REG_DIR="${OC_REGISTRY_DIR:-$HOME/.cloudcli/opencode-agents}"
 
 [ -d "$CWD" ] || { echo "cwd not found: $CWD" >&2; exit 1; }
+# Registration must carry an absolute path — MyMu resolves the agent's file
+# browser and attachment root from it.
+CWD="$(cd "$CWD" && pwd)"
 mkdir -p "$REG_DIR"
 
 if [ -z "$PORT" ]; then
