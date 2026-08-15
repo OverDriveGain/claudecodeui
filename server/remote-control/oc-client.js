@@ -532,6 +532,103 @@ export async function emitOutstandingOcPermission(sessionId, ws) {
   }
 }
 
+// ── slash commands ───────────────────────────────────────────────────────────
+//
+// Typed `/name args` in the GUI. Session-management builtins are handled here
+// (opencode has no in-place /clear — a "new" session is a real new session on
+// the server; the agent's roster leaf rotates to it). Everything else is
+// resolved against the server's registered command list (GET /command) and
+// executed via POST /session/:id/command — its output streams over SSE like a
+// normal turn.
+
+function infoFrame(sessionId, text) {
+  return createNormalizedMessage({ kind: 'text', role: 'assistant', content: text, sessionId, provider: PROVIDER });
+}
+
+function completeFrame(sessionId, exitCode = 0) {
+  return createNormalizedMessage({ kind: 'complete', exitCode, sessionId, provider: PROVIDER });
+}
+
+async function handleOcSlashCommand({ ws, sessionId, parsed, reg, name, args }) {
+  const say = (text, exitCode = 0) => {
+    if (!ws) return;
+    ws.send(infoFrame(sessionId, text));
+    ws.send(completeFrame(sessionId, exitCode));
+  };
+
+  if (name === 'new' || name === 'clear') {
+    try {
+      const created = await ocRequest(reg, 'POST', '/session', { title: reg.name });
+      const newId = created && created.id ? makeOcId(reg.name, created.id) : null;
+      say(newId
+        ? 'Started a fresh session for this agent. Reopen the agent from the sidebar to continue in the new session (this view stays on the old conversation).'
+        : 'Session created, but the server returned no id.');
+    } catch (err) {
+      say(`Couldn't start a new session: ${err.message}`, 1);
+    }
+    return;
+  }
+
+  if (name === 'compact' || name === 'summarize') {
+    try {
+      // Long-running LLM work — don't hold the send; progress streams over SSE
+      // and session.idle emits the turn's `complete`.
+      void ocRequest(reg, 'POST', `/session/${encodeURIComponent(parsed.ses)}/summarize`, {}, { timeout: 10 * 60 * 1000 })
+        .catch((err) => {
+          const entry = activeOcSessions.get(sessionId);
+          if (entry) emitFrame(entry, createNormalizedMessage({ kind: 'error', content: `compact failed: ${err.message}`, sessionId, provider: PROVIDER }));
+          if (entry) emitFrame(entry, completeFrame(sessionId, 1));
+        });
+      const entry = sessionEntry(sessionId, { create: true });
+      entry.turnOpen = true;
+      if (ws) ws.send(infoFrame(sessionId, 'Compacting the session…'));
+    } catch (err) {
+      say(`Couldn't compact: ${err.message}`, 1);
+    }
+    return;
+  }
+
+  if (name === 'abort' || name === 'stop') {
+    abortOcSession(sessionId);
+    say('Abort sent.');
+    return;
+  }
+
+  // Registered commands (project/global opencode commands, MCP prompts, skills).
+  let commands = [];
+  try { commands = await ocRequest(reg, 'GET', '/command'); } catch { commands = []; }
+  const list = Array.isArray(commands) ? commands : [];
+
+  if (name === 'help' || name === 'commands') {
+    const builtin = '/new (alias /clear) — fresh session · /compact — summarize context · /abort — interrupt';
+    const registered = list.map((c) => `/${c.name}${c.description ? ` — ${c.description}` : ''}`).join('\n');
+    say(`Available commands:\n${builtin}${registered ? `\n${registered}` : ''}`);
+    return;
+  }
+
+  const match = list.find((c) => c && c.name === name);
+  if (!match) {
+    const known = list.map((c) => `/${c.name}`).join(' ');
+    say(`Unknown opencode command /${name}. Built-ins: /new /clear /compact /abort /help.${known ? ` Registered: ${known}` : ''}`, 1);
+    return;
+  }
+
+  // Real command run = a full LLM turn; fire it and let SSE stream the output
+  // (session.idle ends the turn). Failures surface on the live stream.
+  void ocRequest(reg, 'POST', `/session/${encodeURIComponent(parsed.ses)}/command`,
+    { command: name, ...(args ? { arguments: args } : {}) },
+    { timeout: 10 * 60 * 1000 })
+    .catch((err) => {
+      const entry = activeOcSessions.get(sessionId);
+      if (entry) {
+        emitFrame(entry, createNormalizedMessage({ kind: 'error', content: `/${name} failed: ${err.message}`, sessionId, provider: PROVIDER }));
+        emitFrame(entry, completeFrame(sessionId, 1));
+      }
+    });
+  const entry = sessionEntry(sessionId, { create: true });
+  entry.turnOpen = true;
+}
+
 /** Send one user turn to the agent's own queue (fire-and-forget on the server). */
 export async function driveOcSession({ ws, sessionId, command, normalize }) {
   const parsed = parseOcId(sessionId);
@@ -546,6 +643,16 @@ export async function driveOcSession({ ws, sessionId, command, normalize }) {
   // Bind the stream FIRST so the turn's frames land on this writer.
   await attachOcSession(sessionId, ws, normalize);
   if (ws) ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: sessionId, sessionId, provider: PROVIDER }));
+  // Slash command? (/new, /clear, /compact, /abort, /help, or a registered command)
+  const slash = /^\/([A-Za-z0-9:_-]+)[ \t]*([\s\S]*)$/.exec((command || '').trim());
+  if (slash) {
+    await handleOcSlashCommand({
+      ws, sessionId, parsed, reg,
+      name: slash[1].toLowerCase(),
+      args: slash[2].trim(),
+    });
+    return;
+  }
   try {
     await ocRequest(reg, 'POST', `/session/${encodeURIComponent(parsed.ses)}/prompt_async`, {
       parts: [{ type: 'text', text: command || '' }],
