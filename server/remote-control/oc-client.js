@@ -486,7 +486,16 @@ export async function attachOcSession(sessionId, ws, normalize) {
   if (!parsed) throw new Error(`not an opencode session id: ${sessionId}`);
   const entry = sessionEntry(sessionId, { create: true });
   if (normalize) entry.normalize = normalize;
-  if (ws) entry.writers.add(ws);
+  if (ws) {
+    // Dedup by UNDERLYING connection, not wrapper identity: every chat run
+    // wraps the same browser socket in a fresh writer object, so identity
+    // dedup accumulates one writer per message sent and each SSE delta fans
+    // out N times to the same socket (the "AppApprecireciateate" bug).
+    for (const w of entry.writers) {
+      if (w.ws && ws.ws && w.ws === ws.ws) entry.writers.delete(w);
+    }
+    entry.writers.add(ws);
+  }
   const state = ocUpstreams.get(parsed.agent);
   if (state) state.sessions.add(sessionId); else ocUpstreams.set(parsed.agent, { req: null, alive: false, retries: 0, sessions: new Set([sessionId]) });
   ensureUpstream(parsed.agent);
