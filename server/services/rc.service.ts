@@ -14,6 +14,16 @@ import {
   hasMultipleAccounts,
   getAccountErrors,
 } from '@/remote-control/rc-client.js';
+// Live OpenCode agents (tenant-local `opencode serve` servers) merge into the
+// same roster so capture policy, per-user filtering, and every GUI surface
+// treat both harnesses identically.
+import {
+  listOcAgents,
+  isOcSessionId,
+  parseOcId,
+  getOcSessionCwd,
+  getOcAccountErrors,
+} from '@/remote-control/oc-client.js';
 import { currentAgentAllow } from '@/services/user-context.js';
 import { resolveLocalSessionCwd } from '@/services/local-sessions.js';
 
@@ -127,9 +137,29 @@ let agentCache: { at: number; value: RemoteAgent[]; sessions: RemoteAgent[] } | 
  * momentarily down.
  */
 export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAgent[]> {
-  if (!remoteControlEnabled()) return [];
   const now = Date.now();
   if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return filterByUser(agentCache.value);
+  // OpenCode agents (local registrations) join the roster regardless of whether
+  // the claude relay is configured — either harness alone is a valid deployment.
+  let ocValue: Array<RemoteAgent & { active: boolean }> = [];
+  try {
+    ocValue = (await listOcAgents())
+      .filter((a) => a.id && captureAllows(cleanAgentTitle(a.title)))
+      .map((a) => ({
+        id: a.id,
+        title: cleanAgentTitle(a.title) || a.title,
+        connected: Boolean(a.connected && a.active),
+        active: Boolean(a.active),
+        running: Boolean(a.running),
+        repo: a.repo ?? null,
+        lastEventAt: a.lastEventAt,
+        createdAt: a.createdAt,
+      }));
+  } catch { /* registry unreadable → claude-only roster */ }
+  if (!remoteControlEnabled()) {
+    agentCache = { at: now, value: ocValue, sessions: ocValue };
+    return filterByUser(ocValue);
+  }
   try {
     const raw = await listAgents();
     // Only expose the account label when the deployment actually runs >1 account —
@@ -176,13 +206,14 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
     // (connected AND active) so the GUI's online dot reflects "can I message it".
     const value = [...byKey.values()]
       .map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title, connected: a.connected && a.active }))
+      .concat(ocValue)
       .sort((a, b) =>
         String(b.lastEventAt ?? '').localeCompare(String(a.lastEventAt ?? '')),
       );
     agentCache = {
       at: now,
       value,
-      sessions: mapped.map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title })),
+      sessions: mapped.map((a) => ({ ...a, title: cleanAgentTitle(a.title) || a.title })).concat(ocValue),
     };
     return filterByUser(value);
   } catch {
@@ -197,6 +228,12 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
 export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean> {
   const agents = await listRemoteAgents(); // refreshes the cache (TTL-guarded)
   if (agents.some((a) => a.id === sessionId)) return true;
+  // OpenCode: the policy is per-agent — any session of a visible agent (older
+  // conversations on the same server) stays browsable/drivable.
+  if (isOcSessionId(sessionId)) {
+    const parsed = parseOcId(sessionId);
+    return Boolean(parsed && agents.some((a) => a.title === parsed.agent));
+  }
   // Not the current leaf — allow any OTHER session of a visible agent too (same
   // capture + per-user title filters). An agent restart rotates the leaf id; views
   // still open on the previous session must keep browsing/driving it.
@@ -211,6 +248,15 @@ export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean>
  */
 export async function getRemoteAgentCwd(sessionId: string): Promise<string | null> {
   if (!sessionId || !(await isAgentCaptureAllowed(sessionId))) return null;
+  // OpenCode agents: cwd comes from the registration file (or the session's
+  // own directory on the live server) — no relay involved.
+  if (isOcSessionId(sessionId)) {
+    try {
+      return (await getOcSessionCwd(sessionId)) || null;
+    } catch {
+      return null;
+    }
+  }
   // Prefer claude's own per-host session registry (~/.claude/sessions/*.json): it
   // holds the real cwd for a bridge session, which the relay reports as empty. This
   // resolves any agent running on THIS host with no relay round-trip. Cross-host
@@ -235,9 +281,14 @@ export type AccountError = { label: string; status: number; message: string };
  * (that exact silence cost a day on the 2026-07-22 box outage).
  */
 export function listAccountErrors(): AccountError[] {
+  let errors: AccountError[] = [];
   try {
-    return (getAccountErrors() as AccountError[]) ?? [];
+    errors = (getAccountErrors() as AccountError[]) ?? [];
   } catch {
-    return [];
+    errors = [];
   }
+  try {
+    errors = errors.concat((getOcAccountErrors() as AccountError[]) ?? []);
+  } catch { /* oc registry probe errors unavailable */ }
+  return errors;
 }

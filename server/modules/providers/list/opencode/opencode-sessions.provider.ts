@@ -363,6 +363,57 @@ export class OpenCodeSessionsProvider implements IProviderSessions {
     }
   }
 
+  /**
+   * Normalizes message rows in the shape the `opencode serve` HTTP API returns
+   * (`GET /session/:id/message` → `[{ info, parts }]`) — used by the live
+   * agent-attach path (oc-client), which has no access to the tenant's sqlite.
+   * Reuses normalizeHistoryRows so live agents render exactly like local
+   * OpenCode sessions.
+   */
+  normalizeApiMessages(rows: unknown[], sessionId: string): NormalizedMessage[] {
+    const historyRows: OpenCodeHistoryRow[] = [];
+    for (const raw of Array.isArray(rows) ? rows : []) {
+      const row = readObjectRecord(raw);
+      const info = readObjectRecord(row?.info);
+      const messageId = readOptionalString(info?.id);
+      if (!info || !messageId) {
+        continue;
+      }
+      const infoTime = readObjectRecord(info.time);
+      const messageTime = typeof infoTime?.created === 'number' ? infoTime.created : null;
+      const parts = Array.isArray(row?.parts) ? row.parts : [];
+      if (parts.length === 0) {
+        historyRows.push({
+          message_id: messageId,
+          message_time_created: messageTime,
+          message_data: JSON.stringify(info),
+          part_id: null,
+          part_time_created: null,
+          part_data: null,
+        });
+        continue;
+      }
+      for (const partRaw of parts) {
+        const part = readObjectRecord(partRaw);
+        if (!part) {
+          continue;
+        }
+        const partTime = readObjectRecord(part.time);
+        historyRows.push({
+          message_id: messageId,
+          message_time_created: messageTime,
+          message_data: JSON.stringify(info),
+          part_id: readOptionalString(part.id) ?? null,
+          part_time_created: typeof partTime?.start === 'number'
+            ? partTime.start
+            : (typeof partTime?.created === 'number' ? partTime.created : messageTime),
+          part_data: JSON.stringify(part),
+        });
+      }
+    }
+    return this.normalizeHistoryRows(historyRows, sessionId);
+  }
+
   private normalizeHistoryRows(rows: OpenCodeHistoryRow[], sessionId: string): NormalizedMessage[] {
     const normalized: NormalizedMessage[] = [];
     const emittedMessageErrors = new Set<string>();

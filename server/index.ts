@@ -64,6 +64,17 @@ import {
     abortRemoteSession,
     resolveRemotePermission,
 } from './rc-channel.js';
+// MYMU: live OpenCode agents — same frontend contract, different engine
+// (tenant-local `opencode serve` instead of Anthropic's relay). The mux below
+// routes `ocs_` session ids to the oc adapter and everything else to rc.
+import {
+    queryOcChannel,
+    subscribeOcChannel,
+    isOcSession,
+    isOcSessionId,
+    abortOcSession,
+    resolveOcPermission,
+} from './oc-channel.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -111,11 +122,19 @@ const agentRoutes = createAgentModule({
 // MYMU: wire the remote-control proxy into the chat gateway (root file may
 // import the rc-channel adapter directly; modules receive it injected).
 setRelayDependencies({
-    queryRemoteChannel,
-    subscribeRemoteChannel,
-    isRemoteSession,
-    abortRemoteSession,
-    resolveRemotePermission,
+    queryRemoteChannel: (command, options, writer) =>
+        isOcSessionId((options as { remoteControl?: string })?.remoteControl ?? '')
+            ? queryOcChannel(command, options, writer)
+            : queryRemoteChannel(command, options, writer),
+    subscribeRemoteChannel: (sessionId, writer) =>
+        isOcSessionId(sessionId)
+            ? subscribeOcChannel(sessionId, writer)
+            : subscribeRemoteChannel(sessionId, writer),
+    isRemoteSession: (sessionId) => isOcSession(sessionId) || isRemoteSession(sessionId),
+    abortRemoteSession: (sessionId) =>
+        isOcSessionId(sessionId) ? abortOcSession(sessionId) : abortRemoteSession(sessionId),
+    resolveRemotePermission: (requestId, decision) =>
+        resolveOcPermission(requestId, decision) || resolveRemotePermission(requestId, decision),
 });
 
 const wss = createWebSocketServer(server, {

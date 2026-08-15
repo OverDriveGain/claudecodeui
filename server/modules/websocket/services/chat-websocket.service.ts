@@ -41,7 +41,7 @@ export function setRelayDependencies(deps: RelayDependencies): void {
 }
 
 const isRelaySession = (id: string): boolean =>
-  id.startsWith('cse_') || (relay ? relay.isRemoteSession(id) : false);
+  id.startsWith('cse_') || id.startsWith('ocs_') || (relay ? relay.isRemoteSession(id) : false);
 
 /**
  * Trust boundary for client-supplied image attachments: chat.send options come

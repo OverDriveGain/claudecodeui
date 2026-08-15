@@ -355,6 +355,9 @@ async function resolveDeliveredPath(sessionId, requestedPath) {
     const resolved = path.isAbsolute(requestedPath)
         ? path.resolve(requestedPath)
         : (cwd ? path.resolve(cwd, requestedPath) : path.resolve(requestedPath));
+    // Delivered-file tracking derives from the claude relay event stream;
+    // OpenCode agent sessions have none, so never hit the relay with an ocs_ id.
+    if (sessionId.startsWith('ocs_')) return { delivered: false, resolved };
     const warm = await getSessionEventsCached(sessionId, { topUp: false }).catch(() => []);
     if (deriveDeliveredPaths(warm, cwd).has(resolved)) return { delivered: true, resolved };
     const fresh = await getSessionEventsCached(sessionId, { topUp: true }).catch(() => []);

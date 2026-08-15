@@ -14,6 +14,8 @@ import type {
 import { AppError } from '@/shared/utils.js';
 // Remote-control proxy — read-only history fetch for connected agent sessions.
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
+// Live OpenCode agents — history rows from the agent's own server / MyMu cache.
+import { getOcSessionRows } from '@/remote-control/oc-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
 import { deriveContextUsage, usageContextTokens } from '@/modules/providers/list/claude/claude-sessions.provider.js';
 import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isPathOwnedByLinuxUser } from '@/services/user-context.js';
@@ -239,6 +241,33 @@ export const sessionsService = {
     // limit/offset so opening an agent loads just the recent tail (fast) instead of
     // re-pulling the entire relay history on every open. "Load all" (limit === null)
     // returns everything from the warm cache.
+    // Live OpenCode agent session (ocs_…): rows come from the agent's own
+    // `opencode serve` server when reachable, else the MyMu-side event cache —
+    // normalized through the SAME code path as local OpenCode sqlite history.
+    if (sessionId.startsWith('ocs_')) {
+      if (!(await isAgentCaptureAllowed(sessionId))) {
+        return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
+      }
+      const limit = options.limit ?? null;
+      const offset = Math.max(0, options.offset ?? 0);
+      const rows = await getOcSessionRows(sessionId);
+      const provider = providerRegistry.resolveProvider('opencode').sessions as unknown as {
+        normalizeApiMessages(rows: unknown[], sessionId: string): NormalizedMessage[];
+      };
+      const normalized = provider.normalizeApiMessages(rows, sessionId);
+      const totalNormalized = normalized.length;
+      let total = 0;
+      for (const msg of normalized) {
+        if (msg.kind !== 'tool_result') total += 1;
+      }
+      if (limit === null) {
+        return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+      }
+      const start = Math.max(0, totalNormalized - offset - limit);
+      const end = Math.max(0, totalNormalized - offset);
+      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit };
+    }
+
     if (sessionId.startsWith('cse_') || sessionId.startsWith('session_')) {
       // Capture policy: don't serve history for an agent this deployment can't surface.
       if (!(await isAgentCaptureAllowed(sessionId))) {

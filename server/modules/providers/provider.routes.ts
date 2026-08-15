@@ -574,6 +574,12 @@ router.get(
       const agents = await listRemoteAgents();
       for (const agent of agents) {
         if (agent.running) {
+          // OpenCode agents have no relay event cache — running state alone
+          // drives the spinner (no startedAt).
+          if (agent.id.startsWith('ocs_')) {
+            sessions.push({ sessionId: agent.id, provider: 'opencode' });
+            continue;
+          }
           // True turn start from the warm event cache (no relay round-trip) so
           // the activity indicator shows real elapsed time for agents.
           let startedAt: number | undefined;
