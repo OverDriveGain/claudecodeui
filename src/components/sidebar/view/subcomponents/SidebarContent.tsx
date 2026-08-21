@@ -13,6 +13,7 @@ import { getAllSessions } from '../../utils/utils';
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
+import SidebarConversationsList from './SidebarConversationsList';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
   const parts: ReactNode[] = [];
@@ -614,6 +615,20 @@ export default function SidebarContent({
               ))}
             </div>
           )
+        ) : searchMode === 'conversations' ? (
+          /* MYMU: Conversations tab with an empty (or <2 char) search box — a flat
+             newest-first list of conversations; typing >=2 chars swaps in the
+             content search above (FORK.md F1). */
+          <SidebarConversationsList
+            projects={projectListProps.projects}
+            getProjectSessions={projectListProps.getProjectSessions}
+            selectedSession={projectListProps.selectedSession}
+            processingIds={new Set(projectListProps.activeSessions.keys())}
+            onSessionSelect={projectListProps.onSessionSelect}
+            currentTime={projectListProps.currentTime}
+            filter={searchFilter}
+            t={t}
+          />
         ) : (
           <SidebarProjectList {...projectListProps} />
         )}
