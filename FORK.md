@@ -119,6 +119,26 @@ requirement is launch-time registration (analog of `--remote-control`).
   one JSON per agent `{name, port, host, cwd, user}`; session ids
   `ocs_<agent>_<ses_…>`. Env: `OC_REGISTRY_DIR`, `OC_EVENTS_CACHE_DIR`.
 
+### F8 — Per-user model block-list (added 2026-08-21, shipped in 1.37.10)
+A named-per-user deny-list of models. Blocked models are hidden from that
+user's composer picker AND rejected at send time (before any run — no token
+spend), so the restriction is never UI-only. Opt-in per account via a single
+DB column; independent of `account_owner` (model cost-control is a separate
+axis from agent visibility — a block set on an operator still applies).
+- **MyMu-owned file** (merge-clean): `server/modules/mymu/model-policy.ts`
+  (pure: `parseModelDeny`, `effectiveModelDeny`, `isModelBlocked`).
+- **Marked touchpoints in upstream files**: `migrations.ts` + `users.ts`
+  (the `users.model_deny` column + `updateModelDeny`), `provider.routes.ts`
+  (`/:provider/models` trims the catalog per-user; DEFAULT falls back if
+  blocked), `chat-websocket.service.ts` (send-time reject → `MODEL_NOT_ALLOWED`
+  protocol error, surfaced via F6), `auth.middleware.ts` (WS auth carries
+  `model_deny`).
+- **Config**: `model_deny` = comma/space-separated model VALUES the account may
+  not use (`default,fable,sonnet,sonnet[1m],opus,opus[1m],haiku`); NULL/empty =
+  no restriction. Set by the operator directly (no client-facing editor — a
+  self-editable restriction is not a restriction). Relay/opencode live sessions
+  are not gated here (their model is chosen on the agent's own host).
+
 ## Conversation send/receive: what we touch (and nothing else)
 1. Relay detour in the chat gateway for `cse_` sessions (F1).
 2. Transcript normalizer merge in `claude-sessions.provider.ts` (injected/

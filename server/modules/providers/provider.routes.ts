@@ -12,13 +12,14 @@ import type {
   LLMProvider,
   McpScope,
   McpTransport,
+  ProviderModelsDefinition,
   ProviderSkillCreateFile,
   ProviderSkillCreateInput,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 // MYMU
-import { isLockdownEnabled } from '@/modules/mymu/index.js';
+import { isLockdownEnabled, effectiveModelDeny, isModelBlocked } from '@/modules/mymu/index.js';
 import { listRemoteAgents } from '@/services/rc.service.js';
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 import { deriveOpenTurn } from '@/modules/providers/services/sessions.service.js';
@@ -386,13 +387,47 @@ router.get(
   }),
 );
 
+/**
+ * Removes the requesting user's blocked models from the catalog so they never
+ * appear in the picker. Pure catalog trim — the shared model service keeps the
+ * full list for resolution/validation; only this client-facing response is
+ * filtered. If the DEFAULT itself is blocked, it falls back to the first model
+ * left standing.
+ */
+const applyUserModelDeny = (
+  models: ProviderModelsDefinition,
+  deny: string[],
+): ProviderModelsDefinition => {
+  if (deny.length === 0) {
+    return models;
+  }
+
+  const allowedOptions = models.OPTIONS.filter((option) => !isModelBlocked(option.value, deny));
+  if (allowedOptions.length === models.OPTIONS.length) {
+    return models;
+  }
+
+  const defaultStillAllowed = allowedOptions.some((option) => option.value === models.DEFAULT);
+  return {
+    ...models,
+    OPTIONS: allowedOptions,
+    DEFAULT: defaultStillAllowed
+      ? models.DEFAULT
+      : (allowedOptions[0]?.value ?? models.DEFAULT),
+  };
+};
+
 router.get(
   '/:provider/models',
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const bypassCache = parseOptionalBooleanQuery(req.query.bypassCache, 'bypassCache') ?? false;
     const result = await providerModelsService.getProviderModels(provider, { bypassCache });
-    res.json(createApiSuccessResponse({ provider, models: result.models, cache: result.cache }));
+    const authedUser = (req as Request & {
+      user?: { model_deny?: string | null };
+    }).user;
+    const models = applyUserModelDeny(result.models, effectiveModelDeny(authedUser));
+    res.json(createApiSuccessResponse({ provider, models, cache: result.cache }));
   }),
 );
 

@@ -469,6 +469,11 @@ export const runMigrations = (db: Database) => {
     // is substituted with the (strict-validated) agent name. NULL/empty = feature
     // off for this account. E.g. `spawn-agents {name}`.
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_start_cmd', 'TEXT DEFAULT NULL');
+    // Per-user model block-list. Comma/space-separated model VALUES this account
+    // may NOT use (e.g. `fable,opus,opus[1m]`). Enforced server-side: blocked
+    // models are hidden from this user's model picker AND rejected at send time.
+    // NULL/empty = no restriction. account_owner users are always exempt.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'model_deny', 'TEXT DEFAULT NULL');
     const hadAccountOwner = userColumnNames.includes('account_owner');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'account_owner', 'INTEGER NOT NULL DEFAULT 0');
     if (!hadAccountOwner) {

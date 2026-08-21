@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
-import { sessionsDb } from '@/modules/database/index.js';
+import { sessionsDb, userDb } from '@/modules/database/index.js';
 import { providerModelsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
@@ -21,7 +21,7 @@ import type {
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 // MYMU: per-user agent visibility on the chat socket (FORK.md S2)
-import { runWithUserContext, parseAgentAllow, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
+import { runWithUserContext, parseAgentAllow, effectiveAgentAllowRaw, effectiveLinuxUser, effectiveModelDeny, isModelBlocked } from '@/modules/mymu/index.js';
 // MYMU: live relay agents (FORK.md S1) — relay sessions (Anthropic `cse_` ids)
 // are driven over the remote-control proxy, injected by the server root (the
 // rc-channel adapter is a root file outside the module graph, like claude-sdk).
@@ -235,6 +235,28 @@ async function handleChatSend(
   if (!dependencies.runtime.hasRuntime(provider)) {
     sendProtocolError(ws, 'UNSUPPORTED_PROVIDER', `Provider "${provider}" is not available.`, sessionId);
     return;
+  }
+
+  // MYMU: per-user model block-list. A blocked model is refused before the run
+  // starts — this catches a hand-crafted request AND a session previously
+  // recorded with a now-blocked model, so the restriction is never picker-only.
+  // Owners are exempt (effectiveModelDeny returns []). Relay sessions are not
+  // checked here: their model is chosen on the agent's own host.
+  const modelDeny = effectiveModelDeny(userId == null ? null : userDb.getUserById(Number(userId)));
+  if (modelDeny.length > 0) {
+    const requestedRaw = (data.options as AnyRecord | undefined)?.model;
+    const requestedModel = typeof requestedRaw === 'string' && requestedRaw.trim()
+      ? requestedRaw.trim()
+      : (session.model ?? '');
+    if (isModelBlocked(requestedModel, modelDeny)) {
+      sendProtocolError(
+        ws,
+        'MODEL_NOT_ALLOWED',
+        `Model "${requestedModel}" is not available on your account.`,
+        sessionId,
+      );
+      return;
+    }
   }
 
   const run = chatRunRegistry.startRun({

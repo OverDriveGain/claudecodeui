@@ -29,11 +29,14 @@ type UserRow = {
   // Per-tenant command template to bring an offline agent online (run as
   // linux_user; `{name}` substituted). NULL/empty = feature off.
   agent_start_cmd: string | null;
+  // Per-user model block-list: comma/space-separated model values this account
+  // may NOT use. NULL/empty = no restriction. Owners are exempt.
+  model_deny: string | null;
 };
 
 type UserPublicRow = Pick<
   UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'linux_user' | 'account_owner' | 'agent_start_cmd'
+  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny'
 >;
 
 type UserGitConfig = {
@@ -98,7 +101,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -108,7 +111,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },
@@ -170,6 +173,17 @@ export const userDb = {
     const db = getConnection();
     const value = typeof cmd === 'string' && cmd.trim() ? cmd.trim() : null;
     db.prepare('UPDATE users SET agent_start_cmd = ? WHERE id = ?').run(value, userId);
+  },
+
+  /**
+   * Sets (or clears, with null/empty) the user's model block-list. Stored as a
+   * comma-separated string of model values the account may NOT use. Owners are
+   * exempt at enforcement time regardless of what is stored here.
+   */
+  updateModelDeny(userId: number, deny: string | null): void {
+    const db = getConnection();
+    const value = typeof deny === 'string' && deny.trim() ? deny.trim() : null;
+    db.prepare('UPDATE users SET model_deny = ? WHERE id = ?').run(value, userId);
   },
 
   /** Returns true if the user has finished the onboarding flow. */

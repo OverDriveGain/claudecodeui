@@ -2,6 +2,12 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.10] — MyMu (2026-08-21)
+
+### New Features
+
+* **Per-user model block-list (F8)** — the operator can bar specific models for a given account. Blocked models disappear from that user's composer model picker and are rejected server-side at send time (before any run starts, so no tokens are spent) — the restriction is never UI-only, and it also catches a session already set to a now-blocked model. Opt-in per account via the `users.model_deny` column (comma/space-separated model values); independent of operator status, so a block set on an `account_owner` still applies. Live relay/OpenCode sessions are unaffected (their model is chosen on the agent's own host).
+
 ## [1.37.7] — MyMu (2026-08-15)
 
 ### New Features

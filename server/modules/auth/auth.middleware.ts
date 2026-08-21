@@ -135,6 +135,7 @@ const authenticateWebSocket = (token) => {
           agent_allow: user.agent_allow,
           linux_user: user.linux_user,
           account_owner: user.account_owner,
+          model_deny: user.model_deny,
         };
       }
       return null;
@@ -163,6 +164,7 @@ const authenticateWebSocket = (token) => {
       agent_allow: user.agent_allow,
       linux_user: user.linux_user,
       account_owner: user.account_owner,
+      model_deny: user.model_deny,
     };
   } catch (error) {
     if (!(error instanceof jwt.TokenExpiredError)) {
