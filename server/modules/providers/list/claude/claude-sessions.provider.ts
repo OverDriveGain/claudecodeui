@@ -135,7 +135,8 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
  * Reads the tail of a JSONL transcript without parsing the whole file.
  *
  * Walks the file backward in chunks, parsing lines newest-first, and stops once
- * it has collected at least `minEntries` rows belonging to `sessionId` (or it
+ * it has collected at least `minEntries` rows belonging to `providerSessionId`
+ * (the id the JSONL rows carry on disk, NOT the app session id) — or it
  * reaches the start of the file). This keeps "open a conversation" cheap even
  * for multi-megabyte transcripts — the full read only happens for an explicit
  * "Load all" request.
@@ -146,7 +147,7 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
  */
 async function readSessionTailEntries(
   jsonLPath: string,
-  sessionId: string,
+  providerSessionId: string,
   minEntries: number,
 ): Promise<{ entries: AnyRecord[]; reachedStart: boolean }> {
   // Foreign-owned transcript: no fd access as the service user — read the whole
@@ -158,7 +159,7 @@ async function readSessionTailEntries(
       if (!line.trim()) continue;
       try {
         const entry = JSON.parse(line) as AnyRecord;
-        if (entry.sessionId === sessionId) all.push(entry);
+        if (entry.sessionId === providerSessionId) all.push(entry);
       } catch { /* skip malformed */ }
     }
     const tail = all.slice(-minEntries);
@@ -199,7 +200,7 @@ async function readSessionTailEntries(
         }
         try {
           const entry = JSON.parse(line) as AnyRecord;
-          if (entry.sessionId === sessionId) {
+          if (entry.sessionId === providerSessionId) {
             collected.push(entry);
           }
         } catch {
@@ -271,6 +272,7 @@ async function enrichWithSubagentTools(
 async function getSessionTail(
   sessionId: string,
   minEntries: number,
+  providerSessionId: string = sessionId,
 ): Promise<{ messages: AnyRecord[]; reachedStart: boolean }> {
   const jsonLPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
   if (!jsonLPath) {
@@ -281,7 +283,7 @@ async function getSessionTail(
   const files = await readdirMaybeSudo(projectDir);
   const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
-  const { entries, reachedStart } = await readSessionTailEntries(jsonLPath, sessionId, minEntries);
+  const { entries, reachedStart } = await readSessionTailEntries(jsonLPath, providerSessionId, minEntries);
   const messages = await enrichWithSubagentTools(entries, projectDir, agentFiles);
   return { messages, reachedStart };
 }
@@ -1155,7 +1157,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         // multi-block) and drops others (tool_result), so raw count != message
         // count. The 4x + 64 budget reliably yields >= the requested window.
         const budget = (normalizedOffset + normalizedLimit) * 4 + 64;
-        const { messages: rawTail, reachedStart } = await getSessionTail(sessionId, budget);
+        // The DB row is keyed by the app-facing session id, but the JSONL rows on
+        // disk carry the provider-native id — filter the tail by the latter (as the
+        // full-read path does), else a session whose app id != provider id (renamed/
+        // resumed/re-synced) opens EMPTY even though its transcript is intact.
+        const providerSessionId = options.providerSessionId ?? sessionId;
+        const { messages: rawTail, reachedStart } = await getSessionTail(sessionId, budget, providerSessionId);
         const normalized = this.normalizeRawMessages(rawTail, sessionId);
 
         const totalNormalized = normalized.length;
