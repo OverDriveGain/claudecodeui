@@ -8,7 +8,7 @@ import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWit
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
 // MYMU
-import { isLockdownEnabled } from '@/modules/mymu/index.js';
+import { isLockdownEnabled, startAgentForTenant, TenantExecError } from '@/modules/mymu/index.js';
 // MYMU: live relay agents roster (FORK.md S1)
 import { listRemoteAgents, listAccountErrors } from '@/services/rc.service.js';
 // MYMU
@@ -142,6 +142,30 @@ router.get(
     }
     res.setHeader('Cache-Control', 'no-store');
     res.json({ agents, accountErrors });
+  }),
+);
+
+// MYMU: Bring an OFFLINE agent online by running this account's configured
+// start command (users.agent_start_cmd, e.g. `spawn-agents {name}`) AS the
+// account's linux_user. The client only names the agent; the command template
+// is server-side per-tenant config (Settings → Agents). Never exposes a raw
+// shell to the client.
+router.post(
+  '/agent-start',
+  asyncHandler(async (req, res) => {
+    const uid = Number((req as express.Request & { user?: { id?: number } }).user?.id);
+    const name = typeof req.body?.name === 'string' ? req.body.name : '';
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await startAgentForTenant(uid, name);
+      res.status(result.ok ? 200 : 502).json(result);
+    } catch (err) {
+      if (err instanceof TenantExecError) {
+        res.status(err.statusCode).json({ ok: false, error: err.message });
+        return;
+      }
+      throw err;
+    }
   }),
 );
 

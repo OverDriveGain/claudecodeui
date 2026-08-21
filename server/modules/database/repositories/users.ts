@@ -26,11 +26,14 @@ type UserRow = {
   // deployment surfaces.
   linux_user: string | null;
   account_owner: number;
+  // Per-tenant command template to bring an offline agent online (run as
+  // linux_user; `{name}` substituted). NULL/empty = feature off.
+  agent_start_cmd: string | null;
 };
 
 type UserPublicRow = Pick<
   UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'linux_user' | 'account_owner'
+  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'linux_user' | 'account_owner' | 'agent_start_cmd'
 >;
 
 type UserGitConfig = {
@@ -95,7 +98,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -105,7 +108,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },
@@ -149,6 +152,24 @@ export const userDb = {
     return db
       .prepare('SELECT username, linux_user FROM users WHERE is_active = 1')
       .all() as Array<{ username: string; linux_user: string | null }>;
+  },
+
+  /**
+   * The per-tenant "bring an offline agent online" command template, plus the
+   * linux_user it should run as. Returns null command when the feature is off.
+   */
+  getAgentStartConfig(userId: number): { agent_start_cmd: string | null; linux_user: string | null } | undefined {
+    const db = getConnection();
+    return db
+      .prepare('SELECT agent_start_cmd, linux_user FROM users WHERE id = ? AND is_active = 1')
+      .get(userId) as { agent_start_cmd: string | null; linux_user: string | null } | undefined;
+  },
+
+  /** Stores (or clears, with null/empty) the user's offline-agent start command. */
+  updateAgentStartCmd(userId: number, cmd: string | null): void {
+    const db = getConnection();
+    const value = typeof cmd === 'string' && cmd.trim() ? cmd.trim() : null;
+    db.prepare('UPDATE users SET agent_start_cmd = ? WHERE id = ?').run(value, userId);
   },
 
   /** Returns true if the user has finished the onboarding flow. */

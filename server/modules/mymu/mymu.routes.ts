@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 import express, { type Request, type Response } from 'express';
 
+import { authenticateToken } from '@/modules/auth/index.js';
+import { userDb } from '@/modules/database/index.js';
+
 const router = express.Router();
+
+type AuthedRequest = Request & { user?: { id?: number } };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // dist-server/server/modules/mymu → app root is four levels up at runtime.
@@ -36,6 +41,26 @@ router.get('/version', (_req: Request, res: Response) => {
     versionInfoCache = { name: 'MyMu', version, builtAt, bundle };
   }
   res.json(versionInfoCache);
+});
+
+/**
+ * Per-tenant "bring an offline agent online" command (Settings → Agents).
+ * A shell template run AS this account's linux_user when a user clicks an
+ * offline agent; `{name}` is substituted with the agent name. Empty = off.
+ */
+router.get('/agent-start-command', authenticateToken, (req: Request, res: Response) => {
+  const uid = Number((req as AuthedRequest).user?.id);
+  const cfg = userDb.getAgentStartConfig(uid);
+  res.json({ command: cfg?.agent_start_cmd ?? null, linuxUser: cfg?.linux_user ?? null });
+});
+
+router.put('/agent-start-command', authenticateToken, (req: Request, res: Response) => {
+  const uid = Number((req as AuthedRequest).user?.id);
+  const raw = (req.body ?? {}).command;
+  const command = typeof raw === 'string' ? raw : null;
+  userDb.updateAgentStartCmd(uid, command);
+  const cfg = userDb.getAgentStartConfig(uid);
+  res.json({ command: cfg?.agent_start_cmd ?? null, linuxUser: cfg?.linux_user ?? null });
 });
 
 export default router;

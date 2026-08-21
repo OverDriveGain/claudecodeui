@@ -44,6 +44,17 @@ const isRelaySession = (id: string): boolean =>
   id.startsWith('cse_') || id.startsWith('ocs_') || (relay ? relay.isRemoteSession(id) : false);
 
 /**
+ * MYMU hook: fires once each time a user opens a LIVE AGENT conversation
+ * (`chat.subscribe` for a relay/OpenCode session). Intentionally empty — a
+ * systematic extension point for per-open side effects (e.g. bring an offline
+ * agent online, telemetry, presence). Must never throw and must stay cheap;
+ * the subscribe path is latency-sensitive.
+ */
+export function onLiveAgentConversationOpened(_sessionId: string): void {
+  // no-op (stub)
+}
+
+/**
  * Trust boundary for client-supplied image attachments: chat.send options come
  * straight from the browser, and the provider runtimes read the referenced
  * files off disk (Claude base64-encodes them into the prompt). Only images
@@ -366,6 +377,7 @@ function handleChatSubscribe(
     // deliberately omitted — the agent-status poll is authoritative there and
     // a wrong `false` in this ack would fight the client's loader.
     if (isRelaySession(sessionId)) {
+      onLiveAgentConversationOpened(sessionId);
       void relay?.subscribeRemoteChannel(sessionId, new WebSocketWriter(ws, null));
       (new WebSocketWriter(ws, null)).send({ kind: 'chat_subscribed', sessionId });
       continue;

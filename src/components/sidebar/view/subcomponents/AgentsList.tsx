@@ -1,13 +1,14 @@
 // MYMU: the live-agents tab (FORK.md F1) — every row is one running `claude
 // --remote-control` session surfaced by the relay; clicking opens its
 // conversation through the exact same session-select flow project sessions use.
-import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Eye, EyeOff, Play } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import type { Project, ProjectSession } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { cn } from '../../../../lib/utils';
+import { api } from '../../../../utils/api';
 import { useRemoteHosts } from '../../../../utils/remoteHosts';
 import { agentHostKey, hostKeyLabel, toggleHostHidden, useHiddenHosts } from '../../../../utils/hostFocus';
 
@@ -53,8 +54,37 @@ export default function AgentsList({
   t,
 }: AgentsListProps) {
   const [showHiddenList, setShowHiddenList] = useState(false);
+  const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
+  const [startError, setStartError] = useState<Record<string, string>>({});
   const remoteHosts = useRemoteHosts();
   const hiddenHosts = useHiddenHosts();
+
+  // Bring an offline agent online via this account's configured start command,
+  // run on the host that owns the agent. Spinner stays until the roster poll
+  // flips remoteConnected; failures surface inline under the row.
+  const handleStart = useCallback(async (agent: Project) => {
+    const id = agent.projectId;
+    const name = (agent.displayName || '').trim();
+    if (!name || starting.has(id)) return;
+    setStartError((prev) => { const next = { ...prev }; delete next[id]; return next; });
+    setStarting((prev) => new Set(prev).add(id));
+    const host = remoteHosts.find((h) => h.key === agentHostKey(agent)) ?? null;
+    try {
+      const res = await api.startAgent(name, host);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body?.ok === false) {
+        const msg = body?.error || body?.stderr || `Start failed (${res.status})`;
+        setStartError((prev) => ({ ...prev, [id]: String(msg).trim().slice(0, 300) }));
+      }
+    } catch (err) {
+      setStartError((prev) => ({ ...prev, [id]: err instanceof Error ? err.message : 'Start failed' }));
+    } finally {
+      // Clear the local spinner after a grace window; the roster poll takes over.
+      setTimeout(() => {
+        setStarting((prev) => { const next = new Set(prev); next.delete(id); return next; });
+      }, 8000);
+    }
+  }, [remoteHosts, starting]);
 
   const sorted = useMemo(
     () =>
@@ -109,17 +139,20 @@ export default function AgentsList({
             if (!session) return null;
             const isSelected = selectedSession?.id === session.id;
             const isWorking = processingIds.has(session.id);
+            const isOffline = !agent.remoteConnected;
+            const isStarting = starting.has(agent.projectId);
+            const err = startError[agent.projectId];
             return (
+              <div key={agent.projectId}>
               <div
-                key={agent.projectId}
                 className={cn(
                   'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer',
                   isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
                 )}
                 onClick={() => onSessionSelect({ ...session, provider: 'claude' } as SessionWithProvider, agent.projectId)}
               >
-                {/* Liveliness: spinner while working, dot otherwise */}
-                {isWorking ? (
+                {/* Liveliness: spinner while working/starting, dot otherwise */}
+                {isWorking || isStarting ? (
                   <span className="h-2 w-2 shrink-0 animate-spin rounded-full border border-primary border-t-transparent" />
                 ) : (
                   <span
@@ -140,13 +173,33 @@ export default function AgentsList({
                     {agent.remoteAccount}
                   </span>
                 ) : null}
+                {isOffline ? (
+                  <button
+                    type="button"
+                    title={t('agents.start', { defaultValue: 'Start this agent' })}
+                    disabled={isStarting}
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50',
+                      agent.remoteAccount || onHideAgent ? '' : 'ml-auto',
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleStart(agent);
+                    }}
+                  >
+                    <Play className="h-3 w-3" />
+                    {isStarting
+                      ? t('agents.starting', { defaultValue: 'Starting…' })
+                      : t('agents.start', { defaultValue: 'Start' })}
+                  </button>
+                ) : null}
                 {onHideAgent ? (
                   <button
                     type="button"
                     title={t('agents.hide', { defaultValue: 'Remove from view' })}
                     className={cn(
                       'shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100',
-                      agent.remoteAccount ? '' : 'ml-auto',
+                      !agent.remoteAccount && !isOffline ? 'ml-auto' : '',
                     )}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -156,6 +209,10 @@ export default function AgentsList({
                     <EyeOff className="h-3.5 w-3.5" />
                   </button>
                 ) : null}
+              </div>
+              {err ? (
+                <p className="break-words px-2 pb-1 text-[11px] leading-snug text-destructive">{err}</p>
+              ) : null}
               </div>
             );
           })}

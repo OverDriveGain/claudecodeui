@@ -170,6 +170,18 @@ export const api = {
   agentStatusFor: (host) => authenticatedFetch('/api/projects/agent-status', {}, host),
   archivedProjects: () => authenticatedFetch('/api/projects/archived'),
   agentStatus: () => authenticatedFetch('/api/projects/agent-status'),
+  // Bring an offline agent online: runs this account's configured start command
+  // (Settings → Agents) as its linux_user, on the host that owns the agent.
+  startAgent: (name, host) => authenticatedFetch('/api/projects/agent-start', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  }, host),
+  // Per-tenant "start offline agent" command template (`{name}` substituted).
+  getAgentStartCommand: () => authenticatedFetch('/api/agent-start-command'),
+  setAgentStartCommand: (command) => authenticatedFetch('/api/agent-start-command', {
+    method: 'PUT',
+    body: JSON.stringify({ command }),
+  }),
   projectSessions: (projectId, { limit = 20, offset = 0 } = {}) => {
     const params = new URLSearchParams();
     params.set('limit', String(limit));

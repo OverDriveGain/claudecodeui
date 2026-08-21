@@ -464,6 +464,11 @@ export const runMigrations = (db: Database) => {
     // set it explicitly), and `account_owner` marks the operator role that sees
     // every agent the deployment surfaces.
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'linux_user', 'TEXT DEFAULT NULL');
+    // Per-tenant "bring an offline agent online" command. A shell template run
+    // AS this account's linux_user when the user clicks an offline agent; `{name}`
+    // is substituted with the (strict-validated) agent name. NULL/empty = feature
+    // off for this account. E.g. `spawn-agents {name}`.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_start_cmd', 'TEXT DEFAULT NULL');
     const hadAccountOwner = userColumnNames.includes('account_owner');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'account_owner', 'INTEGER NOT NULL DEFAULT 0');
     if (!hadAccountOwner) {
