@@ -8,6 +8,7 @@ import { canvasStore, useCanvasState } from '../../stores/useCanvasStore';
 
 import { SOURCE_META } from './dataSources';
 import DesignWizard, { type WizardParams } from './DesignWizard';
+import ResultsCarousel from './ResultsCarousel';
 import { consumeIncomingBrief } from '../../utils/incomingBrief';
 import type { BldrManifest } from './types';
 import ImagePane from './panes/ImagePane';
@@ -61,6 +62,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   const [genJob, setGenJob] = useState<{ running: boolean; panes: Record<string, string> } | null>(null);
   const [pastProjects, setPastProjects] = useState<PastProject[]>([]);
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [carouselOpen, setCarouselOpen] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   // The design wizard fronts every page load (Skip reveals the current design).
   // A ?brief= handoff from the website replaces it — those visitors already
@@ -284,6 +286,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden p-3">
       {wizardOpen && <DesignWizard onComplete={completeWizard} onClose={closeWizard} busy={wizardBusy} />}
+      {carouselOpen && <ResultsCarousel sources={canvas.sources} onClose={() => setCarouselOpen(false)} />}
       {genJob?.running && (() => {
         const states = Object.values(genJob.panes);
         const settled = states.filter((s) => s === 'done' || s === 'failed' || s === 'skipped').length;
@@ -417,6 +420,15 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         >
           ✨ {t('canvas.newDesign')}
         </button>
+        {/* Phone-only: open the swipeable fullscreen results viewer. */}
+        <button
+          type="button"
+          onClick={() => setCarouselOpen(true)}
+          title={t('results.view')}
+          className="shrink-0 rounded-md border border-primary/50 bg-primary/10 px-2.5 py-2 text-xs font-medium text-primary transition hover:bg-primary/20 sm:hidden"
+        >
+          👁 {t('results.view')}
+        </button>
         {pastProjects.length > 0 && (
           <button
             type="button"
@@ -448,8 +460,11 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
               );
             })()
           ) : justFinished ? (
-            <div className="inline-flex items-center gap-2 text-sm font-medium text-green-600">
-              <span>✓</span> {t('canvas.designReady')}
+            <div className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-green-600 sm:text-sm">
+              <span className="shrink-0">✓</span>
+              {/* Short on phones so it never overflows / breaks the row. */}
+              <span className="truncate sm:hidden">{t('canvas.designReadyShort')}</span>
+              <span className="hidden sm:inline">{t('canvas.designReady')}</span>
             </div>
           ) : proposalState === 'working' ? (
             <div className="text-xs text-muted-foreground">{t('canvas.preparingProposal')}</div>

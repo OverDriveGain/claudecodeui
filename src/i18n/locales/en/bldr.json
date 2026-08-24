@@ -74,10 +74,16 @@
     "drawingSheets": "Drawing {{sheets}}",
     "sheetsProgress": " · {{done}}/{{total}} sheets ready · ~2 min",
     "designReady": "Your design set is ready — review the sheets, refine in the chat, or download the proposal.",
+    "designReadyShort": "Your design is ready ✓",
     "queued": "queued",
     "ready": "✓ ready",
     "keptPrevious": "kept previous",
     "keptPreviousTitle": "This sheet kept its previous version — ask the assistant to redo it"
+  },
+  "results": {
+    "view": "View results",
+    "counter": "{{n}} of {{total}}",
+    "close": "Close"
   },
   "greeting": {
     "proactiveWithBrief": "Welcome — I'm the BTI AI Architect. I can see your selections: {{brief}}. Shall I start generating your design, or would you like to add a few details first?",
