@@ -296,7 +296,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           </div>
         );
       })()}
-      <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto sm:auto-rows-fr sm:grid-cols-2 lg:grid-cols-3">
         {SOURCE_META.map((meta) => {
           const source = canvas.sources[meta.id];
           // Live per-sheet state while a generation runs (undefined for the map
