@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../constants/config";
+import i18n from "../i18n/config";
 
 // Utility function for authenticated API calls
 export const authenticatedFetch = (url, options = {}) => {
@@ -97,16 +98,33 @@ export const api = {
     // Gallery of the visitor's past projects (max 5) + swap one back in.
     projects: () => authenticatedFetch('/api/bldr/projects'),
     newProject: () => authenticatedFetch('/api/bldr/projects/new', { method: 'POST' }),
+    // Always stamp the current UI language so the AI Architect replies in it
+    // (server merges it into the saved selections; see server/bldr/architect.js).
     saveParams: (params) =>
       authenticatedFetch('/api/bldr/params', {
         method: 'POST',
-        body: JSON.stringify(params),
+        body: JSON.stringify({ lang: i18n.language, ...params }),
+      }),
+    // Sync only the language (e.g. on load / ?lang= handoff) without touching
+    // the wizard selections — the server merges lang into existing params.
+    setLanguage: (lang) =>
+      authenticatedFetch('/api/bldr/params', {
+        method: 'POST',
+        body: JSON.stringify({ lang: lang || i18n.language }),
       }),
     restoreProject: (id) =>
       authenticatedFetch(`/api/bldr/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
     // Admin: the pane→endpoint chain (who generates each pane).
     admin: {
       me: () => authenticatedFetch('/api/bldr/admin/me'),
+      // Elevate a guest session to admin with the shared secret (?key=…). On
+      // success the server sets an httpOnly cookie for subsequent admin calls.
+      elevate: (key) =>
+        authenticatedFetch('/api/bldr/admin/elevate', {
+          method: 'POST',
+          body: JSON.stringify({ key }),
+        }),
+      unelevate: () => authenticatedFetch('/api/bldr/admin/unelevate', { method: 'POST' }),
       jobs: () => authenticatedFetch('/api/bldr/admin/jobs'),
       architect: () => authenticatedFetch('/api/bldr/admin/architect'),
       saveArchitect: (architect) =>

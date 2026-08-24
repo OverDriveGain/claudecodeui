@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
@@ -38,6 +39,21 @@ type PastProject = {
  * and survive refresh) and then mutated live by the agent's update_canvas calls.
  */
 export default function CanvasView({ selectedProject }: CanvasViewProps) {
+  const { t, i18n } = useTranslation('bldr');
+  // Localized pane title (Floor plan / Section / …); falls back to the English
+  // registry title if a key is missing.
+  const paneTitle = (id: string, fallback: string) => t(`panes.${id}`, { defaultValue: fallback });
+
+  // Keep the server's copy of the customer's language in sync (it drives the AI
+  // Architect's reply language). Fires on load and whenever the language
+  // changes — including a ?lang= handoff from the website, which resolves after
+  // this mounts.
+  useEffect(() => {
+    const sync = () => void api.bldr.setLanguage?.(i18n.language).catch(() => {});
+    sync();
+    i18n.on('languageChanged', sync);
+    return () => i18n.off('languageChanged', sync);
+  }, [i18n]);
   const conversationId = selectedProject?.projectId;
   const canvas = useCanvasState(conversationId);
   const [proposalState, setProposalState] = useState<'idle' | 'working' | 'error'>('idle');
@@ -88,6 +104,8 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
       if (resParams?.ok) {
         const data = (await resParams.json()) as { brief?: string };
         setSavedBrief(data.brief ?? null);
+        // Let the proactive chat greeting refresh with the new selections.
+        window.dispatchEvent(new CustomEvent('bldr:paramsSaved'));
       } else {
         setSavedBrief(`${params.type}, ${params.area} m², ${params.style} style, ${params.finish} — (not saved yet: tell the AI these in the chat)`);
       }
@@ -112,6 +130,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         await api.bldr.newProject();
         const res = await api.bldr.saveParams({ brief });
         if (res.ok) setSavedBrief(((await res.json()) as { brief?: string }).brief ?? brief);
+        window.dispatchEvent(new CustomEvent('bldr:paramsSaved'));
         await refreshManifest();
         void refreshProjects();
       } catch {
@@ -277,43 +296,46 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           </div>
         );
       })()}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
         {SOURCE_META.map((meta) => {
           const source = canvas.sources[meta.id];
           // Live per-sheet state while a generation runs (undefined for the map
           // pane and when idle) — each sheet narrates its own progress.
           const paneState = genJob?.running ? genJob.panes[meta.id] : undefined;
+          const title = paneTitle(meta.id, meta.title);
           return (
-            <div key={meta.id} className="relative min-h-[180px]">
-              <PaneErrorBoundary title={meta.title}>
-                {meta.type === 'image' && <ImagePane title={meta.title} code={meta.code} source={source} />}
-                {meta.type === 'cost-table' && <CostTablePane title={meta.title} code={meta.code} source={source} />}
-                {meta.type === 'map-cesium' && <LocationPane title={meta.title} code={meta.code} source={source} />}
+            // Give each sheet a drawing-friendly aspect + a tall minimum so the
+            // high-res drawings read large (they were being squashed into ~120px).
+            <div key={meta.id} className="relative min-h-[250px] aspect-[4/3] sm:aspect-auto">
+              <PaneErrorBoundary title={title}>
+                {meta.type === 'image' && <ImagePane title={title} code={meta.code} source={source} />}
+                {meta.type === 'cost-table' && <CostTablePane title={title} code={meta.code} source={source} />}
+                {meta.type === 'map-cesium' && <LocationPane title={title} code={meta.code} source={source} />}
               </PaneErrorBoundary>
               {paneState === 'working' && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg bg-white/75 backdrop-blur-[1px]">
                   <span className="h-7 w-7 animate-spin rounded-full border-[3px] border-[#D52027] border-t-transparent" />
                   <span className="text-xs font-semibold uppercase tracking-wider text-[#D52027]">
-                    Drawing {meta.title}…
+                    {t('canvas.drawing', { sheet: title })}
                   </span>
                 </div>
               )}
               {paneState === 'pending' && (
-                <span className="absolute right-2 top-8 z-10 rounded-full bg-neutral-800/80 px-2 py-0.5 text-[10px] font-medium text-white">
-                  queued
+                <span className="absolute end-2 top-8 z-10 rounded-full bg-neutral-800/80 px-2 py-0.5 text-[10px] font-medium text-white">
+                  {t('canvas.queued')}
                 </span>
               )}
               {paneState === 'done' && (
-                <span className="absolute right-2 top-8 z-10 rounded-full bg-green-600/90 px-2 py-0.5 text-[10px] font-bold text-white">
-                  ✓ ready
+                <span className="absolute end-2 top-8 z-10 rounded-full bg-green-600/90 px-2 py-0.5 text-[10px] font-bold text-white">
+                  {t('canvas.ready')}
                 </span>
               )}
               {(paneState === 'failed' || paneState === 'skipped') && (
                 <span
-                  className="absolute right-2 top-8 z-10 rounded-full bg-[#D52027]/90 px-2 py-0.5 text-[10px] font-bold text-white"
-                  title="This sheet kept its previous version — ask the assistant to redo it"
+                  className="absolute end-2 top-8 z-10 rounded-full bg-[#D52027]/90 px-2 py-0.5 text-[10px] font-bold text-white"
+                  title={t('canvas.keptPreviousTitle')}
                 >
-                  kept previous
+                  {t('canvas.keptPrevious')}
                 </span>
               )}
             </div>
@@ -322,16 +344,16 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
       </div>
       {savedBrief && !genJob?.running && (
         <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
-          <span className="font-semibold text-primary">✓ Brief saved:</span>
+          <span className="font-semibold text-primary">✓ {t('canvas.briefSaved')}</span>
           <span className="min-w-0 flex-1 truncate" title={savedBrief}>{savedBrief}</span>
           <span className="text-xs text-muted-foreground">
-            Add details in the chat below (optional) — or just tell the AI to generate.
+            {t('canvas.addDetailsHint')}
           </span>
           <button
             type="button"
             onClick={() => setSavedBrief(null)}
             className="rounded px-1.5 text-muted-foreground hover:bg-accent"
-            aria-label="Dismiss"
+            aria-label={t('canvas.dismiss')}
           >
             ✕
           </button>
@@ -341,7 +363,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         {galleryOpen && pastProjects.length > 0 && (
           <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-2xl rounded-lg border border-border bg-background p-3 shadow-xl">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-semibold">My projects</span>
+              <span className="text-sm font-semibold">{t('canvas.myProjectsHeading')}</span>
               <button
                 type="button"
                 onClick={() => setGalleryOpen(false)}
@@ -375,7 +397,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
                     <div className="truncate text-xs font-medium">{p.name}</div>
                     <div className="text-[10px] text-muted-foreground">
                       {restoringId === p.id
-                        ? 'Opening…'
+                        ? t('canvas.opening')
                         : p.savedAt
                           ? new Date(p.savedAt).toLocaleDateString()
                           : ''}
@@ -389,19 +411,19 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         <button
           type="button"
           onClick={() => setWizardOpen(true)}
-          title="Start a new design from the options wizard"
+          title={t('canvas.newDesignTitle')}
           className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
         >
-          ✨ New design
+          ✨ {t('canvas.newDesign')}
         </button>
         {pastProjects.length > 0 && (
           <button
             type="button"
             onClick={() => setGalleryOpen((v) => !v)}
-            title="Reopen one of your past projects"
+            title={t('canvas.myProjectsTitle')}
             className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
           >
-            ▤ My projects ({pastProjects.length})
+            ▤ {t('canvas.myProjects', { count: pastProjects.length })}
           </button>
         )}
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -411,28 +433,28 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
               const done = entries.filter(([, s]) => s === 'done' || s === 'failed' || s === 'skipped').length;
               const drawing = entries
                 .filter(([, s]) => s === 'working')
-                .map(([id]) => SOURCE_META.find((m) => m.id === id)?.title || id);
+                .map(([id]) => paneTitle(id, SOURCE_META.find((m) => m.id === id)?.title || id));
               return (
                 <div className="inline-flex min-w-0 items-center gap-2 text-sm text-primary">
                   <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
                   <span className="truncate">
-                    {drawing.length ? `Drawing ${drawing.join(' + ')}` : 'Designing your building'}
-                    <span className="text-muted-foreground"> · {done}/{entries.length} sheets ready · ~2 min</span>
+                    {drawing.length ? t('canvas.drawingSheets', { sheets: drawing.join(' + ') }) : t('canvas.designing')}
+                    <span className="text-muted-foreground">{t('canvas.sheetsProgress', { done, total: entries.length })}</span>
                   </span>
                 </div>
               );
             })()
           ) : justFinished ? (
             <div className="inline-flex items-center gap-2 text-sm font-medium text-green-600">
-              <span>✓</span> Your design set is ready — review the sheets, refine in the chat, or download the proposal.
+              <span>✓</span> {t('canvas.designReady')}
             </div>
           ) : (
             <div className="text-xs text-muted-foreground">
               {proposalState === 'working'
-                ? 'Preparing your BTI proposal…'
+                ? t('canvas.preparingProposal')
                 : proposalState === 'error'
-                  ? 'Could not generate the proposal — please try again.'
-                  : 'Describe your building in the chat below — the design appears here.'}
+                  ? t('canvas.proposalError')
+                  : t('canvas.describeHint')}
             </div>
           )}
         </div>
@@ -454,10 +476,10 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           {proposalState === 'working' ? (
             <>
               <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              Generating…
+              {t('canvas.generatingProposal')}
             </>
           ) : (
-            <>Proceed with the project · Download PDF</>
+            <>{t('canvas.proceed')}</>
           )}
         </button>
       </div>

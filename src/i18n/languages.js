@@ -6,6 +6,7 @@
  * - value: Language code (e.g., 'en', 'zh-CN')
  * - label: Display name in English
  * - nativeName: Native language name for display
+ * - rtl: (optional) true for right-to-left scripts
  */
 
 export const languages = [
@@ -13,6 +14,14 @@ export const languages = [
     value: 'en',
     label: 'English',
     nativeName: 'English',
+  },
+  {
+    // Arabic — BTI's primary customer language. RTL. Drives the AI's reply
+    // language too (see server/bldr/architect.js) and the page direction.
+    value: 'ar',
+    label: 'Arabic',
+    nativeName: 'العربية',
+    rtl: true,
   },
   {
     value: 'ko',
@@ -48,6 +57,8 @@ export const languages = [
     value: 'tr',
     label: 'Turkish',
     nativeName: 'Türkçe',
+  },
+  {
     value: 'it',
     label: 'Italian',
     nativeName: 'Italiano',

@@ -55,7 +55,7 @@ export default function ImagePane({ title, code, source }: ImagePaneProps) {
       )}
       {src && !broken && (
         <div
-          className="group absolute inset-0 flex items-center justify-center bg-white p-3"
+          className="group absolute inset-0 flex items-center justify-center bg-white p-1.5"
           onDoubleClick={() => setPreview(true)}
           title="Double-click to preview"
         >

@@ -193,11 +193,43 @@ export function architectDefaults() {
 
 // ---- the per-turn briefing -------------------------------------------------
 
+// The customer's UI language → the language the assistant must reply in. Keyed
+// by the codes BLDR ships (see src/i18n/languages.js). English needs no
+// directive (it's the default); everything else gets a firm instruction so the
+// AI matches the website's language even when the customer writes differently.
+const LANGUAGE_NAMES = {
+  ar: 'Arabic (العربية)',
+  ko: 'Korean (한국어)',
+  'zh-CN': 'Simplified Chinese (简体中文)',
+  'zh-TW': 'Traditional Chinese (繁體中文)',
+  ja: 'Japanese (日本語)',
+  ru: 'Russian (Русский)',
+  de: 'German (Deutsch)',
+  tr: 'Turkish (Türkçe)',
+  it: 'Italian (Italiano)',
+};
+
+/** Build the "reply in this language" directive, or '' for English/unknown. */
+function languageDirective(lang) {
+  if (!lang || typeof lang !== 'string') return '';
+  const code = lang.trim();
+  // Collapse a region subtag (ar-AE → ar) so ?lang=ar-AE still resolves.
+  const name = LANGUAGE_NAMES[code] || LANGUAGE_NAMES[code.split('-')[0]];
+  if (!name) return '';
+  return `## REPLY LANGUAGE (non-negotiable)
+
+The customer is using the app in **${name}**. Write EVERY message you send —
+greeting, questions, summaries, confirmations — in ${name}, regardless of the
+language the customer types in. Keep proper nouns, BTI, and drawing/sheet codes
+as-is. Do not switch languages unless the customer explicitly asks you to.`;
+}
+
 /** Compose the full briefing appended to the system prompt each customer turn. */
 export function buildArchitectPrompt(workspacePath) {
   const cfg = loadArchitect();
   const params = readParams(workspacePath);
   const line = composeBriefLine(params);
+  const langSection = languageDirective(params?.lang);
   const paramsSection = line
     ? `## THE CUSTOMER'S SAVED SELECTIONS (from the design form — known facts, do NOT re-ask)
 
@@ -217,5 +249,8 @@ Composed brief line: "${line}"`
 The customer skipped the design form. Ask (briefly, once) what they want to
 build, then generate.`;
 
-  return [cfg.persona, FIXED_PROTOCOL, cfg.knowledge, cfg.greeting, paramsSection].join('\n\n');
+  // Language directive goes FIRST so it frames everything the assistant writes.
+  return [langSection, cfg.persona, FIXED_PROTOCOL, cfg.knowledge, cfg.greeting, paramsSection]
+    .filter(Boolean)
+    .join('\n\n');
 }

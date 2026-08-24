@@ -6,8 +6,9 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { workspacePathFor } from '../bldr/workspace.js';
-import { seedWorkspace, writeProjectParams, MANIFEST_FILE } from '../bldr/seed.js';
+import { seedWorkspace, writeProjectParams, readParams, MANIFEST_FILE } from '../bldr/seed.js';
 import { generateProposalPdf } from '../bldr/proposal.js';
 import { startGeneration, getJob, listJobs, canGenerate, BLDR_GPT_PROVIDER } from '../bldr/generate.js';
 import { loadEndpoints, saveEndpoints, endpointAvailability, PANE_IDS, PRESETS } from '../bldr/endpoints.js';
@@ -28,8 +29,39 @@ const ADMIN_USERS = (process.env.ADMIN_USERS || '')
 export const isAdminUser = (user) =>
   !!user && (user.id === 1 || ADMIN_USERS.includes(String(user.username || '').toLowerCase()));
 
+// Admin escape hatch for guest mode (OPEN_ACCESS): since no one logs in, no one
+// is an ADMIN_USERS/id-1 user, so the normal gate can never pass. A shared secret
+// ADMIN_TOKEN (unit env) lets an operator elevate: hit /admin?key=<token> → the
+// client POSTs it to /admin/elevate → we set an httpOnly cookie that every later
+// admin request carries. Disabled entirely if ADMIN_TOKEN is unset.
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const ADMIN_COOKIE = 'bldr_admin';
+
+// Constant-time compare, tolerant of length mismatch (never throws).
+const tokenMatches = (candidate) => {
+  if (!ADMIN_TOKEN || typeof candidate !== 'string' || candidate.length === 0) return false;
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(ADMIN_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+const adminCookieToken = (req) => {
+  const raw = req.headers.cookie;
+  if (!raw) return undefined;
+  const m = raw.match(new RegExp(`(?:^|;\\s*)${ADMIN_COOKIE}=([^;]+)`));
+  return m ? decodeURIComponent(m[1]) : undefined;
+};
+
+// A request is admin if the signed-in user is an admin OR it carries the shared
+// token (cookie set by /admin/elevate, or an explicit ?key=/x-admin-token).
+const isAdminReq = (req) =>
+  isAdminUser(req.user) ||
+  tokenMatches(adminCookieToken(req)) ||
+  tokenMatches(typeof req.query?.key === 'string' ? req.query.key : undefined) ||
+  tokenMatches(req.get?.('x-admin-token'));
+
 const requireAdmin = (req, res, next) => {
-  if (!isAdminUser(req.user)) return res.status(403).json({ error: 'Admin only.' });
+  if (!isAdminReq(req)) return res.status(403).json({ error: 'Admin only.' });
   next();
 };
 
@@ -196,18 +228,25 @@ router.post('/params', express.json({ limit: '8kb' }), (req, res) => {
   try {
     const b = req.body || {};
     const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
-    const params = {
+    // Only defined fields are written — merge over any existing selections so a
+    // partial update (e.g. a language-only change) never wipes the wizard picks.
+    const incoming = {
       type: str(b.type, 60),
       area: Number.isFinite(Number(b.area)) ? Math.min(1200, Math.max(30, Math.round(Number(b.area)))) : undefined,
       style: str(b.style, 60),
       finish: str(b.finish, 60),
       brief: str(b.brief, 2000),
+      // The customer's UI language (drives the AI Architect's reply language).
+      lang: str(b.lang, 12),
     };
-    if (!params.type && !params.brief) {
+    if (!incoming.type && !incoming.brief && !incoming.lang) {
       return res.status(400).json({ error: 'Nothing to save.' });
     }
     const wp = workspaceOf(req);
     if (!fs.existsSync(path.join(wp, MANIFEST_FILE))) seedWorkspace(wp);
+    const prev = readParams(wp) || {};
+    const params = { ...prev };
+    for (const [k, v] of Object.entries(incoming)) if (v !== undefined) params[k] = v;
     const brief = writeProjectParams(wp, params);
     res.json({ ok: true, brief });
   } catch (err) {
@@ -233,9 +272,31 @@ router.post('/projects/:id/restore', (req, res) => {
 
 // --- admin: the pane→endpoint chain ---------------------------------------
 
-// Whether the signed-in user may see the admin page at all.
+// Whether the caller may see the admin page (signed-in admin OR valid token).
 router.get('/admin/me', (req, res) => {
-  res.json({ admin: isAdminUser(req.user) });
+  res.json({ admin: isAdminReq(req) });
+});
+
+// Elevate a guest session to admin with the shared secret. On success set an
+// httpOnly cookie so every later /admin/* request is authorised automatically.
+router.post('/admin/elevate', express.json({ limit: '2kb' }), (req, res) => {
+  if (!ADMIN_TOKEN) return res.status(404).json({ ok: false, error: 'Admin token not configured.' });
+  const key = typeof req.body?.key === 'string' ? req.body.key : (typeof req.query?.key === 'string' ? req.query.key : '');
+  if (!tokenMatches(key)) return res.status(403).json({ ok: false, error: 'Invalid admin key.' });
+  res.cookie(ADMIN_COOKIE, ADMIN_TOKEN, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 1000 * 60 * 60 * 12, // 12h
+  });
+  res.json({ ok: true, admin: true });
+});
+
+// Drop admin elevation (clears the cookie).
+router.post('/admin/unelevate', (req, res) => {
+  res.clearCookie(ADMIN_COOKIE, { path: '/' });
+  res.json({ ok: true });
 });
 
 // Live activity: every in-flight generation + the last finished runs, across

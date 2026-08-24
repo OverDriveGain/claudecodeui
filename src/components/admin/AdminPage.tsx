@@ -290,6 +290,20 @@ export default function AdminPage() {
   }, [admin]);
 
   const load = useCallback(async () => {
+    // Guest-mode escape hatch: /admin?key=<ADMIN_TOKEN> elevates this session to
+    // admin (server sets an httpOnly cookie), then we strip the secret from the
+    // URL so it isn't left in history / shared links.
+    try {
+      const url = new URL(window.location.href);
+      const key = url.searchParams.get('key');
+      if (key) {
+        await api.bldr.admin.elevate(key).catch(() => {});
+        url.searchParams.delete('key');
+        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      }
+    } catch {
+      /* malformed URL — ignore */
+    }
     const meRes = await api.bldr.admin.me();
     const me = meRes.ok ? await meRes.json() : { admin: false };
     setAdmin(Boolean(me.admin));

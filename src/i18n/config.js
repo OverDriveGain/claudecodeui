@@ -23,6 +23,12 @@ import enChat from './locales/en/chat.json';
 import enCodeEditor from './locales/en/codeEditor.json';
 // eslint-disable-next-line import-x/order
 import enTasks from './locales/en/tasks.json';
+// eslint-disable-next-line import-x/order
+import enBldr from './locales/en/bldr.json';
+
+// Arabic — BTI's primary customer language. Only the customer-facing BLDR
+// surfaces are translated; every other namespace falls back to English.
+import arBldr from './locales/ar/bldr.json';
 
 import koCommon from './locales/ko/common.json';
 import koSettings from './locales/ko/settings.json';
@@ -125,6 +131,12 @@ i18n
         chat: enChat,
         codeEditor: enCodeEditor,
         tasks: enTasks,
+        bldr: enBldr,
+      },
+      ar: {
+        // Only the BLDR customer surfaces are localized to Arabic; all other
+        // namespaces fall back to English via fallbackLng.
+        bldr: arBldr,
       },
       ko: {
         common: koCommon,
@@ -198,8 +210,17 @@ i18n
       },
     },
 
-    // Default language
-    lng: getSavedLanguage(),
+    // No explicit `lng` — let LanguageDetector resolve it (querystring first,
+    // then localStorage), so the embedding website can drive BLDR's language
+    // via ?lang=ar on the iframe URL. getSavedLanguage() is the localStorage
+    // fallback the detector consults; kept for validation/back-compat.
+    lng: undefined,
+
+    // Restrict to the languages we actually ship (see languages.js). Region
+    // subtags collapse to the base language (ar-AE → ar) via
+    // nonExplicitSupportedLngs, so the website may pass a regional code.
+    supportedLngs: [...languages.map((l) => l.value), 'en'],
+    nonExplicitSupportedLngs: true,
 
     // Fallback language when a translation is missing
     fallbackLng: 'en',
@@ -208,7 +229,7 @@ i18n
     debug: false,
 
     // Namespaces - load only what's needed
-    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'tasks'],
+    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'tasks', 'bldr'],
     defaultNS: 'common',
 
     // Key separator for nested keys (default: '.')
@@ -234,19 +255,39 @@ i18n
 
     // Detection options
     detection: {
-      // Order of language detection (local storage first)
-      order: ['localStorage'],
+      // Querystring wins (the website drives it via ?lang=ar on the iframe),
+      // then the visitor's saved preference in localStorage.
+      order: ['querystring', 'localStorage'],
+
+      // The website appends ?lang=<code>; match that (default would be ?lng=).
+      lookupQuerystring: 'lang',
 
       // Keys to look for in localStorage
       lookupLocalStorage: 'userLanguage',
 
-      // Cache user language
+      // Cache the resolved language so a later load without ?lang keeps it.
       caches: ['localStorage'],
     },
   });
 
+// Keep the document direction (LTR/RTL) and lang attribute in sync with the
+// active language so Arabic renders right-to-left. Runs on init and on every
+// change (?lang= handoff, in-app switch, persisted preference).
+const applyDocumentDirection = (lng) => {
+  if (typeof document === 'undefined') return;
+  try {
+    const dir = i18n.dir(lng);
+    document.documentElement.setAttribute('dir', dir);
+    document.documentElement.setAttribute('lang', lng);
+  } catch {
+    /* non-browser / detached */
+  }
+};
+applyDocumentDirection(i18n.language);
+
 // Save language preference when it changes
 i18n.on('languageChanged', (lng) => {
+  applyDocumentDirection(lng);
   try {
     localStorage.setItem('userLanguage', lng);
   } catch (error) {

@@ -1,0 +1,88 @@
+{
+  "listSep": ", ",
+  "empty": {
+    "title": "Start your project",
+    "subtitle": "Describe what you want to build and the assistant will help."
+  },
+  "wizard": {
+    "title": "Design your building",
+    "back": "Back",
+    "next": "Next",
+    "skip": "Skip",
+    "starting": "Starting your project…",
+    "generate": "Continue — chat with your AI architect",
+    "areaValue": "{{area}} m²",
+    "steps": {
+      "type": "Project type",
+      "area": "Built area",
+      "style": "Style",
+      "finish": "Finish"
+    },
+    "areaPrompt": "Roughly how large? Drag to set the built-up area.",
+    "types": {
+      "villa_single": "Single-storey villa",
+      "villa_g1": "Villa G+1 (2 floors)",
+      "villa_g2": "Villa G+2 (3 floors)",
+      "villa_g3": "Villa G+3 (4 floors)",
+      "majlis": "Majlis / annex",
+      "guardhouse": "Guard house / cabin",
+      "commercial": "Commercial building",
+      "custom": "Custom project"
+    },
+    "styles": {
+      "modern_organic": { "label": "Modern organic", "hint": "Flowing curves, natural forms" },
+      "modern_geometric": { "label": "Modern geometric", "hint": "Clean lines, bold volumes" },
+      "islamic_heritage": { "label": "Islamic heritage", "hint": "Arches, mashrabiya, courtyards" },
+      "futuristic": { "label": "Futuristic (Mars style)", "hint": "Printed domes, otherworldly" }
+    },
+    "finishes": {
+      "shell": { "label": "Printed shell only", "hint": "Structure only — you finish it" },
+      "standard": { "label": "Standard finish (turnkey)", "hint": "Move-in ready" },
+      "premium": { "label": "Premium finish", "hint": "High-end materials & detailing" }
+    }
+  },
+  "map": {
+    "enlarge": "Enlarge",
+    "close": "Close"
+  },
+  "panes": {
+    "top_view": "Floor plan",
+    "section": "Section",
+    "elevations": "Elevations",
+    "front_view": "Exterior render",
+    "costs": "Cost estimate",
+    "location": "Site — Dubai"
+  },
+  "canvas": {
+    "newDesign": "New design",
+    "newDesignTitle": "Start a new design from the options wizard",
+    "myProjects": "My projects ({{count}})",
+    "myProjectsTitle": "Reopen one of your past projects",
+    "myProjectsHeading": "My projects",
+    "opening": "Opening…",
+    "briefSaved": "Brief saved:",
+    "addDetailsHint": "Add details in the chat below (optional) — or just tell the AI to generate.",
+    "dismiss": "Dismiss",
+    "proceed": "Proceed with the project · Download PDF",
+    "generatingProposal": "Generating…",
+    "preparingProposal": "Preparing your BTI proposal…",
+    "proposalError": "Could not generate the proposal — please try again.",
+    "describeHint": "Describe your building in the chat below — the design appears here.",
+    "drawing": "Drawing {{sheet}}…",
+    "designing": "Designing your building",
+    "drawingSheets": "Drawing {{sheets}}",
+    "sheetsProgress": " · {{done}}/{{total}} sheets ready · ~2 min",
+    "designReady": "Your design set is ready — review the sheets, refine in the chat, or download the proposal.",
+    "queued": "queued",
+    "ready": "✓ ready",
+    "keptPrevious": "kept previous",
+    "keptPreviousTitle": "This sheet kept its previous version — ask the assistant to redo it"
+  },
+  "greeting": {
+    "proactiveWithBrief": "Welcome — I'm the BTI AI Architect. I can see your selections: {{brief}}. Shall I start generating your design, or would you like to add a few details first?",
+    "proactiveNoBrief": "Welcome — I'm the BTI AI Architect. Tell me what you'd like to build and I'll get started.",
+    "generateCta": "Yes — generate my design",
+    "addDetailsCta": "Add details first",
+    "generateMessage": "Please generate my design now."
+  }
+}

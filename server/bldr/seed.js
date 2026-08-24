@@ -142,6 +142,15 @@ export function writeProjectParams(workspacePath, params) {
     const manifestPath = path.join(workspacePath, MANIFEST_FILE);
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     manifest.brief = line;
+    // Structured selections so the client can render a localized proactive
+    // greeting ("I see you chose …") without re-parsing the brief line.
+    manifest.params = {
+      type: params.type,
+      area: params.area,
+      style: params.style,
+      finish: params.finish,
+      lang: params.lang,
+    };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   } catch {
     /* manifest absent — seeded on next touch */

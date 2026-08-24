@@ -12,6 +12,7 @@ import type {
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 
 import MessageComponent from './MessageComponent';
+import ProactiveGreeting from './ProactiveGreeting';
 
 interface ChatMessagesPaneProps {
   scrollContainerRef: RefObject<HTMLDivElement>;
@@ -146,19 +147,9 @@ export default function ChatMessagesPane({
         </div>
       ) : chatMessages.length === 0 ? (
         /* BTI: customer-facing single conversation — no provider/model chooser.
-           Just a minimal prompt inviting the user to start. */
-        <div className="flex h-full items-center justify-center px-4">
-          <div className="max-w-md text-center">
-            {/* Fixed copy on purpose — the providerSelection i18n keys belong to the
-                upstream provider picker and say "Choose Your AI Assistant". */}
-            <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-              Start your project
-            </h2>
-            <p className="mt-1 text-[13px] text-muted-foreground">
-              Describe what you want to build and the assistant will help.
-            </p>
-          </div>
-        </div>
+           The assistant opens proactively with the customer's saved selections
+           (localized) instead of showing a blank chat. */
+        <ProactiveGreeting setInput={setInput} textareaRef={textareaRef} />
       ) : (
         <div className="mx-auto w-full max-w-4xl space-y-3 px-1 sm:space-y-4 sm:px-2">
           {/* Loading indicator for older messages (hide when load-all is active) */}

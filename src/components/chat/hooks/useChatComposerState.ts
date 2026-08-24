@@ -864,6 +864,22 @@ export function useChatComposerState({
     setTimeout(() => handleSubmitRef.current?.(createFakeSubmitEvent()), 0);
   }, [isLoading, messageQueue]);
 
+  // BLDR proactive greeting → programmatic send. The empty-state greeting bubble
+  // dispatches `bldr:sendMessage` when the customer taps "Yes — generate my
+  // design"; we replay it through the normal submit path so the live AI
+  // Architect handles it (same mechanism as the queue drain above).
+  useEffect(() => {
+    const onSend = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text?.trim();
+      if (!text) return;
+      setInput(text);
+      inputValueRef.current = text;
+      setTimeout(() => handleSubmitRef.current?.(createFakeSubmitEvent()), 0);
+    };
+    window.addEventListener('bldr:sendMessage', onSend as EventListener);
+    return () => window.removeEventListener('bldr:sendMessage', onSend as EventListener);
+  }, [setInput]);
+
   const removeQueuedMessage = useCallback((id: string) => {
     setMessageQueue((prev) => prev.filter((m) => m.id !== id));
   }, []);
