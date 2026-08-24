@@ -64,6 +64,7 @@
     "addDetailsHint": "Add details in the chat below (optional) — or just tell the AI to generate.",
     "dismiss": "Dismiss",
     "proceed": "Proceed with the project · Download PDF",
+    "proceedShort": "Download PDF",
     "generatingProposal": "Generating…",
     "preparingProposal": "Preparing your BTI proposal…",
     "proposalError": "Could not generate the proposal — please try again.",

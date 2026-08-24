@@ -343,23 +343,24 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
         })}
       </div>
       {savedBrief && !genJob?.running && (
-        <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
-          <span className="font-semibold text-primary">✓ {t('canvas.briefSaved')}</span>
+        <div className="mt-2 flex shrink-0 items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-xs sm:mt-3 sm:px-3 sm:py-2 sm:text-sm">
+          <span className="shrink-0 font-semibold text-primary">✓ {t('canvas.briefSaved')}</span>
           <span className="min-w-0 flex-1 truncate" title={savedBrief}>{savedBrief}</span>
-          <span className="text-xs text-muted-foreground">
+          {/* Helper hint is redundant on a phone (the chat is right below) — desktop only. */}
+          <span className="hidden text-xs text-muted-foreground lg:inline">
             {t('canvas.addDetailsHint')}
           </span>
           <button
             type="button"
             onClick={() => setSavedBrief(null)}
-            className="rounded px-1.5 text-muted-foreground hover:bg-accent"
+            className="shrink-0 rounded px-1.5 text-muted-foreground hover:bg-accent"
             aria-label={t('canvas.dismiss')}
           >
             ✕
           </button>
         </div>
       )}
-      <div className="relative mt-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+      <div className="relative mt-2 flex shrink-0 flex-wrap items-center justify-between gap-2 sm:mt-3 sm:gap-3">
         {galleryOpen && pastProjects.length > 0 && (
           <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-2xl rounded-lg border border-border bg-background p-3 shadow-xl">
             <div className="mb-2 flex items-center justify-between">
@@ -412,7 +413,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           type="button"
           onClick={() => setWizardOpen(true)}
           title={t('canvas.newDesignTitle')}
-          className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
+          className="shrink-0 rounded-md border border-border px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-accent sm:px-3 sm:py-2.5 sm:text-sm"
         >
           ✨ {t('canvas.newDesign')}
         </button>
@@ -421,9 +422,11 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
             type="button"
             onClick={() => setGalleryOpen((v) => !v)}
             title={t('canvas.myProjectsTitle')}
-            className="shrink-0 rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-accent"
+            className="shrink-0 rounded-md border border-border px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-accent sm:px-3 sm:py-2.5 sm:text-sm"
           >
-            ▤ {t('canvas.myProjects', { count: pastProjects.length })}
+            {/* icon-only on phones to save room; full label from sm up */}
+            <span className="sm:hidden">▤ {pastProjects.length}</span>
+            <span className="hidden sm:inline">▤ {t('canvas.myProjects', { count: pastProjects.length })}</span>
           </button>
         )}
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -448,14 +451,13 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
             <div className="inline-flex items-center gap-2 text-sm font-medium text-green-600">
               <span>✓</span> {t('canvas.designReady')}
             </div>
+          ) : proposalState === 'working' ? (
+            <div className="text-xs text-muted-foreground">{t('canvas.preparingProposal')}</div>
+          ) : proposalState === 'error' ? (
+            <div className="text-xs text-[#D52027]">{t('canvas.proposalError')}</div>
           ) : (
-            <div className="text-xs text-muted-foreground">
-              {proposalState === 'working'
-                ? t('canvas.preparingProposal')
-                : proposalState === 'error'
-                  ? t('canvas.proposalError')
-                  : t('canvas.describeHint')}
-            </div>
+            /* Idle hint is redundant on a phone (the chat is right below) — desktop only. */
+            <div className="hidden text-xs text-muted-foreground sm:block">{t('canvas.describeHint')}</div>
           )}
         </div>
         {isAdmin && (
@@ -471,7 +473,7 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
           type="button"
           onClick={handleProceed}
           disabled={proposalState === 'working'}
-          className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex shrink-0 items-center gap-2 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:px-5 sm:py-2.5 sm:text-sm"
         >
           {proposalState === 'working' ? (
             <>
@@ -479,7 +481,11 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
               {t('canvas.generatingProposal')}
             </>
           ) : (
-            <>{t('canvas.proceed')}</>
+            <>
+              {/* Short label on phones, full call-to-action from sm up. */}
+              <span className="sm:hidden">{t('canvas.proceedShort')}</span>
+              <span className="hidden sm:inline">{t('canvas.proceed')}</span>
+            </>
           )}
         </button>
       </div>

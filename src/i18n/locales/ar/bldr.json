@@ -64,6 +64,7 @@
     "addDetailsHint": "أضف تفاصيل في المحادثة أدناه (اختياري) — أو اطلب من المساعد التوليد مباشرة.",
     "dismiss": "إغلاق",
     "proceed": "المتابعة مع المشروع · تنزيل PDF",
+    "proceedShort": "تنزيل PDF",
     "generatingProposal": "جارٍ التوليد…",
     "preparingProposal": "جارٍ تجهيز عرض BTI الخاص بك…",
     "proposalError": "تعذّر إنشاء العرض — يرجى المحاولة مرة أخرى.",
