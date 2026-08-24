@@ -133,10 +133,12 @@ function MainContent({
   // sidebar, no files/shell/git/editor — just the two surfaces the customer uses.
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-[3] overflow-hidden border-b border-border">
+      {/* Phones: canvas collapses to a slim results bar (auto height) and the
+          conversation takes the rest. Desktop keeps the 60/40 canvas/chat split. */}
+      <div className="min-h-0 shrink-0 overflow-hidden border-border sm:flex-[3] sm:border-b">
         <CanvasView selectedProject={selectedProject} />
       </div>
-      <div className="min-h-0 flex-[2] overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden sm:flex-[2]">
         <ErrorBoundary showDetails>
           <ChatInterface
             selectedProject={selectedProject}

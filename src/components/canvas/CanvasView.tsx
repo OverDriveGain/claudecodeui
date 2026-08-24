@@ -57,6 +57,13 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   }, [i18n]);
   const conversationId = selectedProject?.projectId;
   const canvas = useCanvasState(conversationId);
+  // Do the design sheets actually have something to show yet? (The map/location
+  // is seeded with coords from the start, so it doesn't count as "results".)
+  const hasContent = ['top_view', 'section', 'elevations', 'front_view', 'costs'].some((id) => {
+    const s = canvas.sources[id];
+    if (!s) return false;
+    return Boolean(s.path || s.data_url || s.url || (s.data && Object.keys(s.data as object).length > 0));
+  });
   const [proposalState, setProposalState] = useState<'idle' | 'working' | 'error'>('idle');
   const [isAdmin, setIsAdmin] = useState(false);
   const [genJob, setGenJob] = useState<{ running: boolean; panes: Record<string, string> } | null>(null);
@@ -77,6 +84,13 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
     }
     wizardShownThisLoad = true;
     setWizardOpen(true);
+  }, []);
+  // The conversation-first mobile empty state (ProactiveGreeting) can open the
+  // design wizard via this event, since the canvas controls are hidden there.
+  useEffect(() => {
+    const open = () => setWizardOpen(true);
+    window.addEventListener('bldr:openWizard', open);
+    return () => window.removeEventListener('bldr:openWizard', open);
   }, []);
   // The saved selections banner: shows the injected brief, makes "add details"
   // clearly optional. Cleared on dismiss or when a generation starts.
@@ -284,9 +298,13 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
   }, []);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden p-3">
+    <div className="flex w-full flex-col overflow-hidden sm:h-full">
       {wizardOpen && <DesignWizard onComplete={completeWizard} onClose={closeWizard} busy={wizardBusy} />}
       {carouselOpen && <ResultsCarousel sources={canvas.sources} onClose={() => setCarouselOpen(false)} />}
+
+      {/* DESKTOP / tablet: the full canvas — pane grid + controls. On phones the
+          conversation leads instead (see the mobile bar below), so this is hidden. */}
+      <div className="hidden min-h-0 flex-1 flex-col p-3 sm:flex">
       {genJob?.running && (() => {
         const states = Object.values(genJob.panes);
         const settled = states.filter((s) => s === 'done' || s === 'failed' || s === 'skipped').length;
@@ -503,6 +521,67 @@ export default function CanvasView({ selectedProject }: CanvasViewProps) {
             </>
           )}
         </button>
+      </div>
+      </div>
+
+      {/* MOBILE: conversation-first. A slim results bar appears only when a
+          generation is running or sheets exist; otherwise nothing renders here,
+          so the chat below owns the whole screen. */}
+      <div className="flex flex-col sm:hidden">
+        {genJob?.running ? (() => {
+          const entries = Object.entries(genJob.panes);
+          const done = entries.filter(([, s]) => s === 'done' || s === 'failed' || s === 'skipped').length;
+          const total = entries.length || SOURCE_META.length;
+          return (
+            <button
+              type="button"
+              onClick={() => setCarouselOpen(true)}
+              className="flex w-full items-center gap-2 border-b border-border bg-background px-3 py-2 text-start"
+            >
+              <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-semibold text-primary">{t('canvas.designing')}</span>
+                <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-border">
+                  <span className="block h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${Math.max(8, (done / Math.max(1, total)) * 100)}%` }} />
+                </span>
+              </span>
+              <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{done}/{total}</span>
+            </button>
+          );
+        })() : hasContent ? (
+          <div className="flex items-center gap-2 border-b border-border bg-background px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setCarouselOpen(true)}
+              className="flex flex-1 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition active:opacity-90"
+            >
+              🎨 {t('results.view')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setWizardOpen(true)}
+              aria-label={t('canvas.newDesign')}
+              title={t('canvas.newDesign')}
+              className="shrink-0 rounded-md border border-border px-3 py-2.5 text-base"
+            >
+              ✨
+            </button>
+            <button
+              type="button"
+              onClick={handleProceed}
+              disabled={proposalState === 'working'}
+              aria-label={t('canvas.proceedShort')}
+              title={t('canvas.proceedShort')}
+              className="shrink-0 rounded-md border border-border px-3 py-2.5 text-base disabled:opacity-50"
+            >
+              {proposalState === 'working' ? (
+                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent align-middle" />
+              ) : (
+                '⬇'
+              )}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

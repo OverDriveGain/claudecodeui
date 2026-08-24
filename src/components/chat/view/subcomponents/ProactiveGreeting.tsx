@@ -76,6 +76,9 @@ export default function ProactiveGreeting({ setInput, textareaRef }: ProactiveGr
     setInput('');
     textareaRef?.current?.focus();
   };
+  // Opens the design wizard (the canvas controls are hidden in the phone's
+  // conversation-first view, so this is how a visitor starts/changes a design).
+  const onNewDesign = () => window.dispatchEvent(new CustomEvent('bldr:openWizard'));
 
   return (
     <div className="flex h-full items-start justify-center px-3 py-6 sm:items-center">
@@ -89,24 +92,38 @@ export default function ProactiveGreeting({ setInput, textareaRef }: ProactiveGr
             <div className="rounded-2xl rounded-ss-sm border border-border bg-card px-4 py-3 text-sm leading-relaxed text-foreground shadow-sm">
               {message}
             </div>
-            {brief && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={onGenerate}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"
-                >
-                  ✨ {t('greeting.generateCta')}
-                </button>
-                <button
-                  type="button"
-                  onClick={onAddDetails}
-                  className="inline-flex items-center rounded-full border border-border px-4 py-2 text-sm text-muted-foreground transition hover:bg-accent"
-                >
-                  {t('greeting.addDetailsCta')}
-                </button>
-              </div>
-            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {brief && (
+                <>
+                  <button
+                    type="button"
+                    onClick={onGenerate}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"
+                  >
+                    ✨ {t('greeting.generateCta')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onAddDetails}
+                    className="inline-flex items-center rounded-full border border-border px-4 py-2 text-sm text-muted-foreground transition hover:bg-accent"
+                  >
+                    {t('greeting.addDetailsCta')}
+                  </button>
+                </>
+              )}
+              {/* Start/redo the design form. Primary CTA when there's no brief yet. */}
+              <button
+                type="button"
+                onClick={onNewDesign}
+                className={
+                  brief
+                    ? 'inline-flex items-center rounded-full border border-border px-4 py-2 text-sm text-muted-foreground transition hover:bg-accent'
+                    : 'inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90'
+                }
+              >
+                📐 {t('canvas.newDesign')}
+              </button>
+            </div>
           </div>
         </div>
       </div>
