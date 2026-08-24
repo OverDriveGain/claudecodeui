@@ -26,6 +26,7 @@ import { resolveLocalSession } from './local-sessions.js';
 // OpenCode agents: the registration file (name/port/cwd/user) is the local
 // ownership record — the exact analog of ~/.claude/sessions for bridge agents.
 import { isOcSessionId, parseOcId, listRegistrations } from '../remote-control/oc-client.js';
+import { isCxSessionId, parseCxId, listCxRegistrations } from '../remote-control/cx-client.js';
 import { writeFileAsUser } from './user-fs.js';
 
 /**
@@ -157,11 +158,12 @@ export async function landAttachments(
     // OpenCode agent on this host: ownership comes from the registration file.
     // Same landing model as claude — foreign linux user gets the file in ITS
     // home written as that user; same-user agents use this user's uploads dir.
-    if (isOcSessionId(sessionId)) {
-      const parsed = parseOcId(sessionId);
-      const reg = parsed
-        ? (listRegistrations() as Array<{ name: string; user?: string | null }>).find((r) => r.name === parsed.agent)
-        : null;
+    if (isOcSessionId(sessionId) || isCxSessionId(sessionId)) {
+      const parsed = isOcSessionId(sessionId) ? parseOcId(sessionId) : parseCxId(sessionId);
+      const regs: Array<{ name: string; user?: string | null }> = isOcSessionId(sessionId)
+        ? (listRegistrations() as Array<{ name: string; user?: string | null }>)
+        : (listCxRegistrations() as Array<{ name: string; user?: string | null }>);
+      const reg = parsed ? regs.find((r) => r.name === parsed.agent) : null;
       if (!reg) return null;
       const currentUser = os.userInfo().username;
       const owner = reg.user && reg.user !== currentUser ? reg.user : null;

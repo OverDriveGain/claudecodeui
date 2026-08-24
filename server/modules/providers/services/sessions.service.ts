@@ -16,6 +16,7 @@ import { AppError } from '@/shared/utils.js';
 import { getSessionEventsCached as getRemoteSessionEventsCached } from '@/remote-control/rc-client.js';
 // Live OpenCode agents — history rows from the agent's own server / MyMu cache.
 import { getOcSessionRows } from '@/remote-control/oc-client.js';
+import { getCxSessionRows, normalizeCxItems } from '@/remote-control/cx-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
 import { deriveContextUsage, usageContextTokens } from '@/modules/providers/list/claude/claude-sessions.provider.js';
 import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isPathOwnedByLinuxUser } from '@/services/user-context.js';
@@ -255,6 +256,30 @@ export const sessionsService = {
         normalizeApiMessages(rows: unknown[], sessionId: string): NormalizedMessage[];
       };
       const normalized = provider.normalizeApiMessages(rows, sessionId);
+      const totalNormalized = normalized.length;
+      let total = 0;
+      for (const msg of normalized) {
+        if (msg.kind !== 'tool_result') total += 1;
+      }
+      if (limit === null) {
+        return { messages: normalized, total, hasMore: false, offset: 0, limit: null };
+      }
+      const start = Math.max(0, totalNormalized - offset - limit);
+      const end = Math.max(0, totalNormalized - offset);
+      return { messages: normalized.slice(start, end), total, hasMore: start > 0, offset, limit };
+    }
+
+    // Live Codex agent session (cxs_…): ThreadItem rows from the agent's own
+    // `codex app-server` when reachable, else the MyMu-side item cache —
+    // translated through the same item mapper the live stream uses.
+    if (sessionId.startsWith('cxs_')) {
+      if (!(await isAgentCaptureAllowed(sessionId))) {
+        return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
+      }
+      const limit = options.limit ?? null;
+      const offset = Math.max(0, options.offset ?? 0);
+      const rows = await getCxSessionRows(sessionId);
+      const normalized = normalizeCxItems(rows, sessionId) as NormalizedMessage[];
       const totalNormalized = normalized.length;
       let total = 0;
       for (const msg of normalized) {

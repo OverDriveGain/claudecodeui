@@ -149,7 +149,12 @@ export default function AgentsList({
                   'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer',
                   isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
                 )}
-                onClick={() => onSessionSelect({ ...session, provider: 'claude' } as SessionWithProvider, agent.projectId)}
+                onClick={() => onSessionSelect({
+                  ...session,
+                  // The id prefix IS the harness: ocs_ = OpenCode, cxs_ = Codex,
+                  // everything else is a claude relay agent.
+                  provider: session.id.startsWith('ocs_') ? 'opencode' : session.id.startsWith('cxs_') ? 'codex' : 'claude',
+                } as SessionWithProvider, agent.projectId)}
               >
                 {/* Liveliness: spinner while working/starting, dot otherwise */}
                 {isWorking || isStarting ? (

@@ -41,7 +41,7 @@ export function setRelayDependencies(deps: RelayDependencies): void {
 }
 
 const isRelaySession = (id: string): boolean =>
-  id.startsWith('cse_') || id.startsWith('ocs_') || (relay ? relay.isRemoteSession(id) : false);
+  id.startsWith('cse_') || id.startsWith('ocs_') || id.startsWith('cxs_') || (relay ? relay.isRemoteSession(id) : false);
 
 /**
  * MYMU hook: fires once each time a user opens a LIVE AGENT conversation

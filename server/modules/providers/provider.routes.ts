@@ -615,6 +615,11 @@ router.get(
             sessions.push({ sessionId: agent.id, provider: 'opencode' });
             continue;
           }
+          // Codex agents likewise — no relay event cache.
+          if (agent.id.startsWith('cxs_')) {
+            sessions.push({ sessionId: agent.id, provider: 'codex' });
+            continue;
+          }
           // True turn start from the warm event cache (no relay round-trip) so
           // the activity indicator shows real elapsed time for agents.
           let startedAt: number | undefined;

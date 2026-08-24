@@ -75,6 +75,16 @@ import {
     abortOcSession,
     resolveOcPermission,
 } from './oc-channel.js';
+// MYMU: live Codex agents — third engine on the same mux (tenant-local
+// `codex app-server` speaking JSON-RPC over ws). Session ids: `cxs_…`.
+import {
+    queryCxChannel,
+    subscribeCxChannel,
+    isCxSession,
+    isCxSessionId,
+    abortCxSession,
+    resolveCxPermission as resolveCxPerm,
+} from './cx-channel.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -122,19 +132,25 @@ const agentRoutes = createAgentModule({
 // MYMU: wire the remote-control proxy into the chat gateway (root file may
 // import the rc-channel adapter directly; modules receive it injected).
 setRelayDependencies({
-    queryRemoteChannel: (command, options, writer) =>
-        isOcSessionId((options as { remoteControl?: string })?.remoteControl ?? '')
-            ? queryOcChannel(command, options, writer)
-            : queryRemoteChannel(command, options, writer),
-    subscribeRemoteChannel: (sessionId, writer) =>
-        isOcSessionId(sessionId)
-            ? subscribeOcChannel(sessionId, writer)
-            : subscribeRemoteChannel(sessionId, writer),
-    isRemoteSession: (sessionId) => isOcSession(sessionId) || isRemoteSession(sessionId),
-    abortRemoteSession: (sessionId) =>
-        isOcSessionId(sessionId) ? abortOcSession(sessionId) : abortRemoteSession(sessionId),
+    queryRemoteChannel: (command, options, writer) => {
+        const target = (options as { remoteControl?: string })?.remoteControl ?? '';
+        if (isOcSessionId(target)) return queryOcChannel(command, options, writer);
+        if (isCxSessionId(target)) return queryCxChannel(command, options, writer);
+        return queryRemoteChannel(command, options, writer);
+    },
+    subscribeRemoteChannel: (sessionId, writer) => {
+        if (isOcSessionId(sessionId)) return subscribeOcChannel(sessionId, writer);
+        if (isCxSessionId(sessionId)) return subscribeCxChannel(sessionId, writer);
+        return subscribeRemoteChannel(sessionId, writer);
+    },
+    isRemoteSession: (sessionId) => isOcSession(sessionId) || isCxSession(sessionId) || isRemoteSession(sessionId),
+    abortRemoteSession: (sessionId) => {
+        if (isOcSessionId(sessionId)) return abortOcSession(sessionId);
+        if (isCxSessionId(sessionId)) return abortCxSession(sessionId);
+        return abortRemoteSession(sessionId);
+    },
     resolveRemotePermission: (requestId, decision) =>
-        resolveOcPermission(requestId, decision) || resolveRemotePermission(requestId, decision),
+        resolveOcPermission(requestId, decision) || resolveCxPerm(requestId, decision) || resolveRemotePermission(requestId, decision),
 });
 
 const wss = createWebSocketServer(server, {

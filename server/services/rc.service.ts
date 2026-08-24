@@ -24,6 +24,15 @@ import {
   getOcSessionCwd,
   getOcAccountErrors,
 } from '@/remote-control/oc-client.js';
+// Live Codex agents (tenant-local `codex app-server` servers) — third harness
+// on the same roster, same policy surface.
+import {
+  listCxAgents,
+  isCxSessionId,
+  parseCxId,
+  getCxSessionCwd,
+  getCxAccountErrors,
+} from '@/remote-control/cx-client.js';
 import { currentAgentAllow } from '@/services/user-context.js';
 import { resolveLocalSessionCwd } from '@/services/local-sessions.js';
 
@@ -139,14 +148,15 @@ let agentCache: { at: number; value: RemoteAgent[]; sessions: RemoteAgent[] } | 
 export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAgent[]> {
   const now = Date.now();
   if (!force && agentCache && now - agentCache.at < LIST_TTL_MS) return filterByUser(agentCache.value);
-  // OpenCode agents (local registrations) join the roster regardless of whether
-  // the claude relay is configured — either harness alone is a valid deployment.
-  let ocValue: Array<RemoteAgent & { active: boolean }> = [];
-  try {
-    ocValue = (await listOcAgents())
+  // OpenCode/Codex agents (local registrations) join the roster regardless of
+  // whether the claude relay is configured — any harness alone is a valid
+  // deployment.
+  type LocalRow = { id?: string; title: string; connected?: boolean; active?: boolean; running?: boolean; repo?: string | null; lastEventAt?: string; createdAt?: string };
+  const mapLocal = (rows: LocalRow[]): Array<RemoteAgent & { active: boolean }> =>
+    rows
       .filter((a) => a.id && captureAllows(cleanAgentTitle(a.title)))
       .map((a) => ({
-        id: a.id,
+        id: a.id as string,
         title: cleanAgentTitle(a.title) || a.title,
         connected: Boolean(a.connected && a.active),
         active: Boolean(a.active),
@@ -155,7 +165,13 @@ export async function listRemoteAgents({ force = false } = {}): Promise<RemoteAg
         lastEventAt: a.lastEventAt,
         createdAt: a.createdAt,
       }));
-  } catch { /* registry unreadable → claude-only roster */ }
+  let ocValue: Array<RemoteAgent & { active: boolean }> = [];
+  try {
+    ocValue = mapLocal(await listOcAgents());
+  } catch { /* registry unreadable → skip harness */ }
+  try {
+    ocValue = ocValue.concat(mapLocal(await listCxAgents()));
+  } catch { /* registry unreadable → skip harness */ }
   if (!remoteControlEnabled()) {
     agentCache = { at: now, value: ocValue, sessions: ocValue };
     return filterByUser(ocValue);
@@ -234,6 +250,12 @@ export async function isAgentCaptureAllowed(sessionId: string): Promise<boolean>
     const parsed = parseOcId(sessionId);
     return Boolean(parsed && agents.some((a) => a.title === parsed.agent));
   }
+  // Codex: same per-agent policy — any thread of a visible agent stays
+  // browsable/drivable.
+  if (isCxSessionId(sessionId)) {
+    const parsed = parseCxId(sessionId);
+    return Boolean(parsed && agents.some((a) => a.title === parsed.agent));
+  }
   // Not the current leaf — allow any OTHER session of a visible agent too (same
   // capture + per-user title filters). An agent restart rotates the leaf id; views
   // still open on the previous session must keep browsing/driving it.
@@ -253,6 +275,13 @@ export async function getRemoteAgentCwd(sessionId: string): Promise<string | nul
   if (isOcSessionId(sessionId)) {
     try {
       return (await getOcSessionCwd(sessionId)) || null;
+    } catch {
+      return null;
+    }
+  }
+  if (isCxSessionId(sessionId)) {
+    try {
+      return (await getCxSessionCwd(sessionId)) || null;
     } catch {
       return null;
     }
@@ -290,5 +319,8 @@ export function listAccountErrors(): AccountError[] {
   try {
     errors = errors.concat((getOcAccountErrors() as AccountError[]) ?? []);
   } catch { /* oc registry probe errors unavailable */ }
+  try {
+    errors = errors.concat((getCxAccountErrors() as AccountError[]) ?? []);
+  } catch { /* cx registry probe errors unavailable */ }
   return errors;
 }

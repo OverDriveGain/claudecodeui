@@ -139,6 +139,36 @@ axis from agent visibility — a block set on an operator still applies).
   self-editable restriction is not a restriction). Relay/opencode live sessions
   are not gated here (their model is chosen on the agent's own host).
 
+### F9 — Live Codex agents (added 2026-08-25)
+The third live harness: attach to registered tenant-local
+`codex app-server --listen ws://127.0.0.1:PORT` servers (JSON-RPC 2.0 over
+ws; protocol self-documented by `codex app-server generate-json-schema`)
+with the SAME frontend contract — stream (token deltas), send, abort,
+approval prompts, slash commands, attachments, offline history. Zero changes
+inside the tenant or codex itself; launch-time registration only.
+- **MyMu-owned files** (merge-clean): `server/remote-control/cx-client.js`
+  (engine: registry, ws JSON-RPC conn per agent + reconnect,
+  thread/resume + turn/start send, turn/interrupt abort, server→client
+  approval REQUESTS answered on the rpc id — declined when no client is
+  attached, ThreadItem→frame translator shared by live + history, MyMu-side
+  offline item cache `~/.cache/ccui-cx-events`, replay buffer, fan-out
+  deduped by underlying socket), `server/cx-channel.js` (adapter),
+  `scripts/cx-agent-launch.sh` (launch + registration; probes /readyz).
+- **Marked touchpoints in upstream files**: `server/index.ts` (relay-deps mux
+  on the `cxs_` prefix), `chat-websocket.service.ts` (`cxs_` in
+  isRelaySession), `rc.service.ts` (roster/capture/cwd merge — oc+cx share
+  one mapLocal), `sessions.service.ts` (cxs history branch via
+  `normalizeCxItems`), `provider.routes.ts` (running feed),
+  `incoming-files.ts` (cxs attachment landing), `remote-files.js`
+  (delivered-path guard), `ChatMessagesPane.tsx` (no provider picker),
+  `AgentsList.tsx` (provider derived from id prefix).
+- **Registration**: `CX_REGISTRY_DIR` (default `~/.cloudcli/codex-agents`),
+  one JSON per agent `{name, port, host, cwd, user}`; session ids
+  `cxs_<agent>_<threadId>` (thread ids are UUIDs — the LAST underscore
+  splits agent from thread). Env: `CX_REGISTRY_DIR`, `CX_EVENTS_CACHE_DIR`.
+- **Caveat**: `app-server` is flagged experimental by codex-cli (0.144.1
+  verified); the protocol may shift between codex releases.
+
 ## Conversation send/receive: what we touch (and nothing else)
 1. Relay detour in the chat gateway for `cse_` sessions (F1).
 2. Transcript normalizer merge in `claude-sessions.provider.ts` (injected/
