@@ -9,6 +9,8 @@ import type {
   Provider,
 } from '../../types/types';
 import { formatUsageLimitText } from '../../utils/chatFormatting';
+import { formatMessageTimestamp } from '../../../../utils/dateUtils';
+import { useMinuteNow } from '../../../../hooks/useMinuteNow';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, ToolErrorDisplay, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
@@ -76,6 +78,10 @@ const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
+  const { t: tCommon } = useTranslation('common');
+  // Minute-level clock so relative labels ("2 hours ago") don't go stale in an
+  // idle chat; one shared interval app-wide.
+  const nowMs = useMinuteNow();
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
       (prevMessage.type === 'user') ||
@@ -120,7 +126,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     !message.isThinking;
 
 
-  const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
+  // WhatsApp-style: "Just now" / "5 mins ago" / "2 hours ago" today,
+  // "Yesterday 14:32" / "Mon 09:10" / "12.08.2026 09:10" for older messages.
+  const formattedTime = useMemo(
+    () => formatMessageTimestamp(message.timestamp, new Date(nowMs), tCommon),
+    [message.timestamp, nowMs, tCommon],
+  );
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
 
   if (shouldHideThinkingMessage) {
