@@ -2,6 +2,13 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.14] — MyMu (2026-08-29)
+
+### Bug Fixes
+
+* **File tree + delivered files no longer 500 on live-agent (remote) projects** — `remote-files.js` called `outboundFederationEnabled()` without importing it, so `shouldFederateRemote()` threw `ReferenceError: outboundFederationEnabled is not defined` for any `remote:` project on a federation-configured host (repeated `File tree error` / `Error serving delivered file` in the logs). The function was exported from `federation.js` but missing from the import list. These are plain `.js` files that `tsc` does not type-check, so the build never caught it. Now imported.
+* **Slash-command menu no longer throws** — `POST /api/commands/list` read `process.env.MYMU_SHOW_BUILTIN_COMMANDS`, but inside `createCommandsRouter` the identifier `process` is deliberately shadowed by an injected runtime adapter (`uptime`/`memoryUsage`/`version`/`platform`/`pid` — no `.env`), so `process.env` was `undefined` → `TypeError: Cannot read properties of undefined`. The file is `@ts-nocheck`, so `tsc` did not catch it. Now reads the real Node global via `globalThis.process.env`.
+
 ## [1.37.13] — MyMu (2026-08-29)
 
 ### New Features

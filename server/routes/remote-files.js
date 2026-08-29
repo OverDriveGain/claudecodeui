@@ -9,7 +9,7 @@ import os from 'os';
 import mime from 'mime-types';
 
 import { projectsDb } from '../modules/database/index.js';
-import { federationToken, inboundFederationEnabled, federationPeers, peerFetch } from '../services/federation.js';
+import { federationToken, inboundFederationEnabled, outboundFederationEnabled, federationPeers, peerFetch } from '../services/federation.js';
 import { resolveLocalSession } from '../services/local-sessions.js';
 import { getRemoteAgentCwd, isRemoteProjectId, sessionIdFromProjectId, isAgentCaptureAllowed } from '../services/rc.service.js';
 import { getSessionEventsCached } from '../remote-control/rc-client.js';

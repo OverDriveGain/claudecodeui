@@ -448,7 +448,9 @@ router.post("/list", async (req, res) => {
     const { projectPath } = req.body;
     // MYMU: built-in slash commands are hidden from the menu (the agents' own
     // commands are what matter here); MYMU_SHOW_BUILTIN_COMMANDS=1 restores.
-    const allCommands = process.env.MYMU_SHOW_BUILTIN_COMMANDS === '1' ? [...builtInCommands] : [];
+    // `process` is shadowed above by the injected runtime adapter (uptime/mem/
+    // version/platform/pid — no `.env`), so reach the real Node global for env.
+    const allCommands = globalThis.process?.env?.MYMU_SHOW_BUILTIN_COMMANDS === '1' ? [...builtInCommands] : [];
 
     // Scan project-level commands (.claude/commands/)
     if (projectPath) {
