@@ -2,6 +2,18 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.13] — MyMu (2026-08-29)
+
+### New Features
+
+* **Live Codex agents (F9)** — attach to running Codex agents exactly like Claude relay and OpenCode agents, with the unchanged frontend: agents launched via `scripts/cx-agent-launch.sh` (stock `codex app-server` + a registration file) appear in the live roster with online/running state, stream token deltas in real time, and can be driven from the chat — send, abort, command/file-change approval prompts answered from the UI, file attachments landing as real files on the agent's host, and built-in slash commands (`/new`, `/clear`, `/compact`, `/abort`, `/help`). Offline history is served from a MyMu-side item cache, so dead agents keep their transcripts. Approvals arriving while nobody watches the session are declined, never auto-accepted. Verified on codex-cli 0.144 and 0.146 (both history protocol generations handled).
+* **WhatsApp-style chat timestamps** — message times show "Just now" / "N mins ago" / "N hours ago" for today, "Yesterday 14:32", weekday + time within the last week, and full date + time beyond; locale-aware, refreshed by a single shared minute ticker.
+* **Per-tenant agent registries** — the live roster also surfaces OpenCode/Codex agents registered under each mapped linux user's own `~/.cloudcli`, not just the service user's.
+
+### Upstream
+
+* Merged upstream v1.37.2: recent-conversation infrastructure, paginated session history with bandwidth fixes, custom provider-model CRUD, file-tree drag-drop upload + error surfacing, Codex SDK 0.146, transcript search by provider session id, and assorted fixes. All MyMu features (F1–F9) re-verified after the merge.
+
 ## [1.37.10] — MyMu (2026-08-21)
 
 ### New Features
