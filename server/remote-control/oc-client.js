@@ -27,6 +27,7 @@ import os from 'os';
 import http from 'http';
 import crypto from 'crypto';
 import { createNormalizedMessage } from '../shared/utils.js';
+import { mappedForeignUsers, cloudcliRegistryForUserSync } from '@/modules/mymu/user-fs.js';
 
 const OC_PREFIX = 'ocs_';
 const REGISTRY_DIR = () =>
@@ -61,29 +62,65 @@ export function makeOcId(agentName, ses) {
 
 // ── registry ─────────────────────────────────────────────────────────────────
 
-/** Read every registration file; malformed/foreign files are skipped. */
+/** Normalize one registration object into a roster-ready reg (null if invalid). */
+function rawToOcReg(raw, fallbackName) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = String(raw.name || fallbackName || '').trim();
+  const port = Number.parseInt(raw.port, 10);
+  if (!name || !Number.isFinite(port)) return null;
+  return {
+    name,
+    port,
+    host: typeof raw.host === 'string' && raw.host ? raw.host : '127.0.0.1',
+    cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
+    user: typeof raw.user === 'string' ? raw.user : null,
+    startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : null,
+  };
+}
+
+// listRegistrations() is called on every registration() lookup, and the
+// cross-user scan below spawns one `sudo python3` per mapped foreign user — so
+// the merged result is cached briefly to avoid a sudo storm. TTL is short enough
+// that a newly spawned agent still surfaces promptly.
+const REG_CACHE_MS = 3000;
+let ocRegCache = { at: 0, regs: [] };
+
+/**
+ * Every opencode registration reachable from this instance: the service user's
+ * own ~/.cloudcli/opencode-agents PLUS each mapped foreign user's (the
+ * one-MyMu-per-host model — same cross-user fs seam local-sessions uses).
+ * Malformed/foreign files are skipped; the service user wins a name collision.
+ */
 export function listRegistrations() {
+  const now = Date.now();
+  if (now - ocRegCache.at < REG_CACHE_MS) return ocRegCache.regs;
+
+  const byName = new Map();
+
+  // Service user's own registry (honors OC_REGISTRY_DIR override).
   const dir = REGISTRY_DIR();
   let names = [];
-  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
-  const regs = [];
+  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { names = []; }
   for (const f of names) {
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-      const name = String(raw.name || path.basename(f, '.json')).trim();
-      const port = Number.parseInt(raw.port, 10);
-      if (!name || !Number.isFinite(port)) continue;
-      regs.push({
-        name,
-        port,
-        host: typeof raw.host === 'string' && raw.host ? raw.host : '127.0.0.1',
-        cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
-        user: typeof raw.user === 'string' ? raw.user : null,
-        startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : null,
-      });
+      const reg = rawToOcReg(raw, path.basename(f, '.json'));
+      if (reg) byName.set(reg.name, reg);
     } catch { /* skip unreadable/foreign file */ }
   }
-  return regs;
+
+  // Mapped foreign linux users' ~/.cloudcli/opencode-agents (cross-user, sudo).
+  try {
+    for (const user of mappedForeignUsers()) {
+      for (const raw of cloudcliRegistryForUserSync(user, 'opencode-agents')) {
+        const reg = rawToOcReg(raw);
+        if (reg && !byName.has(reg.name)) byName.set(reg.name, reg);
+      }
+    }
+  } catch { /* cross-user scan is best-effort */ }
+
+  ocRegCache = { at: now, regs: [...byName.values()] };
+  return ocRegCache.regs;
 }
 
 function registration(agentName) {

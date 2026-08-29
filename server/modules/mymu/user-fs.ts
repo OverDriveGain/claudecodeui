@@ -304,3 +304,34 @@ export function sessionRegistryForUserSync(user: string): unknown[] {
     return [];
   }
 }
+
+// ~/.cloudcli/<subdir>/*.json of a foreign user, as one JSON array. Used by the
+// codex + opencode registry readers so a box tenant's own agents surface, not
+// just the service user's. SYNC to match the registry readers' hot paths (they
+// cache the merged result themselves).
+const CLOUDCLI_READER = `
+import glob, json, os, sys
+sub = sys.argv[1]
+out = []
+for f in glob.glob(os.path.expanduser('~/.cloudcli/' + sub + '/*.json')):
+    try:
+        out.append(json.load(open(f)))
+    except Exception:
+        pass
+print(json.dumps(out))
+`;
+
+/** A foreign user's ~/.cloudcli/<subdir> registration files (raw parsed JSON). */
+export function cloudcliRegistryForUserSync(user: string, subdir: string): unknown[] {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(subdir)) return [];
+  try {
+    const stdout = execFileSync('sudo', sudoArgs(user, ['python3', '-c', CLOUDCLI_READER, subdir]), {
+      timeout: 4000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(String(stdout));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
