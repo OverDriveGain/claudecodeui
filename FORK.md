@@ -166,8 +166,11 @@ inside the tenant or codex itself; launch-time registration only.
   one JSON per agent `{name, port, host, cwd, user}`; session ids
   `cxs_<agent>_<threadId>` (thread ids are UUIDs — the LAST underscore
   splits agent from thread). Env: `CX_REGISTRY_DIR`, `CX_EVENTS_CACHE_DIR`.
-- **Caveat**: `app-server` is flagged experimental by codex-cli (0.144.1
-  verified); the protocol may shift between codex releases.
+- **Caveat**: `app-server` is flagged experimental by codex-cli; the protocol
+  shifts between releases. Verified on 0.144.1 AND 0.146.0 — 0.146 moved
+  threads to "paginated" history where `thread/read(includeTurns)` is refused
+  and turns come from `thread/resume` instead; getCxSessionRows handles both
+  generations. Re-verify F9 e2e on every codex SDK bump.
 
 ## Conversation send/receive: what we touch (and nothing else)
 1. Relay detour in the chat gateway for `cse_` sessions (F1).

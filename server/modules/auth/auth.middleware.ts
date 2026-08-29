@@ -1,11 +1,11 @@
 // @ts-nocheck -- JWT request augmentation is narrowed by Auth route contracts.
 import jwt from 'jsonwebtoken';
 
+import { IS_PLATFORM } from '@/shared/utils.js';
+
 import { userDb, appConfigDb } from '../database/index.js';
 // MYMU: per-user agent visibility + linux-user mapping (FORK.md S2)
 import { runWithUserContext, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
-
-const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();

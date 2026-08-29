@@ -124,6 +124,8 @@
     "modeConversations": "Conversations",
     "conversationsPlaceholder": "Search in conversations...",
     "searching": "Searching...",
+    "sessionTitles": "Session",
+    "conversationContents": "Conversation contents",
     "noResults": "No results found",
     "tryDifferentQuery": "Try a different search query",
     "matches_one": "{{count}} match",
@@ -131,6 +133,14 @@
     "projectsScanned_one": "{{count}} project scanned",
     "projectsScanned_other": "{{count}} projects scanned",
     "modeAgents": "Agents"
+  },
+  "recent": {
+    "title": "Recent conversations",
+    "emptyTitle": "No conversations yet",
+    "emptyDescription": "Your most recently updated conversations will appear here.",
+    "loadFailed": "Could not load recent conversations",
+    "loadMore": "Load older conversations",
+    "loadingMore": "Loading more..."
   },
   "deleteConfirmation": {
     "deleteProject": "Remove Project",

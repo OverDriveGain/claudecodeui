@@ -1,7 +1,7 @@
 import { Settings, ArrowUpCircle, AlertTriangle } from 'lucide-react'; // MYMU: community/issue links removed
 import type { TFunction } from 'i18next';
-import { IS_PLATFORM } from '../../../../constants/config';
-import type { ReleaseInfo } from '../../../../types/sharedTypes';
+import { IS_PLATFORM } from '../../../../shared/utils';
+import type { ReleaseInfo } from '../../../../shared/types';
 import HostsDialog from './HostsDialog';
 
 type SidebarFooterProps = {

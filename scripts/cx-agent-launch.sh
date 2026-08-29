@@ -35,6 +35,12 @@ if [ -z "$CODEX" ]; then
   fi
 fi
 [ -n "$CODEX" ] || { echo "codex binary not found (set CODEX_BIN)" >&2; exit 1; }
+# Absolutize — we `cd` into the agent's cwd before spawning, so a relative
+# CODEX_BIN (or relative fallback path) would break under nohup.
+case "$CODEX" in
+  /*) : ;;
+  */*) CODEX="$(cd "$(dirname "$CODEX")" && pwd)/$(basename "$CODEX")" ;;
+esac
 
 [ -d "$CWD" ] || { echo "cwd not found: $CWD" >&2; exit 1; }
 # Registration must carry an absolute path — MyMu resolves the agent's file

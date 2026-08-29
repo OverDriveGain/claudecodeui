@@ -34,7 +34,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { WebSocket } from 'ws';
 import { createNormalizedMessage } from '../shared/utils.js';
-import { mappedForeignUsers, cloudcliRegistryForUserSync } from '@/modules/mymu/user-fs.js';
+import { mappedForeignUsers, cloudcliRegistryForUserSync } from '@/modules/mymu/index.js';
 
 const CX_PREFIX = 'cxs_';
 const REGISTRY_DIR = () =>
@@ -378,18 +378,33 @@ export async function getCxSessionRows(sessionId) {
   if (!parsed || parsed.thread === 'none') return [];
   const reg = registration(parsed.agent);
   if (reg) {
-    try {
-      const res = await cxRpc(parsed.agent, 'thread/read', { threadId: parsed.thread, includeTurns: true });
-      const turns = Array.isArray(res?.thread?.turns) ? res.thread.turns : [];
+    const flattenTurns = (thread) => {
+      const turns = Array.isArray(thread?.turns) ? thread.turns : [];
       const items = [];
       for (const turn of turns) {
         for (const item of Array.isArray(turn?.items) ? turn.items : []) {
           if (item && typeof item === 'object') items.push(item);
         }
       }
-      if (items.length > 0 || turns.length > 0) {
-        void saveItems(parsed.agent, parsed.thread, items);
-        return items;
+      return { turns, items };
+    };
+    try {
+      // codex <= 0.144 serves history via thread/read; 0.146+ "paginated"
+      // threads REFUSE includeTurns and serve turns on thread/resume instead
+      // (resume is a rejoin-or-load — same call the drive path makes anyway).
+      let flat = null;
+      try {
+        const res = await cxRpc(parsed.agent, 'thread/read', { threadId: parsed.thread, includeTurns: true });
+        flat = flattenTurns(res?.thread);
+      } catch { /* refused (paginated thread) → resume below */ }
+      if (!flat || (flat.turns.length === 0 && flat.items.length === 0)) {
+        const res = await cxRpc(parsed.agent, 'thread/resume', { threadId: parsed.thread }, { timeout: 30000 });
+        connState(parsed.agent).loadedThreads.add(parsed.thread);
+        flat = flattenTurns(res?.thread);
+      }
+      if (flat.items.length > 0 || flat.turns.length > 0) {
+        void saveItems(parsed.agent, parsed.thread, flat.items);
+        return flat.items;
       }
     } catch { /* offline → cache below */ }
   }

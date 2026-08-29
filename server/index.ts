@@ -11,7 +11,7 @@ import http from 'http';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 
-import { AppError, findApplicationRoot, getModuleDirectory, terminalTextStyles } from '@/shared/utils.js';
+import { AppError, findApplicationRoot, getModuleDirectory, IS_PLATFORM, terminalTextStyles } from '@/shared/utils.js';
 import {
     closeSessionsWatcher,
     initializeSessionsWatcher,
@@ -53,7 +53,6 @@ import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js
 import { browserUseService } from './modules/browser-use/browser-use.service.js';
 import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
-import { IS_PLATFORM } from './constants/config.js';
 // MYMU: remote-control proxy (live relay agents)
 import agentHostsRoutes from './routes/agent-hosts.js';
 import registerRemoteFileRoutes from './routes/remote-files.js';

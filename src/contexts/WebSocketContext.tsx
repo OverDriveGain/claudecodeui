@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+
 import { useAuth } from '../components/auth/context/AuthContext';
-import { IS_PLATFORM } from '../constants/config';
+import { IS_PLATFORM } from '../shared/utils';
+// MYMU: multi-host websocket pool (FORK.md F2)
 import { useRemoteHosts, hostForSession, type RemoteHost } from '../utils/remoteHosts';
 import { expireAuthSession, isAuthTokenExpired } from '../utils/api';
 

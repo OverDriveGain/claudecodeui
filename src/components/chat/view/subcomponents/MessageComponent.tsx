@@ -1,14 +1,14 @@
 import { memo, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
 import type {
   ChatMessage,
   ClaudePermissionSuggestion,
   PermissionGrantResult,
   Provider,
 } from '../../types/types';
-import { formatUsageLimitText } from '../../utils/chatFormatting';
+import { formatUsageLimitText, stripProposedPlanEnvelope } from '../../utils/chatFormatting';
 import { formatMessageTimestamp } from '../../../../utils/dateUtils';
 import { useMinuteNow } from '../../../../hooks/useMinuteNow';
 import type { Project } from '../../../../types/app';
@@ -90,8 +90,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   const messageRef = useRef<HTMLDivElement | null>(null);
   const userCopyContent = String(message.content || '');
   const formattedMessageContent = useMemo(
-    () => formatUsageLimitText(String(message.content || '')),
-    [message.content]
+    () => {
+      const content = formatUsageLimitText(String(message.content || ''));
+      return provider === 'codex' && message.type === 'assistant' && !message.isThinking
+        ? stripProposedPlanEnvelope(content)
+        : content;
+    },
+    [message.content, message.isThinking, message.type, provider]
   );
   const assistantCopyContent = message.isToolUse
     ? String(message.displayText || message.content || '')
@@ -160,6 +165,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <ChatMessageFiles files={message.files} />
             )}
             {userCopyContent.trim().length > 0 || (!message.images?.length && !message.files?.length) ? (
+              /* MYMU: claude-like chat restyle (d8080f91) — keep on pulls */
               <div className="group max-w-full rounded-2xl rounded-br-md bg-gray-100 px-3 py-2 text-gray-900 shadow-sm dark:bg-[#131313] dark:text-white sm:px-4">
                 <div dir="auto" className="break-words font-sans text-[17px] italic">
                   <Markdown
@@ -224,7 +230,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 </div>
               ) : (
                 <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full p-1 text-sm text-foreground">
-                  <SessionProviderLogo provider={provider} className="h-full w-full" />
+                  <LLMProviderLogo provider={provider} className="h-full w-full" />
                 </div>
               )}
               <div className="text-sm font-medium text-gray-900 dark:text-white">

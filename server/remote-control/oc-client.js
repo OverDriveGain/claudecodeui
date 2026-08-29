@@ -27,7 +27,7 @@ import os from 'os';
 import http from 'http';
 import crypto from 'crypto';
 import { createNormalizedMessage } from '../shared/utils.js';
-import { mappedForeignUsers, cloudcliRegistryForUserSync } from '@/modules/mymu/user-fs.js';
+import { mappedForeignUsers, cloudcliRegistryForUserSync } from '@/modules/mymu/index.js';
 
 const OC_PREFIX = 'ocs_';
 const REGISTRY_DIR = () =>

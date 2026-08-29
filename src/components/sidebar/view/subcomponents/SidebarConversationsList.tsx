@@ -5,7 +5,7 @@ import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { getSessionDate, getSessionName } from '../../utils/utils';
-import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
 
 type SidebarConversationsListProps = {
   projects: Project[];
@@ -101,7 +101,7 @@ export default function SidebarConversationsList({
               {isProcessing ? (
                 <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border border-primary border-t-transparent" />
               ) : (
-                <SessionProviderLogo provider={provider} className="h-3.5 w-3.5 shrink-0" />
+                <LLMProviderLogo provider={provider} className="h-3.5 w-3.5 shrink-0" />
               )}
               <span className="truncate text-xs font-normal text-foreground">
                 {getSessionName(session, t)}

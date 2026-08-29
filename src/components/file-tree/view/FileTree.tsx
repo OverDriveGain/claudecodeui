@@ -1,4 +1,5 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
+import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, X, Loader2, Folder, Upload } from 'lucide-react';
 
@@ -52,7 +53,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     }
   }, [toast]);
 
-  const { files, loading, refreshFiles, loadSubtree } = useFileTreeData(selectedProject);
+  const { files, loading, error, refreshFiles, loadSubtree } = useFileTreeData(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
@@ -74,6 +75,28 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     showToast,
   });
   const operationLoading = operations.operationLoading || upload.operationLoading;
+
+  // Folder-targeted uploads (context menu / hover button) share one hidden
+  // input; the target path is remembered until the user picks the files.
+  const folderUploadInputRef = useRef<HTMLInputElement>(null);
+  const folderUploadTargetRef = useRef('');
+  const { uploadFiles } = upload;
+
+  const handleUploadToFolder = useCallback((targetPath: string) => {
+    folderUploadTargetRef.current = targetPath;
+    folderUploadInputRef.current?.click();
+  }, []);
+
+  const handleFolderUploadInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const { files: pickedFiles } = event.target;
+      if (pickedFiles && pickedFiles.length > 0) {
+        uploadFiles(Array.from(pickedFiles), folderUploadTargetRef.current);
+      }
+      event.target.value = '';
+    },
+    [uploadFiles],
+  );
 
   // Focus input when creating new item
   useEffect(() => {
@@ -167,12 +190,29 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
       onDragLeave={upload.handleDragLeave}
       onDrop={upload.handleDrop}
     >
-      {/* Drag overlay */}
+      {/* Hidden input for folder-targeted uploads (context menu / hover button) */}
+      <input
+        ref={folderUploadInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFolderUploadInputChange}
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+
+      {/* Drag overlay; pointer-events-none keeps folder rows reachable as drop targets */}
       {upload.isDragOver && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center border-2 border-dashed border-blue-500 bg-blue-500/10">
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center border-2 border-dashed border-blue-500 bg-blue-500/10">
           <div className="flex items-center gap-3 rounded-lg bg-background/95 px-6 py-4 shadow-lg">
             <Upload className="h-6 w-6 text-blue-500" />
-            <span className="text-sm font-medium">{t('fileTree.dropToUpload', 'Drop files to upload')}</span>
+            <span className="text-sm font-medium">
+              {upload.dropTarget
+                ? t('fileTree.dropToUploadTo', 'Drop files to upload to "{{folder}}"', {
+                    folder: upload.dropTarget.split(/[\\/]/).pop(),
+                  })
+                : t('fileTree.dropToUpload', 'Drop files to upload')}
+            </span>
           </div>
         </div>
       )}
@@ -233,6 +273,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         <FileTreeBody
           files={files}
           filteredFiles={filteredFiles}
+          error={error}
           searchQuery={searchQuery}
           viewMode={viewMode}
           expandedDirs={expandedDirs}
@@ -246,7 +287,10 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           onNewFolder={(path) => operations.handleStartCreate(path, 'directory')}
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
+          onUpload={handleUploadToFolder}
           onRefresh={refreshFiles}
+          dropTarget={upload.dropTarget}
+          onItemDragOver={upload.handleItemDragOver}
           // Pass rename state and handlers for inline editing
           renamingItem={operations.renamingItem}
           renameValue={operations.renameValue}
