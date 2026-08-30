@@ -139,8 +139,9 @@ const uploadFormDataWithProgress = (
       if (refreshedToken) {
         storeAuthToken(refreshedToken);
       }
-      if (xhr.getResponseHeader('X-Auth-Error')) {
-        expireAuthSession();
+      const authError = xhr.getResponseHeader('X-Auth-Error');
+      if (authError) {
+        expireAuthSession(authError === 'invalid-token' ? 'invalid-token' : 'session-expired');
       }
 
       const payload = parseUploadResponse(xhr);

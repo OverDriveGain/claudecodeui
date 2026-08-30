@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Lock, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import type { AuthFeedback } from '../types';
 import AuthErrorAlert from './AuthErrorAlert';
 import AuthInputField from './AuthInputField';
 import AuthScreenLayout from './AuthScreenLayout';
@@ -17,6 +18,20 @@ const initialState: LoginFormState = {
   password: '',
 };
 
+// Server AUTH_* / client feedback codes → translated login.errors.* messages.
+// Unknown codes fall back to the raw server message (never blank, never an object).
+const FEEDBACK_I18N_KEYS: Record<string, string> = {
+  AUTH_INVALID_CREDENTIALS: 'login.errors.invalidCredentials',
+  AUTH_CREDENTIALS_REQUIRED: 'login.errors.requiredFields',
+  NETWORK_ERROR: 'login.errors.networkError',
+  AUTH_TOKEN_EXPIRED: 'login.errors.sessionExpired',
+  AUTH_TOKEN_INVALID: 'login.errors.signedOut',
+  AUTH_STATUS_CHECK_FAILED: 'login.errors.statusCheckFailed',
+};
+
+// Being sent back to login is not the user's mistake — show these calmer.
+const NOTICE_CODES = new Set(['AUTH_TOKEN_EXPIRED', 'AUTH_TOKEN_INVALID']);
+
 /**
  * Login form component.
  * Handles credential input with browser autofill support (`autocomplete`
@@ -24,10 +39,10 @@ const initialState: LoginFormState = {
  */
 export default function LoginForm() {
   const { t } = useTranslation('auth');
-  const { error: sessionError, login } = useAuth();
+  const { error: sessionFeedback, login } = useAuth();
 
   const [formState, setFormState] = useState<LoginFormState>(initialState);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [submitFeedback, setSubmitFeedback] = useState<AuthFeedback | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const updateField = useCallback((field: keyof LoginFormState, value: string) => {
@@ -37,23 +52,35 @@ export default function LoginForm() {
   const handleSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      setErrorMessage('');
+      setSubmitFeedback(null);
 
       // Keep form validation local so each auth screen owns its own UI feedback.
       if (!formState.username.trim() || !formState.password) {
-        setErrorMessage(t('login.errors.requiredFields'));
+        setSubmitFeedback({
+          code: 'AUTH_CREDENTIALS_REQUIRED',
+          message: t('login.errors.requiredFields'),
+        });
         return;
       }
 
       setIsSubmitting(true);
       const result = await login(formState.username.trim(), formState.password);
       if (!result.success) {
-        setErrorMessage(result.error);
+        setSubmitFeedback({ code: result.code, message: result.error });
       }
       setIsSubmitting(false);
     },
     [formState.password, formState.username, login, t],
   );
+
+  // A fresh submit result replaces the "why am I back at login" notice.
+  const activeFeedback = submitFeedback ?? sessionFeedback;
+  const i18nKey = activeFeedback?.code ? FEEDBACK_I18N_KEYS[activeFeedback.code] : undefined;
+  const feedbackText = activeFeedback
+    ? (i18nKey ? t(i18nKey, { defaultValue: activeFeedback.message }) : activeFeedback.message)
+    : '';
+  const feedbackVariant =
+    activeFeedback?.code && NOTICE_CODES.has(activeFeedback.code) ? 'notice' : 'error';
 
   return (
     <AuthScreenLayout
@@ -85,7 +112,7 @@ export default function LoginForm() {
           icon={Lock}
         />
 
-        <AuthErrorAlert errorMessage={errorMessage || sessionError || ''} />
+        <AuthErrorAlert errorMessage={feedbackText} variant={feedbackVariant} />
 
         <button
           type="submit"

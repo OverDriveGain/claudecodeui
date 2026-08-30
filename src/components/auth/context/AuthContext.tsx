@@ -9,9 +9,10 @@ import {
   isValidRefreshedToken,
   storeAuthToken,
 } from '../../../utils/api';
-import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
+import { AUTH_ERROR_MESSAGES, AUTH_FEEDBACK_CODES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
 import type {
   AuthContextValue,
+  AuthFeedback,
   AuthProviderProps,
   AuthSessionPayload,
   AuthStatusPayload,
@@ -19,7 +20,7 @@ import type {
   AuthUserPayload,
   OnboardingStatusPayload,
 } from '../types';
-import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
+import { parseJsonSafely, resolveApiErrorCode, resolveApiErrorMessage } from '../utils';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -48,7 +49,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AuthFeedback | null>(null);
 
   const setSession = useCallback((nextUser: AuthUser, nextToken: string) => {
     setUser(nextUser);
@@ -112,9 +113,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setToken(nextToken);
       }
     };
-    const handleSessionExpired = () => {
+    const handleSessionExpired = (event: Event) => {
       clearSession();
-      setError(AUTH_ERROR_MESSAGES.sessionExpired);
+      // Reason mirrors the server's X-Auth-Error values (see expireAuthSession).
+      const reason = (event as CustomEvent<unknown>).detail;
+      setError(
+        reason === 'invalid-token'
+          ? { code: AUTH_FEEDBACK_CODES.signedOut, message: AUTH_ERROR_MESSAGES.signedOut }
+          : { code: AUTH_FEEDBACK_CODES.sessionExpired, message: AUTH_ERROR_MESSAGES.sessionExpired },
+      );
     };
 
     window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, handleTokenRefreshed);
@@ -160,7 +167,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await checkOnboardingStatus();
     } catch (caughtError) {
       console.error('[Auth] Auth status check failed:', caughtError);
-      setError(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
+      setError({
+        code: AUTH_FEEDBACK_CODES.statusCheckFailed,
+        message: AUTH_ERROR_MESSAGES.authStatusCheckFailed,
+      });
     } finally {
       setIsLoading(false);
     }
@@ -222,8 +232,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         if (!response.ok || !payload?.token || !payload.user) {
           const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
-          setError(message);
-          return { success: false, error: message };
+          const code = resolveApiErrorCode(payload);
+          setError({ code, message });
+          return { success: false, error: message, code };
         }
 
         setSession(payload.user, payload.token);
@@ -232,8 +243,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Login error:', caughtError);
-        setError(AUTH_ERROR_MESSAGES.networkError);
-        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+        const feedback = {
+          code: AUTH_FEEDBACK_CODES.networkError,
+          message: AUTH_ERROR_MESSAGES.networkError,
+        };
+        setError(feedback);
+        return { success: false, error: feedback.message, code: feedback.code };
       }
     },
     [checkOnboardingStatus, setSession],
@@ -248,8 +263,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         if (!response.ok || !payload?.token || !payload.user) {
           const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.registrationFailed);
-          setError(message);
-          return { success: false, error: message };
+          const code = resolveApiErrorCode(payload);
+          setError({ code, message });
+          return { success: false, error: message, code };
         }
 
         setSession(payload.user, payload.token);
@@ -258,8 +274,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Registration error:', caughtError);
-        setError(AUTH_ERROR_MESSAGES.networkError);
-        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+        const feedback = {
+          code: AUTH_FEEDBACK_CODES.networkError,
+          message: AUTH_ERROR_MESSAGES.networkError,
+        };
+        setError(feedback);
+        return { success: false, error: feedback.message, code: feedback.code };
       }
     },
     [checkOnboardingStatus, setSession],

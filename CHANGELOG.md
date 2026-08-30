@@ -2,6 +2,14 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.15] — MyMu (2026-08-30)
+
+### Bug Fixes
+
+* **Wrong password now actually says so** — a failed login answers through the global error handler with the structured body `{ success:false, error:{ code, message } }`, but the login screen's error resolver predated that envelope and returned the inner error **object** instead of its message, so the alert rendered garbage instead of "Invalid username or password". The resolver now routes through the shared `readError` chokepoint (never an object, never blank) and also surfaces the machine code.
+* **Login failures are translated** — the locale files always had `invalidCredentials` / `requiredFields` / `networkError` strings in all 11 languages, but the login form never used them: whatever English text the server sent was shown verbatim. Known failure codes (`AUTH_INVALID_CREDENTIALS`, `AUTH_CREDENTIALS_REQUIRED`, `NETWORK_ERROR`, …) now map to the user's language, with the raw server message kept as fallback for unknown codes.
+* **Session expiry explains itself** — being bounced back to the login screen now shows a calm amber notice instead of a red error, and distinguishes the two server reasons carried in `X-Auth-Error`: "Your session expired. Please sign in again." (token aged out) vs "You were signed out. Please sign in again." (token invalidated — e.g. secret rotated or user removed). Previously both collapsed into one hard-coded English string styled like a user mistake. New `sessionExpired` / `signedOut` / `statusCheckFailed` strings in all 11 locales.
+
 ## [1.37.14] — MyMu (2026-08-29)
 
 ### Bug Fixes

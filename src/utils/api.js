@@ -65,10 +65,17 @@ export const getAuthTokenRefreshDelay = (token) => {
   return Math.max(0, refreshAt - Date.now());
 };
 
-export const expireAuthSession = () => {
+/**
+ * Drop the stored session and notify the app. `reason` mirrors the server's
+ * X-Auth-Error header values — 'session-expired' (token aged out) vs
+ * 'invalid-token' (revoked/rotated/user gone) — so the login screen can say
+ * WHY the user is back there instead of a one-size-fits-all message.
+ * @param {'session-expired' | 'invalid-token'} [reason]
+ */
+export const expireAuthSession = (reason = 'session-expired') => {
   localStorage.removeItem('auth-token');
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
+    window.dispatchEvent(new CustomEvent(AUTH_SESSION_EXPIRED_EVENT, { detail: reason }));
   }
 };
 
@@ -135,8 +142,9 @@ export const authenticatedFetch = (url, options = {}, host = null) => {
     if (refreshedToken && !host) {
       storeAuthToken(refreshedToken);
     }
-    if (!host && response.headers.get('X-Auth-Error')) {
-      expireAuthSession();
+    const authError = response.headers.get('X-Auth-Error');
+    if (!host && authError) {
+      expireAuthSession(authError === 'invalid-token' ? 'invalid-token' : 'session-expired');
     }
     return response;
   });
