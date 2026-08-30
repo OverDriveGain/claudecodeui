@@ -2,6 +2,17 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.16] — MyMu (2026-08-30)
+
+### New Features
+
+* **Composer controls now drive live agents** — the model picker (and reasoning effort where the harness has it) works on live-agent conversations exactly like on normal ones. The frontend is unchanged; the backend translates the pick per harness:
+  * **Codex agents** — `model` and `effort` ride the app-server's per-turn overrides (`turn/start`), which persist for subsequent turns.
+  * **OpenCode agents** — the pick is split into `model: {providerID, modelID}` and effort maps to the model `variant`, sent in the same `prompt_async` call as the message (schema verified against opencode 1.18).
+  * **Claude relay agents** — the relay protocol has no per-message model field, so a changed pick is applied by driving the agent's own `/model <value>` command before the message (deduped per session; a manually typed `/model` updates the memo instead). Approval/permission posture is deliberately NOT remotely overridable — an agent's sandbox belongs to its own launch config.
+  * Picking `default` (or nothing) leaves the agent's own setting alone in all three harnesses.
+* **Model block-list (F8) now covers live agents** — an explicit composer pick of a denied model on a live-agent conversation is refused server-side (`MODEL_NOT_ALLOWED`) before anything reaches the agent, closing the gap where relay sessions bypassed the per-user block-list.
+
 ## [1.37.15] — MyMu (2026-08-30)
 
 ### Bug Fixes

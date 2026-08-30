@@ -193,6 +193,23 @@ async function handleChatSend(
   if (isRelaySession(sessionId)) {
     const command = typeof data.content === 'string' ? data.content : '';
     const clientOptions = (data.options ?? {}) as AnyRecord;
+    // MYMU F8: live-agent sends honor the per-user model block-list too — the
+    // channel adapters now APPLY an explicit composer pick on the agent, so a
+    // blocked model must be refused here exactly like a local session. Only an
+    // explicit pick is checked ('default'/unset leaves the agent's own model).
+    const relayModelRaw = typeof clientOptions.model === 'string' ? clientOptions.model.trim() : '';
+    if (relayModelRaw && relayModelRaw !== 'default') {
+      const relayDeny = effectiveModelDeny(userId == null ? null : userDb.getUserById(Number(userId)));
+      if (relayDeny.length > 0 && isModelBlocked(relayModelRaw, relayDeny)) {
+        sendProtocolError(
+          ws,
+          'MODEL_NOT_ALLOWED',
+          `Model "${relayModelRaw}" is not available on your account.`,
+          sessionId,
+        );
+        return;
+      }
+    }
     // MYMU: live agents take the SAME attachment pipeline as project sessions —
     // the client uploads through POST /api/assets/files and the descriptors are
     // re-verified against the upload store here. Before this, relay options went
@@ -240,8 +257,8 @@ async function handleChatSend(
   // MYMU: per-user model block-list. A blocked model is refused before the run
   // starts — this catches a hand-crafted request AND a session previously
   // recorded with a now-blocked model, so the restriction is never picker-only.
-  // Owners are exempt (effectiveModelDeny returns []). Relay sessions are not
-  // checked here: their model is chosen on the agent's own host.
+  // Owners are exempt (effectiveModelDeny returns []). Relay sessions run the
+  // same check on an explicit pick in their branch above.
   const modelDeny = effectiveModelDeny(userId == null ? null : userDb.getUserById(Number(userId)));
   if (modelDeny.length > 0) {
     const requestedRaw = (data.options as AnyRecord | undefined)?.model;

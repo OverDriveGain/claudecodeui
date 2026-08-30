@@ -1510,7 +1510,17 @@ function toUserContent(text, attachments) {
  * are folded into the message as content blocks. `normalize` is forwarded to
  * attachSession. Returns { sessionId }.
  */
-export async function driveRemoteSession({ ws, sessionId, command, images, normalize }) {
+/**
+ * Composer model picks already applied per session (`sessionId` → model value).
+ * The relay protocol has no per-message model field; a pick is applied by
+ * driving the agent's own `/model <value>` local command, which persists on the
+ * agent like typing it in its terminal — so it only needs to be sent when the
+ * pick CHANGES, not on every message. In-memory on purpose: after a server
+ * restart the worst case is one redundant `/model` no-op.
+ */
+const lastDrivenModel = new Map();
+
+export async function driveRemoteSession({ ws, sessionId, command, images, normalize, model }) {
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
   // Announce the session id so the GUI binds its view to it (it opened the agent
   // leaf with no session id yet).
@@ -1526,6 +1536,19 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
   const content = toUserContent(command, images);
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
   if (hasContent) {
+    // Apply the composer's model pick by driving the agent's own /model command
+    // (the CLI executes driven local commands; see the result-frame note below).
+    // A manual "/model x" typed in the chat updates the memo instead — and any
+    // driven slash command skips injection so "/clear" never gets a /model first.
+    const trimmed = typeof command === 'string' ? command.trim() : '';
+    if (trimmed.startsWith('/')) {
+      const manual = /^\/model\s+(\S+)/.exec(trimmed);
+      if (manual) lastDrivenModel.set(sessionId, manual[1]);
+    } else if (model && model !== lastDrivenModel.get(sessionId)) {
+      const switched = await sendMessage(sessionId, `/model ${model}`);
+      // Delivery failures fall through to the main send, which surfaces them.
+      if (switched.ok) lastDrivenModel.set(sessionId, model);
+    }
     const sent = await sendMessage(sessionId, content);
     if (sent.ok) {
       // Open the turn for the stall watchdog: if the subscribe socket is dead from

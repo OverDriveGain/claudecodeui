@@ -67,6 +67,11 @@ export function isRemoteCommand(options) {
   return Boolean(options && typeof options.remoteControl === 'string' && options.remoteControl.length > 0);
 }
 
+/** A composer pick counts only when the user chose something concrete —
+ *  'default'/empty means "leave the agent's own setting alone". */
+const pickOption = (value) =>
+  typeof value === 'string' && value.trim() && value.trim() !== 'default' ? value.trim() : null;
+
 /** True once a remote session is attached (used by the abort path). */
 export function isRemoteSession(sessionId) {
   return isActiveRemoteSession(sessionId);
@@ -133,7 +138,15 @@ export async function queryRemoteChannel(command, options, writer) {
       provider: 'claude',
     }));
   }
-  return driveRemoteSession({ ws: writer, sessionId, command: outCommand, images: outImages, normalize: normalizeClaude });
+  return driveRemoteSession({
+    ws: writer,
+    sessionId,
+    command: outCommand,
+    images: outImages,
+    normalize: normalizeClaude,
+    // Composer model pick → driven /model command on the agent (rc-client dedupes).
+    model: pickOption(opts.model),
+  });
 }
 
 /**

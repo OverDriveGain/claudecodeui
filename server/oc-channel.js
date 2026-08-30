@@ -40,6 +40,11 @@ export function isOcSession(sessionId) {
   return isOcSessionId(sessionId) || isActiveOcSession(sessionId);
 }
 
+/** A composer pick counts only when the user chose something concrete —
+ *  'default'/empty means "leave the agent's own setting alone". */
+const pickOption = (value) =>
+  typeof value === 'string' && value.trim() && value.trim() !== 'default' ? value.trim() : null;
+
 /** Run one live-agent chat turn against the agent's opencode server. */
 export async function queryOcChannel(command, options, writer) {
   const opts = options || {};
@@ -77,7 +82,15 @@ export async function queryOcChannel(command, options, writer) {
       provider: 'opencode',
     }));
   }
-  return driveOcSession({ ws: writer, sessionId, command: outCommand, normalize: normalizeOpenCode });
+  return driveOcSession({
+    ws: writer,
+    sessionId,
+    command: outCommand,
+    normalize: normalizeOpenCode,
+    // Composer picks → prompt_async body (model:{providerID,modelID}, variant).
+    model: pickOption(opts.model),
+    effort: pickOption(opts.effort),
+  });
 }
 
 /** Read-only live mirror of an agent session (GUI opened the conversation). */

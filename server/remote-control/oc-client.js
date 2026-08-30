@@ -667,7 +667,7 @@ async function handleOcSlashCommand({ ws, sessionId, parsed, reg, name, args }) 
 }
 
 /** Send one user turn to the agent's own queue (fire-and-forget on the server). */
-export async function driveOcSession({ ws, sessionId, command, normalize }) {
+export async function driveOcSession({ ws, sessionId, command, normalize, model, effort }) {
   const parsed = parseOcId(sessionId);
   if (!parsed) throw new Error(`not an opencode session id: ${sessionId}`);
   const reg = registration(parsed.agent);
@@ -691,9 +691,21 @@ export async function driveOcSession({ ws, sessionId, command, normalize }) {
     return;
   }
   try {
-    await ocRequest(reg, 'POST', `/session/${encodeURIComponent(parsed.ses)}/prompt_async`, {
-      parts: [{ type: 'text', text: command || '' }],
-    });
+    const body = { parts: [{ type: 'text', text: command || '' }] };
+    // Composer model pick: MyMu's opencode catalog values are
+    // '<providerID>/<modelID>' — exactly what prompt_async's model object wants.
+    // Only sent when the user picked something; otherwise the agent's own
+    // session default applies (the schema was verified against opencode 1.18).
+    if (typeof model === 'string' && model.includes('/')) {
+      const slash = model.indexOf('/');
+      body.model = { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
+    }
+    // Composer effort pick maps to opencode's model variant (the local runtime
+    // passes the same value as `--variant`).
+    if (typeof effort === 'string' && effort) {
+      body.variant = effort;
+    }
+    await ocRequest(reg, 'POST', `/session/${encodeURIComponent(parsed.ses)}/prompt_async`, body);
     const entry = sessionEntry(sessionId, { create: true });
     entry.turnOpen = true;
   } catch (err) {

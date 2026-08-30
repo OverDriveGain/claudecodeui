@@ -843,7 +843,15 @@ async function handleCxSlashCommand({ ws, sessionId, parsed, name }) {
 }
 
 /** Send one user turn to the agent's thread. */
-export async function driveCxSession({ ws, sessionId, command }) {
+export async function driveCxSession({ ws, sessionId, command, model, effort }) {
+  // Composer picks → the protocol's per-turn overrides ("for this turn and
+  // subsequent turns"). Only sent when the user picked something concrete;
+  // approval/sandbox policy is deliberately NOT overridable from the chat —
+  // an agent's permission posture belongs to its own launch config.
+  const turnOverrides = {
+    ...(typeof model === 'string' && model ? { model } : {}),
+    ...(typeof effort === 'string' && effort ? { effort } : {}),
+  };
   const parsed = parseCxId(sessionId);
   if (!parsed) throw new Error(`not a codex session id: ${sessionId}`);
   const reg = registration(parsed.agent);
@@ -882,6 +890,7 @@ export async function driveCxSession({ ws, sessionId, command }) {
       await cxRpc(parsed.agent, 'turn/start', {
         threadId: newThread,
         input: [{ type: 'text', text: command || '' }],
+        ...turnOverrides,
       }, { timeout: 30000 });
       placeholder.turnOpen = true;
       return;
@@ -890,6 +899,7 @@ export async function driveCxSession({ ws, sessionId, command }) {
     await cxRpc(parsed.agent, 'turn/start', {
       threadId: parsed.thread,
       input: [{ type: 'text', text: command || '' }],
+      ...turnOverrides,
     }, { timeout: 30000 });
     const entry = sessionEntry(sessionId, { create: true });
     entry.turnOpen = true;

@@ -25,6 +25,11 @@ export function isCxSession(sessionId) {
   return isCxSessionId(sessionId) || isActiveCxSession(sessionId);
 }
 
+/** A composer pick counts only when the user chose something concrete —
+ *  'default'/empty means "leave the agent's own setting alone". */
+const pickOption = (value) =>
+  typeof value === 'string' && value.trim() && value.trim() !== 'default' ? value.trim() : null;
+
 /** Run one live-agent chat turn against the agent's codex app-server. */
 export async function queryCxChannel(command, options, writer) {
   const opts = options || {};
@@ -62,7 +67,14 @@ export async function queryCxChannel(command, options, writer) {
       provider: 'codex',
     }));
   }
-  return driveCxSession({ ws: writer, sessionId, command: outCommand });
+  return driveCxSession({
+    ws: writer,
+    sessionId,
+    command: outCommand,
+    // Composer picks → turn/start per-turn overrides (protocol: model, effort).
+    model: pickOption(opts.model),
+    effort: pickOption(opts.effort),
+  });
 }
 
 /** Read-only live mirror of an agent session (GUI opened the conversation). */
