@@ -2,6 +2,19 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.17] — MyMu (2026-09-01)
+
+### New Features
+
+* **Per-user agent block-list (F10)** — a new `users.agent_deny` column names agents an account may **not** see, as comma/space-separated globs (same syntax as `agent_allow`). It is the negative counterpart of the existing allow-list, which is allow-only: expressing "everything except one agent" previously meant enumerating every agent by hand, so each newly created agent silently went invisible until someone edited the DB. With `agent_deny` the account keeps its auto-derived `<user>,<user>-*` scope — new agents keep appearing — and just names the exception.
+  * **Deny wins over everything**: the allow-list, the linux-user path-ownership rule, and `account_owner`. The path rule mattered here — an agent's own workspace lives under its owner's home (`/home/bti/…/bti-wael`), so a name-based allow-list could never have hidden it from a user mapped to that linux user.
+  * **Enforced server-side, not UI-only**: the block is applied in the remote-agent list (and therefore in `isAgentCaptureAllowed`, which gates drive/subscribe/history/file access for live agents), the local project list, transcript reads, the file browser, the realtime session-push per socket, and the local spawn cwd check. A hand-crafted request for a blocked agent is refused, not merely hidden.
+  * Independent of `account_owner`, matching F8's reasoning — a block set on an operator account still applies. Accounts with no `agent_deny` (the common case) are entirely unaffected. Distinct from the existing "hide agent from my view" preference, which is self-service and reversible by the user.
+
+### Bug Fixes
+
+* **Local project file browsing no longer 500s** — `remote-files.js` called `currentAgentAllow()`, `isNameAllowedForUser()`, `currentLinuxUser()` and `isPathOwnedByLinuxUser()` in `resolveProjectRootById()` without importing any of them, so every file-tree / file-read / file-write request for a **local** (non-live-agent) project threw `ReferenceError: currentAgentAllow is not defined` → HTTP 500. Live-agent projects took an earlier return and were unaffected, which is why the 1.37.14 verification (remote file tree) did not catch it. Same class as the two latent import bugs fixed in 1.37.14 — plain `.js`, so `tsc` never saw it. Verified before/after: pre-fix build returns `500 {"error":"currentAgentAllow is not defined"}`, post-fix returns `200`.
+
 ## [1.37.16] — MyMu (2026-08-30)
 
 ### New Features

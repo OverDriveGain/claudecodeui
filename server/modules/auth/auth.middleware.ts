@@ -5,7 +5,7 @@ import { IS_PLATFORM } from '@/shared/utils.js';
 
 import { userDb, appConfigDb } from '../database/index.js';
 // MYMU: per-user agent visibility + linux-user mapping (FORK.md S2)
-import { runWithUserContext, effectiveAgentAllowRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
+import { runWithUserContext, effectiveAgentAllowRaw, effectiveAgentDenyRaw, effectiveLinuxUser } from '@/modules/mymu/index.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -35,7 +35,12 @@ const authenticateToken = async (req, res, next) => {
       }
       req.user = user;
       // MYMU: visibility context on the platform path too
-      return runWithUserContext(effectiveAgentAllowRaw(user), next, effectiveLinuxUser(user));
+      return runWithUserContext(
+        effectiveAgentAllowRaw(user),
+        next,
+        effectiveLinuxUser(user),
+        effectiveAgentDenyRaw(user),
+      );
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -84,8 +89,14 @@ const authenticateToken = async (req, res, next) => {
 
     req.user = user;
     // MYMU: carry per-agent visibility (account_owner → unrestricted; explicit
-    // agent_allow → as set; else derived from the mapped linux user).
-    return runWithUserContext(effectiveAgentAllowRaw(user), next, effectiveLinuxUser(user));
+    // agent_allow → as set; else derived from the mapped linux user), plus the
+    // agent_deny block-list that overrides all three.
+    return runWithUserContext(
+      effectiveAgentAllowRaw(user),
+      next,
+      effectiveLinuxUser(user),
+      effectiveAgentDenyRaw(user),
+    );
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
       res.setHeader('X-Auth-Error', 'session-expired');
@@ -133,6 +144,7 @@ const authenticateWebSocket = (token) => {
           userId: user.id,
           username: user.username,
           agent_allow: user.agent_allow,
+          agent_deny: user.agent_deny,
           linux_user: user.linux_user,
           account_owner: user.account_owner,
           model_deny: user.model_deny,
@@ -162,6 +174,7 @@ const authenticateWebSocket = (token) => {
       userId: user.id,
       username: user.username,
       agent_allow: user.agent_allow,
+      agent_deny: user.agent_deny,
       linux_user: user.linux_user,
       account_owner: user.account_owner,
       model_deny: user.model_deny,

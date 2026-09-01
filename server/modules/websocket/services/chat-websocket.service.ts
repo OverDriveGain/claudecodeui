@@ -21,7 +21,7 @@ import type {
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 // MYMU: per-user agent visibility on the chat socket (FORK.md S2)
-import { runWithUserContext, parseAgentAllow, effectiveAgentAllowRaw, effectiveLinuxUser, effectiveModelDeny, isModelBlocked } from '@/modules/mymu/index.js';
+import { runWithUserContext, parseAgentAllow, parseAgentDeny, effectiveAgentAllowRaw, effectiveAgentDenyRaw, effectiveLinuxUser, effectiveModelDeny, isModelBlocked } from '@/modules/mymu/index.js';
 // MYMU: live relay agents (FORK.md S1) — relay sessions (Anthropic `cse_` ids)
 // are driven over the remote-control proxy, injected by the server root (the
 // rc-channel adapter is a root file outside the module graph, like claude-sdk).
@@ -521,9 +521,11 @@ export function handleChatConnection(
   // so per-user broadcasters can scope their pushes to this client.
   const wsUser = request?.user as Record<string, unknown> | undefined;
   const agentAllowRaw = effectiveAgentAllowRaw(wsUser as never);
+  const agentDenyRaw = effectiveAgentDenyRaw(wsUser as never);
   const wsLinuxUser = effectiveLinuxUser(wsUser as never);
   (ws as unknown as Record<string, unknown>).agentAllow = parseAgentAllow(agentAllowRaw);
   (ws as unknown as Record<string, unknown>).linuxUser = wsLinuxUser;
+  (ws as unknown as Record<string, unknown>).agentDeny = parseAgentDeny(agentDenyRaw);
 
   ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, async () => {
     try {
@@ -557,7 +559,7 @@ export function handleChatConnection(
       console.error('[ERROR] Chat WebSocket error:', message);
       sendProtocolError(ws, 'INTERNAL_ERROR', message);
     }
-  }, wsLinuxUser)); // MYMU: closes runWithUserContext
+  }, wsLinuxUser, agentDenyRaw)); // MYMU: closes runWithUserContext
 
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');

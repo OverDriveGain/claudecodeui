@@ -473,6 +473,13 @@ export const runMigrations = (db: Database) => {
     // (see effectiveAgentAllowRaw); the old NULL=admin semantics are preserved
     // by the account_owner stamp below.
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_allow', 'TEXT DEFAULT NULL');
+    // Per-user remote-agent BLOCK-list (F10). Comma/space-separated globs — same
+    // syntax as agent_allow — naming agents this account may NOT see. Evaluated
+    // LAST and unconditionally: it overrides the allow-list, the linux-user
+    // path-ownership rule, and `account_owner`. NULL/empty = nothing blocked.
+    // Exists because agent_allow is allow-only: expressing "everything except X"
+    // otherwise means enumerating every agent, which silently hides each NEW one.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'agent_deny', 'TEXT DEFAULT NULL');
     // One-instance-per-host user model (2026-07-25): every account maps to a
     // linux user on this host (NULL = same as username; aliases like wael→bti
     // set it explicitly), and `account_owner` marks the operator role that sees

@@ -19,7 +19,7 @@ import { getOcSessionRows } from '@/remote-control/oc-client.js';
 import { getCxSessionRows, normalizeCxItems } from '@/remote-control/cx-client.js';
 import { isAgentCaptureAllowed } from '@/services/rc.service.js';
 import { deriveContextUsage, usageContextTokens } from '@/modules/providers/list/claude/claude-sessions.provider.js';
-import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isPathOwnedByLinuxUser } from '@/services/user-context.js';
+import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isNameDeniedForUser, isPathOwnedByLinuxUser } from '@/services/user-context.js';
 
 type CreateAppSessionResult = {
   sessionId: string;
@@ -440,10 +440,13 @@ export const sessionsService = {
     // projects that match their agent name OR live under their mapped linux
     // user's home — the same scope the conversations list shows. Deny others
     // rather than leak that the session exists.
+    // agent_deny overrides both clauses: a blocked name is unreadable even when
+    // the project lives in the user's own mapped home.
     if (
-      currentAgentAllow()?.length &&
-      !isNameAllowedForUser(path.basename(session.project_path ?? '')) &&
-      !isPathOwnedByLinuxUser(session.project_path ?? '', currentLinuxUser())
+      isNameDeniedForUser(path.basename(session.project_path ?? '')) ||
+      (currentAgentAllow()?.length &&
+        !isNameAllowedForUser(path.basename(session.project_path ?? '')) &&
+        !isPathOwnedByLinuxUser(session.project_path ?? '', currentLinuxUser()))
     ) {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }

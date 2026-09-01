@@ -33,7 +33,7 @@ import {
   getCxSessionCwd,
   getCxAccountErrors,
 } from '@/remote-control/cx-client.js';
-import { currentAgentAllow } from '@/services/user-context.js';
+import { currentAgentAllow, currentAgentDeny } from '@/services/user-context.js';
 import { resolveLocalSessionCwd } from '@/services/local-sessions.js';
 
 // Paging the whole fleet is heavier than a single request. The roster itself
@@ -126,9 +126,24 @@ function captureAllows(title: string): boolean {
  */
 function filterByUser(agents: RemoteAgent[]): RemoteAgent[] {
   const allow = currentAgentAllow();
-  if (!allow || allow.length === 0) return agents;
-  const res = allow.map(globToRegExp);
-  return agents.filter((a) => res.some((re) => re.test(a.title)));
+  const deny = currentAgentDeny();
+  const hasAllow = Boolean(allow && allow.length > 0);
+  const hasDeny = Boolean(deny && deny.length > 0);
+  if (!hasAllow && !hasDeny) return agents;
+  let out = agents;
+  if (hasAllow) {
+    const res = (allow as string[]).map(globToRegExp);
+    out = out.filter((a) => res.some((re) => re.test(a.title)));
+  }
+  // Deny last, and independent of the allow-list: an account_owner (allow = null)
+  // with an agent_deny is still blocked. Because isAgentCaptureAllowed derives
+  // from this list, a blocked agent is unreachable for drive/subscribe/history/
+  // files too — not merely absent from the sidebar.
+  if (hasDeny) {
+    const res = (deny as string[]).map(globToRegExp);
+    out = out.filter((a) => !res.some((re) => re.test(a.title)));
+  }
+  return out;
 }
 
 // `value` is the collapsed one-leaf-per-agent list the GUI shows; `sessions` is the

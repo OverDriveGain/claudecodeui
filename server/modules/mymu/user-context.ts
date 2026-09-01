@@ -28,6 +28,13 @@ export interface UserContext {
    * unrestricted (owner) or unmapped.
    */
   linuxUser: string | null;
+  /**
+   * Per-user agent BLOCK-list (`agent_deny`). null/empty = nothing blocked.
+   * Evaluated LAST and unconditionally: a denied name is invisible even when the
+   * allow-list matches it, even when the project lives in the user's own home,
+   * and even for an `account_owner`. See `isNameDeniedFor`.
+   */
+  agentDeny: string[] | null;
 }
 
 const storage = new AsyncLocalStorage<UserContext>();
@@ -36,6 +43,17 @@ const storage = new AsyncLocalStorage<UserContext>();
 export function parseAgentAllow(raw: string | null | undefined): string[] | null {
   if (!raw) return null;
   const patterns = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return patterns.length > 0 ? patterns : null;
+}
+
+/**
+ * Parse a stored `agent_deny` string into patterns. Same glob syntax as
+ * `agent_allow`, but comma OR whitespace separated (agent names never contain
+ * spaces, so this is strictly more forgiving). Empty/whitespace → null.
+ */
+export function parseAgentDeny(raw: string | null | undefined): string[] | null {
+  if (!raw) return null;
+  const patterns = raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
   return patterns.length > 0 ? patterns : null;
 }
 
@@ -67,13 +85,43 @@ export function isNameAllowedForUser(name: string): boolean {
   return isNameAllowedFor(name, currentAgentAllow());
 }
 
+/**
+ * Whether `name` is BLOCKED by the given `agent_deny` patterns. null/empty = nothing
+ * blocked (false for everything). Same case-insensitive glob syntax as the allow-list.
+ *
+ * SECURITY: deny is the OVERRIDE. Every visibility decision is
+ * `denied ? hidden : (allowed || path-owned)`, so a block cannot be defeated by an
+ * allow pattern that also matches, by the project living in the user's own home, or
+ * by the account being an `account_owner`. Pure — takes the patterns explicitly, so
+ * it works off the request context (isNameDeniedForUser) AND off a stored
+ * per-connection block-list (the watcher's per-client broadcast).
+ */
+export function isNameDeniedFor(name: string, agentDeny: string[] | null | undefined): boolean {
+  if (!agentDeny || agentDeny.length === 0) return false;
+  if (!name) return false;
+  return agentDeny.some((pattern) => globToRegExp(pattern).test(name));
+}
+
+/** Whether `name` is blocked for the CURRENT request's user. */
+export function isNameDeniedForUser(name: string): boolean {
+  return isNameDeniedFor(name, currentAgentDeny());
+}
+
 /** Run `fn` with the given user's agent-visibility context active. */
 export function runWithUserContext<T>(
   agentAllowRaw: string | null | undefined,
   fn: () => T,
   linuxUser: string | null = null,
+  agentDenyRaw: string | null | undefined = null,
 ): T {
-  return storage.run({ agentAllow: parseAgentAllow(agentAllowRaw), linuxUser }, fn);
+  return storage.run(
+    {
+      agentAllow: parseAgentAllow(agentAllowRaw),
+      linuxUser,
+      agentDeny: parseAgentDeny(agentDenyRaw),
+    },
+    fn,
+  );
 }
 
 /** The linux user the CURRENT request's account maps to (null = owner/unmapped). */
@@ -103,6 +151,7 @@ export function isPathOwnedByLinuxUser(projectPath: string, linuxUser: string | 
 export interface VisibilityUser {
   username?: string | null;
   agent_allow?: string | null;
+  agent_deny?: string | null;
   linux_user?: string | null;
   account_owner?: number | boolean | null;
 }
@@ -131,9 +180,30 @@ export function effectiveAgentAllowRaw(user: VisibilityUser | null | undefined):
 }
 
 /**
+ * The RAW block-list to run a user's context with. Unlike `effectiveAgentAllowRaw`
+ * this is INDEPENDENT of `account_owner` and never derived: it is exactly what an
+ * operator stored on the account, or null. Same axis-separation reasoning as
+ * `model_deny` (F8) — a targeted block must apply to whoever it is set on, and an
+ * account that has no `agent_deny` (the common case) is entirely unaffected.
+ */
+export function effectiveAgentDenyRaw(user: VisibilityUser | null | undefined): string | null {
+  if (!user) return null;
+  const explicit = (user.agent_deny ?? '').trim();
+  return explicit || null;
+}
+
+/**
  * The current request's agent allow-list. `null` means "no restriction" — either
  * an admin user (no agent_allow set) or a context-less internal call.
  */
 export function currentAgentAllow(): string[] | null {
   return storage.getStore()?.agentAllow ?? null;
+}
+
+/**
+ * The current request's agent block-list. `null` means "nothing blocked" — the
+ * common case, including owners and context-less internal calls.
+ */
+export function currentAgentDeny(): string[] | null {
+  return storage.getStore()?.agentDeny ?? null;
 }

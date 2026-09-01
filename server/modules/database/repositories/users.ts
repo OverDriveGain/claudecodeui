@@ -21,6 +21,9 @@ type UserRow = {
   git_email: string | null;
   has_completed_onboarding: number;
   agent_allow: string | null;
+  // Per-user agent block-list: comma/space-separated globs this account may NOT
+  // see. Overrides agent_allow, path-ownership AND account_owner. NULL = none.
+  agent_deny: string | null;
   // One-instance-per-host model: the linux user this account maps to (NULL =
   // same as username) and the operator role that sees everything the
   // deployment surfaces.
@@ -36,7 +39,7 @@ type UserRow = {
 
 type UserPublicRow = Pick<
   UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny'
+  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'agent_deny' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny'
 >;
 
 type UserGitConfig = {
@@ -101,7 +104,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -111,7 +114,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },
@@ -184,6 +187,17 @@ export const userDb = {
     const db = getConnection();
     const value = typeof deny === 'string' && deny.trim() ? deny.trim() : null;
     db.prepare('UPDATE users SET model_deny = ? WHERE id = ?').run(value, userId);
+  },
+
+  /**
+   * Sets (or clears, with null/empty) the user's agent block-list. Stored as a
+   * comma-separated string of name globs the account may NOT see. Applies to
+   * whoever it is set on — owners included.
+   */
+  updateAgentDeny(userId: number, deny: string | null): void {
+    const db = getConnection();
+    const value = typeof deny === 'string' && deny.trim() ? deny.trim() : null;
+    db.prepare('UPDATE users SET agent_deny = ? WHERE id = ?').run(value, userId);
   },
 
   /** Returns true if the user has finished the onboarding flow. */

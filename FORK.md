@@ -172,6 +172,35 @@ inside the tenant or codex itself; launch-time registration only.
   and turns come from `thread/resume` instead; getCxSessionRows handles both
   generations. Re-verify F9 e2e on every codex SDK bump.
 
+### F10 — Per-user agent block-list (added 2026-09-01, shipped in 1.37.17)
+The negative counterpart of F3's `agent_allow`. `agent_allow` is allow-only
+globs, so "everything except X" could only be written by enumerating every
+agent — which silently hides each NEW agent until someone edits the DB — and
+it could not hide a LOCAL project at all, because F3's path-ownership rule
+shows every project under `/home/<linux_user>/` regardless of name, and an
+agent's own workspace lives exactly there. `agent_deny` is therefore evaluated
+LAST and unconditionally: it overrides the allow-list, the path rule, and
+`account_owner`. Opt-in per account via a single DB column; a user with no
+`agent_deny` (the common case) is completely unaffected.
+- **MyMu-owned file** (merge-clean): `server/modules/mymu/user-context.ts`
+  (pure: `parseAgentDeny`, `isNameDeniedFor`, `isNameDeniedForUser`,
+  `effectiveAgentDenyRaw`, `currentAgentDeny`; `UserContext.agentDeny`).
+- **Marked touchpoints in upstream files**: `migrations.ts` + `users.ts`
+  (the `users.agent_deny` column + `updateAgentDeny`), `auth.middleware.ts`
+  (context + WS auth carry `agent_deny`), `rc.service.ts` (`filterByUser` —
+  and thus `isAgentCaptureAllowed`, so drive/subscribe/history/files for
+  remote agents inherit it), `projects-with-sessions-fetch.service.ts`
+  (`filterProjectsForUser` — deny beats the path rule),
+  `sessions.service.ts` (history read), `remote-files.js` (file browse),
+  `sessions-watcher.service.ts` (per-client realtime push),
+  `chat-websocket.service.ts` (socket-stamped deny + message context),
+  `claude-runtime.provider.js` (spawn-cwd gate).
+- **Config**: `agent_deny` = comma/space-separated name globs (same
+  case-insensitive `*` syntax as `agent_allow`) the account may NOT see;
+  NULL/empty = nothing blocked. Set by the operator directly — no client-facing
+  editor, same reasoning as F8. Distinct from the `user_hidden_agents` table,
+  which is a self-service DISPLAY preference the user can undo.
+
 ## Conversation send/receive: what we touch (and nothing else)
 1. Relay detour in the chat gateway for `cse_` sessions (F1).
 2. Transcript normalizer merge in `claude-sessions.provider.ts` (injected/

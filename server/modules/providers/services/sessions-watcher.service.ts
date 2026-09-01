@@ -10,7 +10,7 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { LLMProvider } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 // MYMU: per-user scoping of realtime deltas (FORK.md S2)
-import { isNameAllowedFor, isPathOwnedByLinuxUser } from '@/services/user-context.js';
+import { isNameAllowedFor, isNameDeniedFor, isPathOwnedByLinuxUser } from '@/services/user-context.js';
 
 type WatcherEventType = 'add' | 'change';
 
@@ -352,9 +352,13 @@ async function flushPendingWatcherUpdate(): Promise<void> {
         if (client.readyState !== WS_OPEN_STATE) return;
         const allow = (client as { agentAllow?: string[] | null }).agentAllow ?? null;
         const linuxUser = (client as { linuxUser?: string | null }).linuxUser ?? null;
+        const deny = (client as { agentDeny?: string[] | null }).agentDeny ?? null;
         for (const { event, projectPath } of events) {
+          const name = projectPath ? path.basename(projectPath) : '';
+          // Deny first and unconditionally — a realtime push must never surface
+          // what a refresh hides, including for an otherwise-unrestricted client.
+          if (isNameDeniedFor(name, deny)) continue;
           if (allow && allow.length > 0) {
-            const name = projectPath ? path.basename(projectPath) : '';
             const inScope = isNameAllowedFor(name, allow)
               || isPathOwnedByLinuxUser(projectPath ?? '', linuxUser);
             if (!inScope) continue;

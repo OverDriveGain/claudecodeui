@@ -14,6 +14,10 @@ import { resolveLocalSession } from '../services/local-sessions.js';
 import { getRemoteAgentCwd, isRemoteProjectId, sessionIdFromProjectId, isAgentCaptureAllowed } from '../services/rc.service.js';
 import { getSessionEventsCached } from '../remote-control/rc-client.js';
 import { ownerForPath, readFileAsUser, existsAsUser, isDirAsUser, treeAsUser, overwriteFileAsUser, writeFileAsUser, mkdirAsUser, renameAsUser, removeAsUser } from '../services/user-fs.js';
+// MYMU: per-user visibility. These were USED below but never imported — a
+// ReferenceError on every local-project file call (this is a .js file, so tsc
+// never saw it; same class as the two latent import bugs fixed 2026-08-29).
+import { currentAgentAllow, currentLinuxUser, isNameAllowedForUser, isNameDeniedForUser, isPathOwnedByLinuxUser } from '../services/user-context.js';
 import multer from 'multer';
 
 // Helper: permissions to rwx format
@@ -68,11 +72,13 @@ async function resolveProjectRootById(projectId) {
     // Agent-restricted users (agent_allow set) may browse only the local project
     // that matches their agent name OR that lives in their mapped linux user's
     // home (path-ownership rule) — the same scope the projects list shows.
+    // agent_deny overrides both clauses (allow-list AND path-ownership).
     if (
         projectPath &&
-        currentAgentAllow()?.length &&
-        !isNameAllowedForUser(path.basename(projectPath)) &&
-        !isPathOwnedByLinuxUser(projectPath, currentLinuxUser())
+        (isNameDeniedForUser(path.basename(projectPath)) ||
+            (currentAgentAllow()?.length &&
+                !isNameAllowedForUser(path.basename(projectPath)) &&
+                !isPathOwnedByLinuxUser(projectPath, currentLinuxUser())))
     ) {
         return null;
     }

@@ -38,7 +38,7 @@ import { createCompleteMessage, createNormalizedMessage } from '@/shared/utils.j
 // foreign linux user is driven by a claude process that IS that user.
 import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { SERVICE_USER, ownerForPath } from '../../../../services/user-fs.js';
-import { currentAgentAllow, currentLinuxUser } from '../../../../services/user-context.js';
+import { currentAgentAllow, currentLinuxUser, isNameDeniedForUser } from '../../../../services/user-context.js';
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
@@ -645,6 +645,14 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     if (owner && owner !== SERVICE_USER) mymuSpawnOwner = owner;
     const allow = currentAgentAllow();
     const lu = currentLinuxUser();
+    // A blocked agent's own workspace is inside its owner's home, so the
+    // in-own-home check below would happily spawn there. Deny is checked first
+    // and on its own — it must hold even for an unrestricted account.
+    if (options.cwd && isNameDeniedForUser(path.basename(String(options.cwd)))) {
+      ws?.send?.({ kind: 'error', sessionId: sessionId || null, content: 'This conversation is outside your workspace.', isError: true });
+      ws?.send?.({ kind: 'complete', sessionId: sessionId || null, exitCode: 1, success: false, aborted: false });
+      return;
+    }
     if (allow && allow.length > 0 && lu && options.cwd) {
       const inOwnHome = String(options.cwd).startsWith(`/home/${lu}/`) || String(options.cwd) === `/home/${lu}`;
       if (!inOwnHome) {
