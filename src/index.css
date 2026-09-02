@@ -622,19 +622,17 @@
   }
 
   .chat-message {
+    /* NOTE: `content-visibility: auto` + `contain-intrinsic-size` were removed.
+       Chat messages have wildly variable heights (a one-line user prompt vs a
+       200-line assistant code dump), so any fixed intrinsic-size estimate is
+       wrong. Off-screen messages inflated scrollHeight by the estimate, which
+       then collapsed as each message rendered on scroll-up (~37% on a 597-msg
+       session, worse the longer the conversation). Scroll anchoring fought the
+       shrink, making it impossible to scroll UP through long conversations —
+       content was present but unreachable (revealed only by zooming out).
+       `contain: layout style paint` is kept for reflow/paint isolation; it does
+       NOT add size containment, so scrollHeight tracks real rendered height. */
     contain: layout style paint;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 180px;
-  }
-
-  .chat-message.assistant {
-    contain-intrinsic-size: auto 240px;
-  }
-
-  .chat-message.user,
-  .chat-message.tool,
-  .chat-message.error {
-    contain-intrinsic-size: auto 96px;
   }
 
   /* Mobile touch optimization and safe areas */

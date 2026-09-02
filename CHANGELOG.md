@@ -2,6 +2,12 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.18] — MyMu (2026-09-02)
+
+### Fixes
+
+* **Long conversations could not be scrolled up** — opening an agent with a long history (most visible on the busiest agents) left the messages pane apparently unscrollable: earlier messages were present but unreachable, revealed only by zooming the browser out. Root cause was **not** the flex/height layout chain (verified bounded end-to-end even at 130k px of content) but `content-visibility: auto` + `contain-intrinsic-size` on `.chat-message` in `src/index.css`. Chat messages vary wildly in height, so the fixed intrinsic-size estimate inflated `scrollHeight` for off-screen messages; as each message rendered on scroll-up, `scrollHeight` collapsed (~37% on a 597-message session, worse the longer the conversation), and scroll anchoring fought the shrink so upward scrolling never made progress. Removed the `content-visibility`/`contain-intrinsic-size` declarations (kept `contain: layout style paint`, which does not add size containment); `scrollHeight` is now stable and scroll-to-top works. The inherited optimization arrived from an upstream commit; message windowing already limits DOM node counts for the common case.
+
 ## [1.37.17] — MyMu (2026-09-01)
 
 ### New Features
