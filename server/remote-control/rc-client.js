@@ -818,7 +818,12 @@ export async function sendMessage(sessionId, content) {
   };
   const url = `${BASE}/v1/code/sessions/${toCseId(sessionId)}/events`;
   const order = await accountTryOrder(sessionId);
-  let last = { ok: false, status: 0, notActive: false };
+  let last = { ok: false, status: 0, notActive: false, authExpired: false };
+  // Accounts whose OAuth token this host reports as EXPIRED. Tracked per-label
+  // rather than aborting on the first one, because a multi-account deployment can
+  // have one stale login and another perfectly good one — only when every account
+  // in the try-order is expired is the send hopeless.
+  const expiredLabels = new Set();
   // The relay intermittently 401s tokens it accepts seconds later, and a starved
   // host can throw transient network errors — so retry the whole account list a
   // few times with backoff before surfacing an error to the user. A 409 "not
@@ -836,12 +841,12 @@ export async function sendMessage(sessionId, content) {
         });
       } catch (err) {
         console.error('[rc] sendMessage fetch threw', { sessionId, url, account: account.label, pass, error: err?.message });
-        last = { ok: false, status: 0, notActive: false };
+        last = { ok: false, status: 0, notActive: false, authExpired: false };
         continue;
       }
       if (r.ok) {
         rememberAccountForSession(sessionId, account.label);
-        return { ok: true, status: r.status, notActive: false };
+        return { ok: true, status: r.status, notActive: false, authExpired: false };
       }
       let body = '';
       try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
@@ -850,11 +855,30 @@ export async function sendMessage(sessionId, content) {
       const notActive = r.status === 409 && /not active/i.test(body);
       if (notActive) {
         rememberAccountForSession(sessionId, account.label);
-        return { ok: false, status: r.status, notActive: true };
+        return { ok: false, status: r.status, notActive: true, authExpired: false };
+      }
+      // An EXPIRED oauth token is definitive for this account: no number of
+      // retries fixes it, only re-authenticating on this host. Matched on the
+      // expiry body, NOT on the bare 401 — per the note above, the relay does
+      // hand out transient 401s for tokens it accepts moments later, and those
+      // must keep their retries.
+      const authExpired =
+        r.status === 401 && /authentication_error/i.test(body) && /expired/i.test(body);
+      if (authExpired) {
+        expiredLabels.add(account.label);
+        console.error('[rc] sendMessage auth expired — re-authenticate on this host', {
+          sessionId, account: account.label, pass, status: r.status,
+          credentials: `${os.homedir()}/.claude/.credentials.json`,
+        });
+        last = { ok: false, status: r.status, notActive: false, authExpired: true };
+        continue;
       }
       console.error('[rc] sendMessage failed', { sessionId, url, account: account.label, pass, status: r.status, body });
-      last = { ok: false, status: r.status, notActive: false };
+      last = { ok: false, status: r.status, notActive: false, authExpired: false };
     }
+    // Every credential this send could use is expired — further passes would just
+    // burn the backoff and re-confirm it. Stop and let the caller say so.
+    if (order.length > 0 && expiredLabels.size >= order.length) break;
   }
   return last;
 }
@@ -1561,9 +1585,15 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
       }
     }
     if (!sent.ok) {
+      // "Please try again" is only honest advice when retrying CAN work. An
+      // expired login never recovers on its own, so name the host and the fix
+      // instead — the credentials are re-read from disk on every send, so a
+      // re-auth takes effect immediately with no restart.
       const reason = sent.notActive
         ? 'This agent is offline — its session is archived or disconnected and can’t receive messages. Start/reconnect the agent, then try again.'
-        : 'Couldn’t deliver the message to the agent (the relay rejected it). Please try again.';
+        : sent.authExpired
+          ? `The Claude login on this host (${os.hostname()}) has expired, so it can’t reach the relay. Re-authenticate Claude there (run \`claude\` on that machine), then send again — no restart needed.`
+          : 'Couldn’t deliver the message to the agent (the relay rejected it). Please try again.';
       ws.send(createNormalizedMessage({ kind: 'error', content: reason, sessionId, provider: 'claude' }));
     }
   }

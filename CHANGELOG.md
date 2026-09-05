@@ -2,6 +2,14 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.19] — MyMu (2026-09-05)
+
+### Bug Fixes
+
+* **An expired Claude login now says so, instead of "the relay rejected it — please try again"** — when the host's `~/.claude/.credentials.json` OAuth access token expires, every relay send returns `401 authentication_error: "OAuth access token has expired"`. The send path treated that like any other failure: it burned all `RC_SEND_MAX_PASSES` retries with backoff (which can never succeed — only re-authenticating fixes it) and then told the user to try again, advice guaranteed to fail. An expired token is now recognised as definitive, alongside the existing 409 "not active" case: the retries are skipped and the message names the host and the actual fix ("The Claude login on this host (`<hostname>`) has expired… run `claude` on that machine, then send again — no restart needed"). Credentials are re-read from disk on every send, so a re-auth genuinely does take effect with no restart.
+  * Deliberately matched on the **expiry body**, not on the bare status — the relay does hand out transient 401s for tokens it accepts moments later, and those keep their full retry budget.
+  * Multi-account (`RC_ACCOUNTS`) deployments are unaffected when only one login is stale: an expired account is skipped and the send still goes out via a healthy one. Only when every account in the try-order is expired is the send reported as definitively blocked.
+
 ## [1.37.18] — MyMu (2026-09-02)
 
 ### Fixes
