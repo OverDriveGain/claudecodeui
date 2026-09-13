@@ -11,7 +11,17 @@ export {
   notifyRunStopped,
   // Used by provider runtimes to report background work that finished after its turn ended.
   notifyBackgroundWorkCompleted,
+  // Used by the relay gateway to fire a mobile push when a live agent's turn completes.
+  notifyTurnCompleted,
 } from '@/modules/notifications/services/notification-orchestrator.service.js';
+// Native (APNs) push device registry sender + configuration probe.
+export { APNS_CHANNEL, isApnsConfigured, sendApnsToUser } from '@/modules/notifications/services/apns.service.js';
+// Session presence tracker — drives push suppression while a conversation is open.
+export {
+  markSessionPresence,
+  clearSessionPresence,
+  isUserPresentOnSession,
+} from '@/modules/notifications/services/session-presence.service.js';
 export {
   registerDesktopNotificationClient,
   sendDesktopNotification,

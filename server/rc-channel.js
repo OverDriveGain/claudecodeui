@@ -13,10 +13,76 @@ import {
   isActiveRemoteSession,
   emitOutstandingPermission,
 } from './remote-control/rc-client.js';
-import { isAgentCaptureAllowed } from './services/rc.service.js';
+import { isAgentCaptureAllowed, listRemoteAgents } from './services/rc.service.js';
 import { landAttachments, fileReferralText } from './services/incoming-files.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { createNormalizedMessage } from './shared/utils.js';
+import { notifyTurnCompleted } from './modules/notifications/index.js';
+
+const NOTIFY_PREVIEW_MAX = 200;
+
+/**
+ * Observe a single drive's frames (the writer is created fresh per chat.send)
+ * to fire a mobile push when the turn completes. Accumulates the assistant's
+ * reply text and, on the terminal `complete`, notifies the driving user with a
+ * WhatsApp-style preview. Purely additive: it forwards every frame untouched and
+ * can never throw into the stream (the notify is fully guarded).
+ */
+function attachTurnCompletionNotifier(writer, sessionId, agentTitle) {
+  const driverUserId = writer && writer.userId != null ? writer.userId : null;
+  if (driverUserId == null || typeof writer.send !== 'function') return;
+
+  const originalSend = writer.send.bind(writer);
+  let preview = '';
+  let fired = false;
+
+  writer.send = (data) => {
+    try {
+      if (data && typeof data === 'object') {
+        if (data.kind === 'text' && typeof data.content === 'string' && preview.length < NOTIFY_PREVIEW_MAX) {
+          preview += (preview ? ' ' : '') + data.content;
+        } else if (
+          !fired
+          && data.kind === 'complete'
+          && !data.aborted
+          && (data.exitCode === 0 || data.success === true)
+        ) {
+          fired = true;
+          notifyTurnCompleted({
+            userId: driverUserId,
+            provider: 'claude',
+            sessionId,
+            projectId: `remote:${sessionId}`,
+            // The agent's own name (resolved from the rc roster) is the push
+            // title — so the notification reads "Zohreh" rather than "Claude".
+            sessionName: agentTitle || null,
+            replyPreview: preview.trim() || null,
+          });
+        }
+      }
+    } catch {
+      // Never let notification bookkeeping disturb the conversation stream.
+    }
+    return originalSend(data);
+  };
+}
+
+/**
+ * Resolve the agent's display name (its cleaned session title) from the rc
+ * roster so the mobile push can show WHO replied instead of the provider label.
+ * The roster is cache-warmed by the isAgentCaptureAllowed check on this same
+ * request, so this is effectively free. Best-effort: null on any miss/error,
+ * which lets the push fall back to the provider label.
+ */
+async function resolveAgentTitle(sessionId) {
+  try {
+    const agents = await listRemoteAgents();
+    const hit = agents.find((a) => a.id === sessionId);
+    return (hit && hit.title) || null;
+  } catch {
+    return null;
+  }
+}
 
 // The engine is provider-agnostic; this adapter supplies the claude normalizer so a
 // streamed bridge frame renders through the exact same path the local SDK uses.
@@ -138,6 +204,11 @@ export async function queryRemoteChannel(command, options, writer) {
       provider: 'claude',
     }));
   }
+  // Fire a mobile push when this driven turn completes (guarded, additive).
+  // Resolve the agent name up front (roster is already warm) so the push title
+  // names the agent rather than the generic provider label.
+  const agentTitle = await resolveAgentTitle(sessionId);
+  attachTurnCompletionNotifier(writer, sessionId, agentTitle);
   return driveRemoteSession({
     ws: writer,
     sessionId,

@@ -20,6 +20,8 @@ import type {
   ProviderRuntimeWriter,
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
+// MYMU: session presence -> suppress mobile push while this conversation is open.
+import { markSessionPresence, clearSessionPresence } from '@/modules/notifications/index.js';
 // MYMU: per-user agent visibility on the chat socket (FORK.md S2)
 import { runWithUserContext, parseAgentAllow, parseAgentDeny, effectiveAgentAllowRaw, effectiveAgentDenyRaw, effectiveLinuxUser, effectiveModelDeny, isModelBlocked } from '@/modules/mymu/index.js';
 // MYMU: live relay agents (FORK.md S1) — relay sessions (Anthropic `cse_` ids)
@@ -399,6 +401,7 @@ async function handleChatAbort(
  */
 function handleChatSubscribe(
   ws: WebSocket,
+  userId: string | number | null,
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): void {
@@ -415,6 +418,10 @@ function handleChatSubscribe(
     if (!sessionId) {
       continue;
     }
+
+    // MYMU: this user is now watching this session over a live socket -> push
+    // notifications for it are suppressed until the socket closes.
+    markSessionPresence(userId, sessionId, ws);
 
     // MYMU: relay sessions attach via the remote-control proxy. isProcessing
     // deliberately omitted — the agent-status poll is authoritative there and
@@ -545,7 +552,7 @@ export function handleChatConnection(
           await handleChatAbort(ws, data, dependencies);
           return;
         case 'chat.subscribe':
-          handleChatSubscribe(ws, data, dependencies);
+          handleChatSubscribe(ws, userId, data, dependencies);
           return;
         case 'chat.permission-response':
           handlePermissionResponse(data, dependencies);
@@ -564,5 +571,7 @@ export function handleChatConnection(
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');
     connectedClients.delete(ws);
+    // MYMU: releasing presence re-enables push for the sessions this socket held.
+    clearSessionPresence(ws);
   });
 }

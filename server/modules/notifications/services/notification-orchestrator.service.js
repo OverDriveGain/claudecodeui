@@ -2,6 +2,10 @@ import webPush from 'web-push';
 
 import { notificationPreferencesDb, pushSubscriptionsDb, sessionsDb } from '@/modules/database/index.js';
 import { sendDesktopNotification as sendDesktopNotificationToClients } from '@/modules/notifications/services/desktop-notification-clients.service.js';
+import { APNS_CHANNEL, isApnsConfigured, sendApnsToUser } from '@/modules/notifications/services/apns.service.js';
+import { isUserPresentOnSession } from '@/modules/notifications/services/session-presence.service.js';
+
+const PREVIEW_MAX = 140;
 
 const KIND_TO_PREF_KEY = {
   action_required: 'actionRequired',
@@ -53,7 +57,12 @@ function createNotificationEvent({
   meta = {},
   severity = 'info',
   dedupeKey = null,
-  requiresUserAction = false
+  requiresUserAction = false,
+  // Optional allow-list of channel ids this event may deliver through. When
+  // present, channels NOT in the list are skipped even if the user enabled them
+  // (used to scope relay turn-completion pushes to APNs only, so existing
+  // web-push/desktop subscribers see no new behavior).
+  channels = null
 }) {
   return {
     provider,
@@ -64,6 +73,7 @@ function createNotificationEvent({
     severity,
     requiresUserAction,
     dedupeKey,
+    channels: Array.isArray(channels) ? channels : null,
     createdAt: new Date().toISOString()
   };
 }
@@ -207,6 +217,46 @@ function sendWebPushPayload(userId, payload) {
   });
 }
 
+function buildApnsAlert(event) {
+  const providerLabel = PROVIDER_LABELS[event.provider] || 'Assistant';
+  const title = resolveSessionName(event)
+    || normalizeSessionName(event.meta?.sessionName)
+    || providerLabel;
+
+  const preview = typeof event.meta?.replyPreview === 'string' ? event.meta.replyPreview.trim() : '';
+  let body = preview;
+  if (!body) {
+    // No captured reply text (e.g. a local run.stopped) — fall back to the same
+    // human string the web/desktop payload uses so the notification still reads.
+    body = buildNotificationPayload(event).body;
+  }
+  if (body.length > PREVIEW_MAX) {
+    body = `${body.slice(0, PREVIEW_MAX - 1)}…`;
+  }
+
+  const projectId = typeof event.meta?.projectId === 'string' && event.meta.projectId
+    ? event.meta.projectId
+    : null;
+
+  return {
+    title,
+    body,
+    sessionId: event.sessionId || null,
+    projectId,
+    collapseId: event.sessionId || null
+  };
+}
+
+// Suppress the push when the user is already watching this session over a live
+// websocket (WhatsApp-style: no buzz for the chat you have open). Then deliver
+// to every registered device.
+function sendApnsForEvent(userId, event) {
+  if (event?.sessionId && isUserPresentOnSession(userId, event.sessionId)) {
+    return Promise.resolve({ attempted: 0, sent: 0, suppressed: true });
+  }
+  return sendApnsToUser(userId, buildApnsAlert(event));
+}
+
 const notificationChannels = [
   {
     id: 'webPush',
@@ -219,6 +269,11 @@ const notificationChannels = [
     id: 'desktop',
     isEnabled: (preferences) => Boolean(preferences?.channels?.desktop),
     send: ({ userId, payload }) => sendDesktopNotificationToClients(userId, payload)
+  },
+  {
+    id: APNS_CHANNEL,
+    isEnabled: (preferences) => isApnsConfigured() && Boolean(preferences?.channels?.[APNS_CHANNEL]),
+    send: ({ userId, event }) => sendApnsForEvent(userId, event)
   }
 ];
 
@@ -236,8 +291,15 @@ function notifyUserIfEnabled({ userId, event }) {
     return;
   }
 
+  const allowedChannels = Array.isArray(normalizedEvent.channels)
+    ? new Set(normalizedEvent.channels)
+    : null;
+
   const payload = buildNotificationPayload(normalizedEvent);
   for (const channel of notificationChannels) {
+    if (allowedChannels && !allowedChannels.has(channel.id)) {
+      continue;
+    }
     if (!channel.isEnabled(preferences)) {
       continue;
     }
@@ -283,6 +345,32 @@ function notifyBackgroundWorkCompleted({ userId, provider, sessionId = null, ses
   });
 }
 
+/**
+ * Reports a turn that finished with the final assistant message committed — the
+ * signal that stops the "working" spinner. Carries the reply preview + the
+ * client's project id so the mobile push can deep-link into the conversation.
+ *
+ * Delivery is scoped to the APNs channel only (`channels: [APNS_CHANNEL]`): this
+ * is the mobile push feature, and existing web-push/desktop subscribers must not
+ * start receiving turn-completion popups they never got before. It rides the
+ * existing `stop` event preference and the standard dedupe window.
+ */
+function notifyTurnCompleted({ userId, provider, sessionId = null, projectId = null, sessionName = null, replyPreview = null }) {
+  notifyUserIfEnabled({
+    userId,
+    event: createNotificationEvent({
+      provider,
+      sessionId,
+      kind: 'stop',
+      code: 'run.stopped',
+      meta: { stopReason: 'completed', sessionName, projectId, replyPreview },
+      severity: 'info',
+      channels: [APNS_CHANNEL],
+      dedupeKey: `${provider}:turn:complete:${sessionId || 'none'}`
+    })
+  });
+}
+
 function notifyRunFailed({ userId, provider, sessionId = null, error, sessionName = null }) {
   const errorMessage = normalizeErrorMessage(error);
 
@@ -306,5 +394,6 @@ export {
   notifyUserIfEnabled,
   notifyRunStopped,
   notifyRunFailed,
-  notifyBackgroundWorkCompleted
+  notifyBackgroundWorkCompleted,
+  notifyTurnCompleted
 };

@@ -2,6 +2,17 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.21] — MyMu (2026-09-13)
+
+### Features
+
+* **iOS push notifications when an agent finishes a reply** — the app can now register a device for Apple Push Notifications (`POST /api/push/register`), and when a live agent completes a turn while you are not watching that conversation, the phone receives a WhatsApp-style push with the agent's name as the title and a ~140-character preview of its reply; tapping it deep-links into the conversation (`sessionId`/`projectId` in the payload). Built on the existing channel-based notification stack: device tokens live in `notification_channel_endpoints` under a new `apns` channel, gated by the per-user notification preferences and the standard dedupe window.
+  * **No buzz for the chat you already have open** — a push is suppressed while the user holds a live websocket subscribed to that session; it fires only once the app is backgrounded (socket dropped).
+  * **Turn-completion pushes are APNs-only** — existing web-push/desktop subscribers see no new behaviour; local (non-relay) runs keep their existing multi-channel `run.stopped` notification.
+  * **The push title names the agent** (resolved from the remote-control roster) rather than the generic provider label.
+  * **Dependency-free sender** — ES256 provider JWT via `node:crypto`, HTTP/2 delivery via `node:http2`, no third-party libraries. The whole feature is **inert** unless `APNS_KEY_PATH`/`APNS_KEY_ID`/`APNS_TEAM_ID` are all present and the `.p8` is readable, so hosts without a key are unaffected. Dead tokens (Apple `410`/`Unregistered`/`DeviceTokenNotForTopic`) are pruned automatically.
+  * **Per-device APNs environment** — production-first (TestFlight), with an automatic one-shot retry against the sandbox gateway when Apple reports `BadDeviceToken` (dev/debug builds), so both build types work against one server without an environment field in the registration.
+
 ## [1.37.19] — MyMu (2026-09-05)
 
 ### Bug Fixes

@@ -36,6 +36,7 @@ import { createSystemModule } from './modules/system/index.js';
 import { createAgentModule } from './modules/agent/index.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
+import pushRoutes from './modules/notifications/push.routes.js';
 import { userRoutes } from './modules/user/index.js';
 import {
     getPluginPort,
@@ -241,6 +242,7 @@ app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/system', authenticateToken, systemRoutes);
 
 app.use('/api/notifications', authenticateToken, notificationRoutes);
+app.use('/api/push', authenticateToken, pushRoutes);
 
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
