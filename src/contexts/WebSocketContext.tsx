@@ -280,12 +280,17 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       return false;
     }
     // Note AFTER the send went out, so a throwing send falls back to the loud
-    // failure without a contradictory "delivering…" line above it. The streamed
-    // reply arrives a network round-trip later, so the note still renders first.
+    // failure without a stray "trying…" line above it. Worded as an ATTEMPT, not
+    // a promise: the primary can drive the session only if it shares the agent's
+    // Claude account/org — otherwise the server answers with a precise "not
+    // allowed to drive / check its host pin" error, and this note must read as
+    // that error's lead-in, not contradict it. On success the reply just streams
+    // in below. The reply/error arrives a round-trip later, so the note renders
+    // first either way.
     dispatch({
       kind: 'error',
       id: `failover-${Date.now()}`,
-      content: `${hostLabel} didn't respond — delivering through ${window.location.host} via the agent's relay session instead.`,
+      content: `${hostLabel} didn't respond — trying to reach the agent through ${window.location.host} instead.`,
       sessionId: sid,
       provider: 'claude',
       timestamp: new Date().toISOString(),
