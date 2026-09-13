@@ -21,7 +21,12 @@ import type {
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 // MYMU: session presence -> suppress mobile push while this conversation is open.
-import { markSessionPresence, clearSessionPresence } from '@/modules/notifications/index.js';
+import {
+  markSessionPresence,
+  clearSessionPresence,
+  touchSessionPresence,
+  releaseSessionPresence,
+} from '@/modules/notifications/index.js';
 // MYMU: per-user agent visibility on the chat socket (FORK.md S2)
 import { runWithUserContext, parseAgentAllow, parseAgentDeny, effectiveAgentAllowRaw, effectiveAgentDenyRaw, effectiveLinuxUser, effectiveModelDeny, isModelBlocked } from '@/modules/mymu/index.js';
 // MYMU: live relay agents (FORK.md S1) — relay sessions (Anthropic `cse_` ids)
@@ -507,6 +512,7 @@ function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDe
  * - `chat.abort`               { sessionId }
  * - `chat.subscribe`           { sessions: [{ sessionId, lastSeq? }] }
  * - `chat.permission-response` { requestId, allow, updatedInput?, message?, rememberEntry? }
+ * - `presence.release`         {}  (app backgrounded: drop this socket's presence)
  *
  * Outbound protocol (server to client): every frame is `kind`-based — either
  * a provider `NormalizedMessage` (with `seq`) or a gateway event
@@ -534,7 +540,14 @@ export function handleChatConnection(
   (ws as unknown as Record<string, unknown>).linuxUser = wsLinuxUser;
   (ws as unknown as Record<string, unknown>).agentDeny = parseAgentDeny(agentDenyRaw);
 
+  // MYMU: any client-originated frame refreshes this socket's presence liveness
+  // clock, so a foregrounded (active) app keeps suppressing pushes while a
+  // backgrounded/suspended one falls stale within the presence TTL.
+  ws.on('pong', () => touchSessionPresence(ws));
+  ws.on('ping', () => touchSessionPresence(ws));
+
   ws.on('message', (rawMessage) => runWithUserContext(agentAllowRaw, async () => {
+    touchSessionPresence(ws);
     try {
       const parsed = parseIncomingJsonObject(rawMessage);
       if (!parsed) {
@@ -556,6 +569,13 @@ export function handleChatConnection(
           return;
         case 'chat.permission-response':
           handlePermissionResponse(data, dependencies);
+          return;
+        case 'presence.release':
+          // MYMU: the app entered the background — release this socket's presence
+          // so the next turn-completion pushes, without tearing down the socket
+          // (a fast foreground resume just re-subscribes). Additive + optional;
+          // the presence TTL and socket-close both cover clients that don't send it.
+          releaseSessionPresence(ws);
           return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);

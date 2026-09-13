@@ -252,9 +252,22 @@ function buildApnsAlert(event) {
 // to every registered device.
 function sendApnsForEvent(userId, event) {
   if (event?.sessionId && isUserPresentOnSession(userId, event.sessionId)) {
+    console.log('[push] suppressed — user present (live socket) on session', {
+      userId,
+      sessionId: event.sessionId,
+    });
     return Promise.resolve({ attempted: 0, sent: 0, suppressed: true });
   }
-  return sendApnsToUser(userId, buildApnsAlert(event));
+  console.log('[push] delivering APNs', { userId, sessionId: event?.sessionId || null });
+  return Promise.resolve(sendApnsToUser(userId, buildApnsAlert(event))).then((result) => {
+    console.log('[push] APNs delivery result', {
+      userId,
+      sessionId: event?.sessionId || null,
+      attempted: result?.attempted ?? 0,
+      sent: result?.sent ?? 0,
+    });
+    return result;
+  });
 }
 
 const notificationChannels = [
@@ -283,11 +296,26 @@ function notifyUserIfEnabled({ userId, event }) {
   }
 
   const normalizedEvent = normalizeNotificationSession(event);
+  // Only log the APNs-scoped (mobile push) drop paths — the local webPush/desktop
+  // notifications are high-volume and already-understood; this keeps the [push]
+  // trace tight enough to grep during a device E2E.
+  const apnsScoped = Array.isArray(normalizedEvent.channels)
+    && normalizedEvent.channels.includes(APNS_CHANNEL);
   const preferences = notificationPreferencesDb.getPreferences(userId);
   if (!isNotificationEventEnabled(preferences, normalizedEvent)) {
+    if (apnsScoped) {
+      console.log('[push] dropped — event kind disabled by user prefs', {
+        userId, sessionId: normalizedEvent.sessionId || null, kind: normalizedEvent.kind,
+      });
+    }
     return;
   }
   if (isDuplicate(normalizedEvent)) {
+    if (apnsScoped) {
+      console.log('[push] dropped — duplicate within dedupe window', {
+        userId, sessionId: normalizedEvent.sessionId || null,
+      });
+    }
     return;
   }
 
@@ -301,6 +329,13 @@ function notifyUserIfEnabled({ userId, event }) {
       continue;
     }
     if (!channel.isEnabled(preferences)) {
+      if (apnsScoped && channel.id === APNS_CHANNEL) {
+        console.log('[push] dropped — APNs channel disabled', {
+          userId,
+          configured: isApnsConfigured(),
+          prefOn: Boolean(preferences?.channels?.[APNS_CHANNEL]),
+        });
+      }
       continue;
     }
     Promise.resolve(channel.send({ userId, event: normalizedEvent, payload })).catch((err) => {
@@ -356,6 +391,12 @@ function notifyBackgroundWorkCompleted({ userId, provider, sessionId = null, ses
  * existing `stop` event preference and the standard dedupe window.
  */
 function notifyTurnCompleted({ userId, provider, sessionId = null, projectId = null, sessionName = null, replyPreview = null }) {
+  console.log('[push] notifyTurnCompleted invoked', {
+    userId,
+    provider,
+    sessionId,
+    previewLen: typeof replyPreview === 'string' ? replyPreview.length : 0,
+  });
   notifyUserIfEnabled({
     userId,
     event: createNotificationEvent({

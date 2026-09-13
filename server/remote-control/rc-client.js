@@ -89,6 +89,40 @@ const RC_IDLE_SYNC_MS = Math.max(10 * 1000, Number.parseInt(process.env.RC_IDLE_
 const RC_SEEN_UUIDS_MAX = 2000;
 // Raw ws OPEN state (ws library constant) — used to prune dead subscriber writers.
 const WS_OPEN_RAW = 1;
+// Cap on the accumulated assistant reply text used for the mobile push preview.
+const NOTIFY_PREVIEW_MAX = 200;
+
+/**
+ * Turn-completion notify recorder (mobile push). Observes the SESSION-level frame
+ * stream — NOT a GUI writer — so it fires even when the driving app has been
+ * backgrounded and its socket already pruned from the subscriber set. That was the
+ * original bug: the notifier hung off the driver's per-request websocket writer,
+ * which `liveWriters` prunes the instant the socket closes (the very thing that
+ * happens on background), so the push either never fired (socket gone) or was
+ * suppressed by presence (socket still open). Anchoring it to the entry decouples
+ * "the turn finished" from "a GUI is still watching".
+ *
+ * `entry.turnNotify` is armed per drive with { userId context via onComplete,
+ * preview, pending }. We accumulate assistant text and, on the terminal non-aborted
+ * `complete`, invoke onComplete(preview) exactly once. Fully guarded.
+ */
+function noteFrameForNotify(entry, frame) {
+  const tn = entry && entry.turnNotify;
+  if (!tn || !tn.pending || !frame || typeof frame !== 'object') return;
+  if (frame.kind === 'text' && typeof frame.content === 'string') {
+    if (tn.preview.length < NOTIFY_PREVIEW_MAX) {
+      tn.preview += (tn.preview ? ' ' : '') + frame.content;
+    }
+    return;
+  }
+  if (frame.kind === 'complete' && !frame.aborted && (frame.exitCode === 0 || frame.success === true)) {
+    tn.pending = false;
+    const preview = tn.preview.trim();
+    try {
+      if (typeof tn.onComplete === 'function') tn.onComplete(preview);
+    } catch { /* notification bookkeeping must never disturb the stream */ }
+  }
+}
 
 /**
  * All live subscriber writers for a session entry. The GUI can watch one agent from
@@ -114,6 +148,10 @@ function liveWriters(entry) {
 
 /** Send one frame to every live subscriber of the entry (writer races swallowed). */
 function fanOut(entry, frame) {
+  // Observe the frame for the turn-completion push BEFORE delivery — this runs even
+  // when there are zero live writers (backgrounded app), which is exactly when we
+  // want the push to fire.
+  noteFrameForNotify(entry, frame);
   for (const w of liveWriters(entry)) {
     try { w.send(frame); } catch { /* writer race — pruned on the next emit */ }
   }
@@ -1544,7 +1582,7 @@ function toUserContent(text, attachments) {
  */
 const lastDrivenModel = new Map();
 
-export async function driveRemoteSession({ ws, sessionId, command, images, normalize, model }) {
+export async function driveRemoteSession({ ws, sessionId, command, images, normalize, model, onTurnComplete }) {
   if (typeof ws.setSessionId === 'function') ws.setSessionId(sessionId);
   // Announce the session id so the GUI binds its view to it (it opened the agent
   // leaf with no session id yet).
@@ -1557,6 +1595,15 @@ export async function driveRemoteSession({ ws, sessionId, command, images, norma
     pre.replayBuffer = pre.replayBuffer.filter((f) => f?.kind !== 'complete');
   }
   await attachSession(sessionId, ws, normalize);
+  // Arm the entry-level turn-completion notifier for THIS turn (mobile push). Set
+  // after attach so a replayed prior-turn `complete` can't trip it, and before the
+  // send so the incoming frames are observed. onComplete carries the driver's user
+  // context (supplied by rc-channel); it fires from the session frame stream, not a
+  // GUI writer, so a backgrounded app still gets the push.
+  const active = activeRemoteSessions.get(sessionId);
+  if (active && typeof onTurnComplete === 'function') {
+    active.turnNotify = { preview: '', pending: true, onComplete: onTurnComplete };
+  }
   const content = toUserContent(command, images);
   const hasContent = typeof content === 'string' ? content !== '' : content.length > 0;
   if (hasContent) {

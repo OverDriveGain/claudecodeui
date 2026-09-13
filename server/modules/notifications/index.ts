@@ -20,6 +20,8 @@ export { APNS_CHANNEL, isApnsConfigured, sendApnsToUser } from '@/modules/notifi
 export {
   markSessionPresence,
   clearSessionPresence,
+  touchSessionPresence,
+  releaseSessionPresence,
   isUserPresentOnSession,
 } from '@/modules/notifications/services/session-presence.service.js';
 export {

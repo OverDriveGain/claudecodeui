@@ -2,6 +2,16 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.22] — MyMu (2026-09-13)
+
+### Bug Fixes
+
+* **iOS turn-completion push now actually fires for live agents** — the first real-device E2E of 1.37.21 produced no push. Root cause: the completion observer was attached to the driver's per-request websocket writer, but that writer is exactly what dies when the app backgrounds — the one moment a push is wanted. Two failure modes resulted: if the turn completed after the server heartbeat had terminated the (silent, backgrounded) socket, the writer was already pruned from the relay's subscriber set and the observer never saw the terminal `complete`; if the turn completed while the socket was still nominally open, presence-suppression (which also keys off the socket) ate the push. Either way, nothing was delivered.
+  * **Completion is now observed at the session level, not on a GUI socket** — the relay engine (`rc-client`) accumulates the assistant reply and fires the turn-completion notify from the session frame stream via a callback supplied by `rc-channel`, so it fires even when no app socket is still attached.
+  * **Presence has a liveness bound** — a subscribed socket only suppresses pushes while it shows client activity (message/ping/pong) within `PRESENCE_TTL_MS` (default 60s, 30s floor). A backgrounded/suspended app goes silent and stops suppressing, instead of holding suppression until its TCP connection is finally torn down.
+  * **Optional instant release** — clients may send `presence.release` on entering the background to drop their presence immediately (without closing the socket); the TTL and socket-close paths still cover clients that don't.
+  * **Diagnostic logging** — every decision point on the push path now logs under a greppable `[push]` prefix: notify invoked, presence-suppressed, event/pref/dedupe drops, APNs channel disabled, no registrations, and Apple's per-token response.
+
 ## [1.37.21] — MyMu (2026-09-13)
 
 ### Features

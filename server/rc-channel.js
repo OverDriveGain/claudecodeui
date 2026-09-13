@@ -19,51 +19,39 @@ import { sessionsService } from './modules/providers/services/sessions.service.j
 import { createNormalizedMessage } from './shared/utils.js';
 import { notifyTurnCompleted } from './modules/notifications/index.js';
 
-const NOTIFY_PREVIEW_MAX = 200;
-
 /**
- * Observe a single drive's frames (the writer is created fresh per chat.send)
- * to fire a mobile push when the turn completes. Accumulates the assistant's
- * reply text and, on the terminal `complete`, notifies the driving user with a
- * WhatsApp-style preview. Purely additive: it forwards every frame untouched and
- * can never throw into the stream (the notify is fully guarded).
+ * Build the entry-level turn-completion callback (mobile push). The rc engine
+ * observes the SESSION frame stream and invokes this once when the driven turn
+ * ends, passing the accumulated assistant reply preview. Anchoring the observer
+ * to the session (not this per-request websocket writer) is deliberate: the
+ * writer is pruned the instant the app's socket closes on background — the exact
+ * moment we want the push — so the old writer-monkeypatch approach either never
+ * fired (socket gone) or was presence-suppressed (socket still open). Fully
+ * guarded: a notify failure can never disturb the conversation stream.
  */
-function attachTurnCompletionNotifier(writer, sessionId, agentTitle) {
-  const driverUserId = writer && writer.userId != null ? writer.userId : null;
-  if (driverUserId == null || typeof writer.send !== 'function') return;
-
-  const originalSend = writer.send.bind(writer);
-  let preview = '';
-  let fired = false;
-
-  writer.send = (data) => {
+function makeTurnCompleteNotifier(sessionId, agentTitle, driverUserId) {
+  if (driverUserId == null) return undefined;
+  return (preview) => {
     try {
-      if (data && typeof data === 'object') {
-        if (data.kind === 'text' && typeof data.content === 'string' && preview.length < NOTIFY_PREVIEW_MAX) {
-          preview += (preview ? ' ' : '') + data.content;
-        } else if (
-          !fired
-          && data.kind === 'complete'
-          && !data.aborted
-          && (data.exitCode === 0 || data.success === true)
-        ) {
-          fired = true;
-          notifyTurnCompleted({
-            userId: driverUserId,
-            provider: 'claude',
-            sessionId,
-            projectId: `remote:${sessionId}`,
-            // The agent's own name (resolved from the rc roster) is the push
-            // title — so the notification reads "Zohreh" rather than "Claude".
-            sessionName: agentTitle || null,
-            replyPreview: preview.trim() || null,
-          });
-        }
-      }
-    } catch {
-      // Never let notification bookkeeping disturb the conversation stream.
+      console.log('[push] relay turn complete — notifying driver', {
+        userId: driverUserId,
+        sessionId,
+        agentTitle: agentTitle || null,
+        previewLen: preview ? preview.length : 0,
+      });
+      notifyTurnCompleted({
+        userId: driverUserId,
+        provider: 'claude',
+        sessionId,
+        projectId: `remote:${sessionId}`,
+        // The agent's own name (resolved from the rc roster) is the push
+        // title — so the notification reads "Zohreh" rather than "Claude".
+        sessionName: agentTitle || null,
+        replyPreview: preview || null,
+      });
+    } catch (err) {
+      console.warn('[push] notifyTurnCompleted threw:', err && err.message ? err.message : err);
     }
-    return originalSend(data);
   };
 }
 
@@ -206,9 +194,10 @@ export async function queryRemoteChannel(command, options, writer) {
   }
   // Fire a mobile push when this driven turn completes (guarded, additive).
   // Resolve the agent name up front (roster is already warm) so the push title
-  // names the agent rather than the generic provider label.
+  // names the agent rather than the generic provider label. The notifier is
+  // invoked from the rc engine's session frame stream, not this writer.
   const agentTitle = await resolveAgentTitle(sessionId);
-  attachTurnCompletionNotifier(writer, sessionId, agentTitle);
+  const driverUserId = writer && writer.userId != null ? writer.userId : null;
   return driveRemoteSession({
     ws: writer,
     sessionId,
@@ -217,6 +206,7 @@ export async function queryRemoteChannel(command, options, writer) {
     normalize: normalizeClaude,
     // Composer model pick → driven /model command on the agent (rc-client dedupes).
     model: pickOption(opts.model),
+    onTurnComplete: makeTurnCompleteNotifier(sessionId, agentTitle, driverUserId),
   });
 }
 

@@ -233,11 +233,17 @@ function rememberEnv(
  * Returns delivery counts; safe no-op when the sender is not configured.
  */
 export async function sendApnsToUser(userId: number, alert: ApnsAlert): Promise<{ attempted: number; sent: number }> {
-  if (!isApnsConfigured()) return { attempted: 0, sent: 0 };
+  if (!isApnsConfigured()) {
+    console.log('[push] APNs not configured (key path/id/team missing or unreadable) — no-op');
+    return { attempted: 0, sent: 0 };
+  }
 
   const cfg = readConfig();
   const endpoints = notificationChannelEndpointsDb.getEnabledEndpoints(userId, APNS_CHANNEL);
-  if (!endpoints.length) return { attempted: 0, sent: 0 };
+  if (!endpoints.length) {
+    console.log('[push] no enabled APNs endpoints registered for user', userId);
+    return { attempted: 0, sent: 0 };
+  }
 
   let jwt: string;
   try {
@@ -271,9 +277,11 @@ export async function sendApnsToUser(userId: number, alert: ApnsAlert): Promise<
 
     if (result.status === 200) {
       sent += 1;
+      console.log('[push] APNs 200 OK', { userId, env: production ? 'production' : 'sandbox', topic });
       notificationChannelEndpointsDb.touchEndpoint(userId, APNS_CHANNEL, endpoint.endpoint_id);
       rememberEnv(userId, endpoint, production);
     } else if (result.status === 410 || (result.reason && DEAD_TOKEN_REASONS.has(result.reason))) {
+      console.warn(`[push] APNs pruning dead token for user ${userId}: status ${result.status}${result.reason ? ` (${result.reason})` : ''}`);
       notificationChannelEndpointsDb.removeEndpoint(userId, APNS_CHANNEL, endpoint.endpoint_id);
     } else if (result.status !== 0) {
       console.warn(`[apns] send to user ${userId} returned ${result.status}${result.reason ? ` (${result.reason})` : ''}`);
