@@ -105,6 +105,22 @@ const targetHostFor = (message: any): RemoteHost | null => {
   return hostForSession(sid);
 };
 
+/**
+ * The addressed session id IF the primary host can also deliver to it: relay
+ * sessions (cse_/session_) are drivable by ANY host holding relay credentials,
+ * so a send stranded on a dead peer socket has a second path. OpenCode/Codex
+ * (ocs_/cxs_) and local project sessions live only on their owning host — for
+ * those there is no fallback and the loud failure stays the honest answer.
+ */
+const relayFailoverSessionIdOf = (message: any): string | null => {
+  const sid =
+    (typeof message?.sessionId === 'string' && message.sessionId) ||
+    (typeof message?.options?.remoteControl === 'string' && message.options.remoteControl) ||
+    (typeof message?.options?.sessionId === 'string' && message.options.sessionId) ||
+    null;
+  return sid && /^(cse_|session_)/.test(sid) ? sid : null;
+};
+
 const useWebSocketProviderState = (): WebSocketContextType => {
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false); // Track if component is unmounted
@@ -248,6 +264,35 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     }, 0);
   }, []);
 
+  // Pinned-host failover (2026-09-13, the special-agent outage): a relay session's
+  // send stranded on a dead peer socket is rerouted through the PRIMARY host, which
+  // drives the same cse_ session over its own relay connection. Returns false when
+  // no second path exists (non-relay session, or primary socket also down) so the
+  // caller falls back to the loud failure. The note frame carries no `complete` —
+  // the turn continues and the reply streams back over the primary socket.
+  const failoverToPrimary = useCallback((message: any, hostLabel: string): boolean => {
+    const sid = relayFailoverSessionIdOf(message);
+    const socket = wsRef.current;
+    if (!sid || !socket || socket.readyState !== WebSocket.OPEN) return false;
+    try {
+      socket.send(JSON.stringify(message));
+    } catch {
+      return false;
+    }
+    // Note AFTER the send went out, so a throwing send falls back to the loud
+    // failure without a contradictory "delivering…" line above it. The streamed
+    // reply arrives a network round-trip later, so the note still renders first.
+    dispatch({
+      kind: 'error',
+      id: `failover-${Date.now()}`,
+      content: `${hostLabel} didn't respond — delivering through ${window.location.host} via the agent's relay session instead.`,
+      sessionId: sid,
+      provider: 'claude',
+      timestamp: new Date().toISOString(),
+    });
+    return true;
+  }, []);
+
   // One additional socket per connected peer host, with the same 3s reconnect
   // loop as the primary plus a CONNECTING watchdog (see CONNECT_TIMEOUT_MS) so a
   // hung handshake can never strand the loop. Sockets for removed hosts are torn
@@ -258,10 +303,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     if (entry.connectTimer) clearTimeout(entry.connectTimer);
     for (const item of entry.queue.splice(0)) {
       clearTimeout(item.expireTimer);
-      surfaceSendFailure(item.message, item.hostLabel);
+      if (!failoverToPrimary(item.message, item.hostLabel)) surfaceSendFailure(item.message, item.hostLabel);
     }
     entry.ws?.close();
-  }, [surfaceSendFailure]);
+  }, [failoverToPrimary, surfaceSendFailure]);
 
   useEffect(() => {
     const sockets = remoteSocketsRef.current;
@@ -383,7 +428,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
             const i = entry.queue.indexOf(item);
             if (i >= 0) {
               entry.queue.splice(i, 1);
-              surfaceSendFailure(message, hostLabel);
+              if (!failoverToPrimary(message, hostLabel)) surfaceSendFailure(message, hostLabel);
             }
           }, SEND_QUEUE_TTL_MS),
         };
@@ -393,7 +438,8 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         // within CONNECT_TIMEOUT_MS; onclose then reconnects on the fast path.
       } else {
         console.warn(`WebSocket to ${target.url} not connected`);
-        surfaceSendFailure(message, new URL(target.url).hostname);
+        const hostLabel = new URL(target.url).hostname;
+        if (!failoverToPrimary(message, hostLabel)) surfaceSendFailure(message, hostLabel);
       }
       return;
     }
@@ -404,7 +450,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       console.warn('WebSocket not connected');
       surfaceSendFailure(message, 'this server');
     }
-  }, [surfaceSendFailure]);
+  }, [failoverToPrimary, surfaceSendFailure]);
 
   const subscribe = useCallback((listener: ServerEventListener) => {
     listenersRef.current.add(listener);

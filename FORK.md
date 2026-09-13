@@ -41,6 +41,12 @@ owning host; deployment-global agent→host pinning.
   `__hostUrl` through the dispatch pipeline), multi-host project fetch union +
   cross-account dedupe + host-pin routing (`useProjectsState` marked hunks),
   host-aware api layer (`api.js`).
+- Pinned-host failover (1.37.20): a send stranded on a dead peer socket is
+  rerouted through the primary host when the session is relay-drivable
+  (`cse_`/`session_` — any host with relay credentials can deliver), with a
+  note in chat; `ocs_`/`cxs_`/local sessions keep the loud failure (no second
+  path exists). Fires on queue-TTL expiry, missing socket entry, and host
+  teardown (`failoverToPrimary` in `WebSocketContext`).
 
 ### F3 — Multi-user model (linux-user mapping)
 Accounts map to linux users; visibility and process identity follow the
