@@ -2,6 +2,12 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.23] — MyMu (2026-09-14)
+
+### Features
+
+* **QR-card auto-login deep link** — opening `/#autologin?u=<user>&p=<base64url password>` signs the user straight in, so a non-technical tenant user can be onboarded with a single QR code that carries server + credentials. The credentials travel in the URL fragment only (never sent to the server, never in access logs) and the fragment is scrubbed from the address bar before the login request fires, so it survives in neither browser history nor a copy-pasted URL. A failed attempt falls back to the normal login form with the username prefilled and the standard error shown. Client-side only — no server or API change.
+
 ## [1.37.22] — MyMu (2026-09-13)
 
 ### Bug Fixes

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Lock, User } from 'lucide-react';
@@ -32,6 +32,32 @@ const FEEDBACK_I18N_KEYS: Record<string, string> = {
 // Being sent back to login is not the user's mistake — show these calmer.
 const NOTICE_CODES = new Set(['AUTH_TOKEN_EXPIRED', 'AUTH_TOKEN_INVALID']);
 
+// #autologin?u=<username>&p=<base64url password> — the QR-card deep link, so a
+// non-technical user can scan one code and land signed in. The credentials ride
+// in the URL FRAGMENT: the browser never sends a fragment to the server, so
+// they cannot appear in access logs, and the fragment is scrubbed from the
+// address bar below BEFORE the login request fires so it does not linger in
+// history or travel on a copy-pasted URL. base64url keeps arbitrary password
+// characters URL-safe (ASCII passwords only — atob is latin1).
+const consumeAutologinFragment = (): LoginFormState | null => {
+  const hash = window.location.hash;
+  if (!hash.startsWith('#autologin?')) {
+    return null;
+  }
+  const params = new URLSearchParams(hash.slice('#autologin?'.length));
+  const username = (params.get('u') ?? '').trim();
+  const encoded = params.get('p') ?? '';
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  if (!username || !encoded) {
+    return null;
+  }
+  try {
+    return { username, password: atob(encoded.replace(/-/g, '+').replace(/_/g, '/')) };
+  } catch {
+    return null;
+  }
+};
+
 /**
  * Login form component.
  * Handles credential input with browser autofill support (`autocomplete`
@@ -49,13 +75,12 @@ export default function LoginForm() {
     setFormState((previous) => ({ ...previous, [field]: value }));
   }, []);
 
-  const handleSubmit = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
+  const performLogin = useCallback(
+    async (credentials: LoginFormState) => {
       setSubmitFeedback(null);
 
       // Keep form validation local so each auth screen owns its own UI feedback.
-      if (!formState.username.trim() || !formState.password) {
+      if (!credentials.username.trim() || !credentials.password) {
         setSubmitFeedback({
           code: 'AUTH_CREDENTIALS_REQUIRED',
           message: t('login.errors.requiredFields'),
@@ -64,14 +89,39 @@ export default function LoginForm() {
       }
 
       setIsSubmitting(true);
-      const result = await login(formState.username.trim(), formState.password);
+      const result = await login(credentials.username.trim(), credentials.password);
       if (!result.success) {
         setSubmitFeedback({ code: result.code, message: result.error });
       }
       setIsSubmitting(false);
     },
-    [formState.password, formState.username, login, t],
+    [login, t],
   );
+
+  const handleSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      await performLogin(formState);
+    },
+    [formState, performLogin],
+  );
+
+  // Deep-link sign-in: consume the #autologin fragment exactly once on mount.
+  // A failed attempt falls through to the normal form with the username kept
+  // and the standard error feedback shown — the QR user just retypes the
+  // password instead of hitting a dead end.
+  const autologinConsumed = useRef(false);
+  useEffect(() => {
+    if (autologinConsumed.current) {
+      return;
+    }
+    autologinConsumed.current = true;
+    const credentials = consumeAutologinFragment();
+    if (credentials) {
+      setFormState((previous) => ({ ...previous, username: credentials.username }));
+      void performLogin(credentials);
+    }
+  }, [performLogin]);
 
   // A fresh submit result replaces the "why am I back at login" notice.
   const activeFeedback = submitFeedback ?? sessionFeedback;
