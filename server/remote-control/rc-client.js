@@ -28,6 +28,7 @@
  *   WS   /v1/sessions/ws/{id}/subscribe    stream the session + send control frames
  */
 
+import { execFile } from 'child_process';
 import { readFileSync } from 'fs';
 import { mkdir, readFile, writeFile, rename, readdir, stat, unlink } from 'fs/promises';
 import path from 'path';
@@ -378,6 +379,9 @@ export function getAccountErrors() {
   const out = new Map();
   for (const [label, e] of accountResolveErrors) out.set(label, e);
   for (const [label, e] of lastListErrors) out.set(label, e);
+  // Send-side auth failures a refresh couldn't fix win last — the most direct
+  // "this host needs re-authentication" signal (see sendAuthErrors).
+  for (const [label, e] of sendAuthErrors) out.set(label, e);
   return [...out.entries()].map(([label, e]) => ({ label, ...e }));
 }
 
@@ -516,6 +520,9 @@ async function listAgentsForAccount(account, { pageSize, maxPages }) {
     }
     if (!r.ok) {
       const body = await r.text().catch(() => '');
+      // An expired token here marks the agent offline; kick a background refresh
+      // so the NEXT poll heals it with no user action (non-blocking, single-flight).
+      maybeRefreshOnRosterAuthFail(account, r.status, body);
       // Partial page-through already yielded rows — keep them, note the error.
       return { rows, error: { status: r.status, message: body.slice(0, 200) } };
     }
@@ -525,6 +532,7 @@ async function listAgentsForAccount(account, { pageSize, maxPages }) {
     cursor = j.next_cursor;
     if (!cursor || batch.length === 0) break;
   }
+  sendAuthErrors.delete(account?.label); // roster proves the login good — clear banner
   return { rows, error: null };
 }
 
@@ -839,7 +847,91 @@ export async function getSessionCwd(sessionId) {
  * POST a user message (string or content blocks) to a remote session. The agent's
  * reply streams back over the attach WS (opened by attachSession), not this call.
  */
-export async function sendMessage(sessionId, content) {
+// ── OAuth access-token auto-refresh ────────────────────────────────────────────
+// MyMu is otherwise a PASSIVE reader of the credential file (getRemoteAuth): it
+// assumes some other `claude` on the host keeps the dotfile fresh. An idle agent
+// (nothing refreshing) lets the short-lived access token lapse, and every relay
+// call then 401s "authentication_error … expired" — which we used to punt to the
+// human ("run claude there"). Instead, drive the LOCAL claude CLI to refresh: it
+// owns the OAuth refresh flow and rewrites the dotfile, which resolveSpec/
+// getRemoteAuth re-read per call. Only viable while the REFRESH token is still
+// valid; a dead refresh token genuinely needs an interactive re-login, which we
+// then surface as a signed-out account (getAccountErrors → sidebar banner).
+const CLAUDE_BIN = process.env.CLAUDE_CLI_PATH || 'claude';
+const RC_REFRESH_TIMEOUT_MS = Math.max(10000, Number.parseInt(process.env.RC_REFRESH_TIMEOUT_MS || '', 10) || 60000);
+
+// The credential FILE backing an account label, or null when it isn't file-backed
+// (a literal RC_ACCOUNTS token / RC_OAUTH_TOKEN env) and so can't be refreshed.
+function credentialsFileForLabel(label) {
+  const specs = parseAccountSpecs();
+  if (specs) {
+    const spec = specs.find((s) => s.label === label);
+    if (!spec) return null;
+    if (spec.credentialsPath) return expandHome(spec.credentialsPath);
+    return null; // literal token, no file to refresh
+  }
+  if (process.env.RC_OAUTH_TOKEN) return null; // literal env token, no file
+  return `${os.homedir()}/.claude/.credentials.json`;
+}
+
+// Read {accessToken, refreshValid} from a credential file (best-effort). refreshValid
+// is true only when a refresh token exists AND (if dated) hasn't itself expired.
+function readOAuthState(credPath) {
+  try {
+    const c = JSON.parse(readFileSync(credPath, 'utf8')).claudeAiOauth || {};
+    const rexp = c.refreshTokenExpiresAt;
+    return {
+      accessToken: c.accessToken || null,
+      refreshValid: Boolean(c.refreshToken) && (typeof rexp === 'number' ? rexp > Date.now() : true),
+    };
+  } catch {
+    return { accessToken: null, refreshValid: false };
+  }
+}
+
+// Single-flight per credential file: concurrent expired calls share one refresh.
+const refreshInFlight = new Map(); // credPath -> Promise<boolean>
+
+// Force the local claude CLI to refresh `credPath`'s access token. Resolves true iff
+// the on-disk access token actually rotated. A print-mode turn is the reliable
+// non-interactive trigger — `claude auth` exposes only login/logout/status, no
+// dedicated refresh — and the CLI refreshes the dotfile on the call it makes.
+function renewOAuthToken(credPath) {
+  if (!credPath) return Promise.resolve(false);
+  const inflight = refreshInFlight.get(credPath);
+  if (inflight) return inflight;
+  const before = readOAuthState(credPath).accessToken;
+  const p = new Promise((resolve) => {
+    // cwd = home so a refresh turn can't seed project state or hit a trust prompt
+    // in the server's app dir; env carries HOME/PATH so the CLI finds its dotfiles.
+    execFile(CLAUDE_BIN, ['-p', 'ok'], { timeout: RC_REFRESH_TIMEOUT_MS, env: process.env, cwd: os.homedir() }, (err) => {
+      const after = readOAuthState(credPath).accessToken;
+      const rotated = Boolean(after) && after !== before;
+      if (rotated) console.log('[rc] OAuth access token auto-refreshed', { credPath });
+      else if (err) console.error('[rc] OAuth auto-refresh failed', { credPath, error: err.message });
+      resolve(rotated);
+    });
+  }).finally(() => refreshInFlight.delete(credPath));
+  refreshInFlight.set(credPath, p);
+  return p;
+}
+
+// Fire-and-forget refresh from the ROSTER path: an expired token 401s the poll and
+// marks the agent offline; refreshing now heals the NEXT poll (seconds later) with
+// no user action. Non-blocking so the roster fanout never waits on a CLI spawn.
+function maybeRefreshOnRosterAuthFail(account, status, body) {
+  if (status !== 401 || !/expired/i.test(body || '')) return;
+  const credPath = credentialsFileForLabel(account?.label);
+  if (credPath && readOAuthState(credPath).refreshValid) void renewOAuthToken(credPath);
+}
+
+// Send-side auth failures a refresh could NOT fix (dead/absent refresh token). Merged
+// into getAccountErrors so a host needing a real re-login surfaces in the sidebar
+// banner immediately, not only after the next roster poll also 401s. Cleared on any
+// successful send/refresh for that label.
+const sendAuthErrors = new Map(); // label -> { status, message }
+
+export async function sendMessage(sessionId, content, _renewed = false) {
   // Mirror claude.ai/code exactly: POST to the CODE-sessions namespace with a
   // `payload`-wrapped event. This routes the message through the agent's native
   // queue (it orders messages sent mid-turn) instead of interrupting the current
@@ -884,6 +976,7 @@ export async function sendMessage(sessionId, content) {
       }
       if (r.ok) {
         rememberAccountForSession(sessionId, account.label);
+        sendAuthErrors.delete(account.label); // login proven good — clear any banner
         return { ok: true, status: r.status, notActive: false, authExpired: false };
       }
       let body = '';
@@ -908,7 +1001,7 @@ export async function sendMessage(sessionId, content) {
           sessionId, account: account.label, pass, status: r.status,
           credentials: `${os.homedir()}/.claude/.credentials.json`,
         });
-        last = { ok: false, status: r.status, notActive: false, authExpired: true };
+        last = { ok: false, status: r.status, notActive: false, authExpired: true, expiredLabel: account.label };
         continue;
       }
       console.error('[rc] sendMessage failed', { sessionId, url, account: account.label, pass, status: r.status, body });
@@ -917,6 +1010,28 @@ export async function sendMessage(sessionId, content) {
     // Every credential this send could use is expired — further passes would just
     // burn the backoff and re-confirm it. Stop and let the caller say so.
     if (order.length > 0 && expiredLabels.size >= order.length) break;
+  }
+  // Auto-refresh: the login lapsed only because nothing kept the dotfile fresh.
+  // If the refresh token is still valid, renew via the local CLI and retry the
+  // send ONCE (accounts re-resolve per call, so the retry reads the new token).
+  // Bounded by _renewed so a genuinely dead login can't loop.
+  if (!last.ok && last.authExpired && !_renewed) {
+    const label = last.expiredLabel || (order[0] && order[0].label);
+    const credPath = credentialsFileForLabel(label);
+    if (credPath && readOAuthState(credPath).refreshValid) {
+      await renewOAuthToken(credPath);
+      return sendMessage(sessionId, content, true);
+    }
+    // Refresh impossible (dead/absent refresh token, or a literal env token): a
+    // real re-login is needed. Surface it as a signed-out account in the banner
+    // (getAccountErrors) so the host stops looking healthy, and flag the caller.
+    if (label) {
+      sendAuthErrors.set(label, {
+        status: 401,
+        message: `Claude login expired on ${os.hostname()} — re-authenticate (run \`claude\` there).`,
+      });
+    }
+    last.needsReauth = true;
   }
   return last;
 }
