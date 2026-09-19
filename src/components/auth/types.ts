@@ -54,6 +54,7 @@ export type AuthContextValue = {
   error: AuthFeedback | null;
   login: (username: string, password: string) => Promise<AuthActionResult>;
   register: (username: string, password: string) => Promise<AuthActionResult>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<AuthActionResult>;
   logout: () => void;
   refreshOnboardingStatus: () => Promise<void>;
 };

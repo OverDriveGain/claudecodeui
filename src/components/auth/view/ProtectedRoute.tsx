@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import Onboarding from '../../onboarding/view/Onboarding';
 
 import AuthLoadingScreen from './AuthLoadingScreen';
+import ChangePasswordForm from './ChangePasswordForm';
 import LoginForm from './LoginForm';
 import SetupForm from './SetupForm';
 
@@ -33,6 +34,11 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (!user) {
     return <LoginForm />;
+  }
+
+  // Admin-issued one-time password: block the app until the user picks their own.
+  if (user.must_change_password) {
+    return <ChangePasswordForm />;
   }
 
   if (!hasCompletedOnboarding) {

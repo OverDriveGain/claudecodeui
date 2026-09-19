@@ -112,6 +112,8 @@
     "browser": "Browser",
     "notifications": "Notifications",
     "plugins": "Plugins",
+    "account": "Account",
+    "users": "Users",
     "about": "About"
   },
   "notifications": {

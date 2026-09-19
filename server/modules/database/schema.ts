@@ -8,7 +8,11 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT 1,
     git_name TEXT,
     git_email TEXT,
-    has_completed_onboarding BOOLEAN DEFAULT 0
+    has_completed_onboarding BOOLEAN DEFAULT 0,
+    -- Set to 1 when the password is an admin-issued one-time password: the user
+    -- may sign in with it but is forced to choose a new password before reaching
+    -- the app. Cleared the moment they set their own password.
+    must_change_password INTEGER NOT NULL DEFAULT 0
 );
 `;
 

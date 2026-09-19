@@ -5,7 +5,7 @@ type AuthUser = {
   username: string;
 };
 
-type AuthLoginUser = AuthUser & { password_hash: string };
+type AuthLoginUser = AuthUser & { password_hash: string; must_change_password?: number };
 
 type AuthDependencies = {
   users: {
@@ -13,6 +13,7 @@ type AuthDependencies = {
     createUser(username: string, passwordHash: string): AuthUser;
     getUserByUsername(username: string): AuthLoginUser | undefined;
     updateLastLogin(userId: number): void;
+    updatePassword(userId: number, passwordHash: string, mustChange: boolean): void;
   };
   transaction: {
     begin(): void;
@@ -121,8 +122,89 @@ export function createAuthService(dependencies: AuthDependencies) {
       dependencies.users.updateLastLogin(numericUserId(user.id));
       return {
         success: true,
-        user: { id: user.id, username: user.username },
+        user: {
+          id: user.id,
+          username: user.username,
+          // Tells the client to route straight to the forced change-password
+          // screen when this login used an admin-issued one-time password.
+          must_change_password: user.must_change_password ? 1 : 0,
+        },
         token: dependencies.generateToken(user),
+      };
+    },
+
+    /**
+     * Sets a new password for the authenticated user.
+     *
+     * Two modes, both landing here:
+     *  - Forced (must_change_password set): the user just signed in with an
+     *    admin-issued one-time password, so no current-password re-check is
+     *    required — the valid session token already proves the OTP was correct.
+     *  - Voluntary (from Settings): the current password must be supplied and
+     *    verified, and the new one must differ.
+     * Either way the one-time-password flag is cleared and a fresh token issued.
+     */
+    async changePassword(
+      authUser: unknown,
+      currentPasswordInput: unknown,
+      newPasswordInput: unknown,
+    ) {
+      if (
+        typeof authUser !== 'object'
+        || authUser === null
+        || !('username' in authUser)
+        || typeof (authUser as AuthUser).username !== 'string'
+      ) {
+        throw new AppError('Authenticated user is required', {
+          code: 'AUTH_USER_REQUIRED',
+          statusCode: 401,
+        });
+      }
+
+      const newPassword = typeof newPasswordInput === 'string' ? newPasswordInput : '';
+      const currentPassword = typeof currentPasswordInput === 'string' ? currentPasswordInput : '';
+      if (newPassword.length < 6) {
+        throw new AppError('New password must be at least 6 characters', {
+          code: 'AUTH_PASSWORD_TOO_SHORT',
+          statusCode: 400,
+        });
+      }
+
+      const user = dependencies.users.getUserByUsername((authUser as AuthUser).username);
+      if (!user) {
+        throw new AppError('Invalid username or password', {
+          code: 'AUTH_INVALID_CREDENTIALS',
+          statusCode: 401,
+        });
+      }
+
+      const forced = Boolean(user.must_change_password);
+      if (!forced) {
+        const validPassword = currentPassword
+          ? await dependencies.comparePassword(currentPassword, user.password_hash)
+          : false;
+        if (!validPassword) {
+          throw new AppError('Current password is incorrect', {
+            code: 'AUTH_INVALID_CREDENTIALS',
+            statusCode: 401,
+          });
+        }
+        if (currentPassword === newPassword) {
+          throw new AppError('New password must be different from the current one', {
+            code: 'AUTH_PASSWORD_UNCHANGED',
+            statusCode: 400,
+          });
+        }
+      }
+
+      const passwordHash = await dependencies.hashPassword(newPassword);
+      dependencies.users.updatePassword(numericUserId(user.id), passwordHash, false);
+
+      const updatedUser: AuthUser = { id: user.id, username: user.username };
+      return {
+        success: true,
+        user: { id: user.id, username: user.username, must_change_password: 0 },
+        token: dependencies.generateToken(updatedUser),
       };
     },
 

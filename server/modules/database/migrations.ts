@@ -495,6 +495,11 @@ export const runMigrations = (db: Database) => {
     // models are hidden from this user's model picker AND rejected at send time.
     // NULL/empty = no restriction. account_owner users are always exempt.
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'model_deny', 'TEXT DEFAULT NULL');
+    // Admin-issued one-time-password flow: while set, the account signs in with
+    // its temporary password but is forced onto the change-password screen before
+    // the app loads. Cleared once the user picks their own password. Existing
+    // users default to 0 (no forced change) so nothing regresses on upgrade.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
     const hadAccountOwner = userColumnNames.includes('account_owner');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'account_owner', 'INTEGER NOT NULL DEFAULT 0');
     if (!hadAccountOwner) {

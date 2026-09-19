@@ -38,6 +38,7 @@ import projectModuleRoutes from './modules/projects/projects.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import pushRoutes from './modules/notifications/push.routes.js';
 import { userRoutes } from './modules/user/index.js';
+import { adminRoutes } from './modules/admin/index.js';
 import {
     getPluginPort,
     pluginsRoutes,
@@ -246,6 +247,9 @@ app.use('/api/push', authenticateToken, pushRoutes);
 
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
+
+// Owner-only user administration (create user / reset password → one-time password).
+app.use('/api/admin', authenticateToken, adminRoutes);
 
 // MYMU: deployment-global agent → host assignments (FORK.md S5)
 app.use('/api/agent-hosts', authenticateToken, agentHostsRoutes);

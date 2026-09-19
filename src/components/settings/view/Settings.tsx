@@ -15,10 +15,12 @@ import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
-import AccountTab from './tabs/AccountTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
 import type { SettingsProps } from '../types/types';
+
+import UsersTab from './tabs/users-settings/UsersTab';
+import AccountTab from './tabs/AccountTab';
 
 type DesktopNotificationsState = {
   enabled: boolean;
@@ -217,6 +219,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'plugins' && <PluginSettingsTab />}
 
               {activeTab === 'account' && <AccountTab />}
+
+              {activeTab === 'users' && <UsersTab />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>

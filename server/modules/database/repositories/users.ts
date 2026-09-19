@@ -35,12 +35,26 @@ type UserRow = {
   // Per-user model block-list: comma/space-separated model values this account
   // may NOT use. NULL/empty = no restriction. Owners are exempt.
   model_deny: string | null;
+  // 1 while the password is an admin-issued one-time password the user must
+  // replace before reaching the app; 0 once they have set their own.
+  must_change_password: number;
 };
 
-type UserPublicRow = Pick<
+export type UserPublicRow = Pick<
   UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'agent_deny' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny'
+  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'agent_deny' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny' | 'must_change_password'
 >;
+
+// Admin-view row for the Users management panel — everything the owner needs to
+// see, never the password hash.
+export type UserAdminRow = UserPublicRow & { is_active: number };
+
+export type CreateUserOptions = {
+  accountOwner?: boolean;
+  linuxUser?: string | null;
+  agentAllow?: string | null;
+  mustChangePassword?: boolean;
+};
 
 type UserGitConfig = {
   git_name: string | null;
@@ -76,6 +90,55 @@ export const userDb = {
   },
 
   /**
+   * Admin path for creating an additional account (owner-only surface). Unlike
+   * `createUser`, it can stamp the operator role, a linux-user mapping, an
+   * agent allow-list, and the one-time-password force-change flag in one insert.
+   */
+  adminCreateUser(username: string, passwordHash: string, options: CreateUserOptions = {}): CreateUserResult {
+    const db = getConnection();
+    const linuxUser = typeof options.linuxUser === 'string' && options.linuxUser.trim()
+      ? options.linuxUser.trim()
+      : null;
+    const agentAllow = typeof options.agentAllow === 'string' && options.agentAllow.trim()
+      ? options.agentAllow.trim()
+      : null;
+    const result = db
+      .prepare(
+        'INSERT INTO users (username, password_hash, account_owner, linux_user, agent_allow, must_change_password) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        username,
+        passwordHash,
+        options.accountOwner ? 1 : 0,
+        linuxUser,
+        agentAllow,
+        options.mustChangePassword ? 1 : 0,
+      );
+    return { id: result.lastInsertRowid, username };
+  },
+
+  /**
+   * Replaces the password hash. `mustChange` records whether the new hash is a
+   * temporary one-time password (forces the change-password screen) or the
+   * user's own final password (clears the flag).
+   */
+  updatePassword(userId: number, passwordHash: string, mustChange: boolean): void {
+    const db = getConnection();
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?')
+      .run(passwordHash, mustChange ? 1 : 0, userId);
+  },
+
+  /** Lists every account (active + deactivated) for the owner Users panel. Never returns hashes. */
+  listUsers(): UserAdminRow[] {
+    const db = getConnection();
+    return db
+      .prepare(
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password, is_active FROM users ORDER BY id'
+      )
+      .all() as UserAdminRow[];
+  },
+
+  /**
    * Looks up an active user by username.
    * Returns the full row (including password hash) for auth verification.
    */
@@ -104,7 +167,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -114,7 +177,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

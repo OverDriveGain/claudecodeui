@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../shared/utils";
+
 // MYMU: multi-host request routing (FORK.md F2)
 import { hostForProject, hostForSession } from "./remoteHosts";
 
@@ -173,6 +174,27 @@ export const api = {
     refresh: () => authenticatedFetch('/api/auth/refresh', { method: 'POST' }),
     user: () => authenticatedFetch('/api/auth/user'),
     logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
+    // Sets a new password for the signed-in user. On a forced one-time-password
+    // change, currentPassword may be omitted (the session already proved the OTP).
+    changePassword: (currentPassword, newPassword) =>
+      authenticatedFetch('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+  },
+
+  // Owner-only user administration (Settings → Users).
+  admin: {
+    listUsers: () => authenticatedFetch('/api/admin/users'),
+    createUser: (payload) =>
+      authenticatedFetch('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    resetPassword: (userId) =>
+      authenticatedFetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+        method: 'POST',
+      }),
   },
 
   // Protected endpoints

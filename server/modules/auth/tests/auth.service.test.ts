@@ -14,6 +14,7 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
       createUser: (username, passwordHash) => ({ id: 1, username, password_hash: passwordHash }),
       getUserByUsername: () => undefined,
       updateLastLogin: () => undefined,
+      updatePassword: () => undefined,
     },
     transaction: {
       begin: () => undefined,
@@ -47,6 +48,7 @@ test('register hashes credentials and commits through injected dependencies', as
       },
       getUserByUsername: () => undefined,
       updateLastLogin: (userId) => operations.push(`login:${userId}`),
+      updatePassword: () => undefined,
     },
   }));
 
@@ -64,6 +66,7 @@ test('login rejects an invalid password without issuing a token', async () => {
       createUser: () => { throw new Error('unused'); },
       getUserByUsername: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
       updateLastLogin: () => undefined,
+      updatePassword: () => undefined,
     },
     comparePassword: async () => false,
     generateToken: () => {
@@ -77,6 +80,48 @@ test('login rejects an invalid password without issuing a token', async () => {
     (error: unknown) => error instanceof AppError && error.code === 'AUTH_INVALID_CREDENTIALS',
   );
   assert.equal(tokenIssued, false);
+});
+
+test('changePassword clears the one-time flag without re-checking the temp password', async () => {
+  const writes: Array<{ userId: number; mustChange: boolean }> = [];
+  let compared = false;
+  const service = createAuthService(createDependencies({
+    users: {
+      hasUsers: () => true,
+      createUser: () => { throw new Error('unused'); },
+      // must_change_password set → forced mode.
+      getUserByUsername: () => ({ id: 5, username: 'mansoor', password_hash: 'otp-hash', must_change_password: 1 }),
+      updateLastLogin: () => undefined,
+      updatePassword: (userId, _hash, mustChange) => writes.push({ userId, mustChange }),
+    },
+    comparePassword: async () => { compared = true; return false; },
+    hashPassword: async () => 'new-hash',
+  }));
+
+  const result = await service.changePassword({ id: 5, username: 'mansoor' }, '', 'brandnew1');
+
+  assert.equal(result.success, true);
+  assert.equal(result.user.must_change_password, 0);
+  assert.deepEqual(writes, [{ userId: 5, mustChange: false }]);
+  assert.equal(compared, false, 'forced change must not re-verify the temp password');
+});
+
+test('changePassword requires the current password for a voluntary change', async () => {
+  const service = createAuthService(createDependencies({
+    users: {
+      hasUsers: () => true,
+      createUser: () => { throw new Error('unused'); },
+      getUserByUsername: () => ({ id: 6, username: 'alice', password_hash: 'hash', must_change_password: 0 }),
+      updateLastLogin: () => undefined,
+      updatePassword: () => undefined,
+    },
+    comparePassword: async () => false,
+  }));
+
+  await assert.rejects(
+    service.changePassword({ id: 6, username: 'alice' }, 'wrong', 'brandnew1'),
+    (error: unknown) => error instanceof AppError && error.code === 'AUTH_INVALID_CREDENTIALS',
+  );
 });
 
 test('refreshSession issues a replacement token for the authenticated user', () => {

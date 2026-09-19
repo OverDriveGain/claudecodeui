@@ -285,6 +285,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [checkOnboardingStatus, setSession],
   );
 
+  const changePassword = useCallback<AuthContextValue['changePassword']>(
+    async (currentPassword, newPassword) => {
+      try {
+        const response = await api.auth.changePassword(currentPassword, newPassword);
+        const payload = await parseJsonSafely<AuthSessionPayload>(response);
+
+        if (!response.ok || !payload?.token || !payload.user) {
+          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
+          const code = resolveApiErrorCode(payload);
+          return { success: false, error: message, code };
+        }
+
+        // Adopt the fresh token + updated user (must_change_password now cleared)
+        // so ProtectedRoute releases the forced change screen immediately.
+        setSession(payload.user, payload.token);
+        setError(null);
+        return { success: true };
+      } catch (caughtError) {
+        console.error('Change password error:', caughtError);
+        return {
+          success: false,
+          error: AUTH_ERROR_MESSAGES.networkError,
+          code: AUTH_FEEDBACK_CODES.networkError,
+        };
+      }
+    },
+    [setSession],
+  );
+
   const logout = useCallback(() => {
     // JWT logout is client-side: the server endpoint does not maintain a
     // revocation list, so clearing the session is the complete operation.
@@ -301,10 +330,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       error,
       login,
       register,
+      changePassword,
       logout,
       refreshOnboardingStatus,
     }),
     [
+      changePassword,
       error,
       hasCompletedOnboarding,
       isLoading,

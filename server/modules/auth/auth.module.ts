@@ -30,6 +30,8 @@ const authService = createAuthService({
     },
     getUserByUsername: (username) => userDb.getUserByUsername(username),
     updateLastLogin: (userId) => userDb.updateLastLogin(userId),
+    updatePassword: (userId, passwordHash, mustChange) =>
+      userDb.updatePassword(userId, passwordHash, mustChange),
   },
   transaction: {
     begin: () => databaseConnection.prepare('BEGIN').run(),
