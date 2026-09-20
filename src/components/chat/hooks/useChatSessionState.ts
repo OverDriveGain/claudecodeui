@@ -878,10 +878,39 @@ export function useChatSessionState({
     if (!scrollContainerRef.current || chatMessages.length === 0) return;
     if (isLoadingMoreRef.current || isLoadingMoreMessages || pendingScrollRestoreRef.current) return;
     if (searchScrollActiveRef.current) return;
+    if (isUserScrolledUp) return;
 
-    if (!isUserScrolledUp) {
-      setTimeout(() => scrollToBottom(), 50);
-    }
+    // A new message (turn start especially) triggers several near-simultaneous
+    // height changes: the streaming row appears, the activity indicator reserves
+    // space (pb toggle), and the first markdown/code renders. A single timed
+    // scrollToBottom races those and shows a 1-2 frame "shake". Instead, re-pin
+    // to the bottom each animation frame until the height is stable (or a short
+    // cap), so the viewport rides the reflow smoothly in one direction. Bails if
+    // a pagination restore or "load more" starts mid-pin.
+    let rafId = 0;
+    let frame = 0;
+    let lastHeight = -1;
+    let stable = 0;
+    const pin = () => {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      if (pendingScrollRestoreRef.current || isLoadingMoreRef.current) return;
+      container.scrollTop = container.scrollHeight;
+      if (container.scrollHeight === lastHeight) {
+        stable += 1;
+      } else {
+        stable = 0;
+        lastHeight = container.scrollHeight;
+      }
+      frame += 1;
+      if (stable < 3 && frame < 30) {
+        rafId = requestAnimationFrame(pin);
+      }
+    };
+    rafId = requestAnimationFrame(pin);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
   }, [chatMessages.length, isActive, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
 
   useEffect(() => {

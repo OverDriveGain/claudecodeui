@@ -599,6 +599,14 @@
 @layer components {
   .chat-messages-pane {
     contain: layout style paint;
+    /* Disable browser scroll-anchoring on the chat scroll container. While an
+       agent streams (especially OpenCode live agents, whose updates are frequent
+       and reflow the list), the browser silently adjusts scrollTop to keep an
+       anchor element fixed — which fights our own scrollToBottom / manual
+       pagination-restore and makes the view "shake" (jump down then snap back).
+       We manage scroll position entirely in JS (auto-follow + captureScrollRestoreState),
+       so browser anchoring is pure interference here. */
+    overflow-anchor: none;
   }
 
   .chat-composer-shell {
