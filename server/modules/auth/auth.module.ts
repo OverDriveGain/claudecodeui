@@ -1,6 +1,8 @@
 import { createRequire } from 'node:module';
 
 import { getConnection, userDb } from '@/modules/database/index.js';
+// MYMU model (b): PAM/linux-password auth + in-memory session secret store.
+import { verifyLinuxPassword, setUserSecret, clearUserSecret } from '@/modules/mymu/index.js';
 
 import { authenticateToken, generateToken } from './auth.middleware.js';
 import { createAuthRouter } from './auth.routes.js';
@@ -32,6 +34,11 @@ const authService = createAuthService({
     updateLastLogin: (userId) => userDb.updateLastLogin(userId),
     updatePassword: (userId, passwordHash, mustChange) =>
       userDb.updatePassword(userId, passwordHash, mustChange),
+  },
+  pam: {
+    verifyLinuxPassword: (linuxUser, password) => verifyLinuxPassword(linuxUser, password),
+    setSecret: (linuxUser, password) => setUserSecret(linuxUser, password),
+    clearSecret: (linuxUser) => clearUserSecret(linuxUser),
   },
   transaction: {
     begin: () => databaseConnection.prepare('BEGIN').run(),

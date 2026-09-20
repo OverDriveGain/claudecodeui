@@ -500,6 +500,9 @@ export const runMigrations = (db: Database) => {
     // the app loads. Cleared once the user picks their own password. Existing
     // users default to 0 (no forced change) so nothing regresses on upgrade.
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
+    // Opt-in PAM/linux-password auth (model b). Off by default so the sudo-group
+    // deployments (box) keep bcrypt login + passwordless-sudo file access.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'pam_auth', 'INTEGER NOT NULL DEFAULT 0');
     const hadAccountOwner = userColumnNames.includes('account_owner');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'account_owner', 'INTEGER NOT NULL DEFAULT 0');
     if (!hadAccountOwner) {

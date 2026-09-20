@@ -5,7 +5,13 @@ type AuthUser = {
   username: string;
 };
 
-type AuthLoginUser = AuthUser & { password_hash: string; must_change_password?: number };
+type AuthLoginUser = AuthUser & {
+  password_hash: string;
+  must_change_password?: number;
+  // model (b): authenticate against the linux password + which linux user to use.
+  pam_auth?: number;
+  linux_user?: string | null;
+};
 
 type AuthDependencies = {
   users: {
@@ -14,6 +20,13 @@ type AuthDependencies = {
     getUserByUsername(username: string): AuthLoginUser | undefined;
     updateLastLogin(userId: number): void;
     updatePassword(userId: number, passwordHash: string, mustChange: boolean): void;
+  };
+  // PAM/linux-password auth for opt-in (pam_auth) accounts. Absent behavior is
+  // impossible — always injected; verify returns false when it can't authenticate.
+  pam: {
+    verifyLinuxPassword(linuxUser: string, password: string): Promise<boolean>;
+    setSecret(linuxUser: string, password: string): void;
+    clearSecret(linuxUser: string): void;
   };
   transaction: {
     begin(): void;
@@ -109,9 +122,21 @@ export function createAuthService(dependencies: AuthDependencies) {
       }
 
       const user = dependencies.users.getUserByUsername(username);
-      const validPassword = user
-        ? await dependencies.comparePassword(password, user.password_hash)
-        : false;
+      let validPassword = false;
+      if (user) {
+        if (user.pam_auth) {
+          // model (b): authenticate against the LINUX password via `su`/PAM and,
+          // on success, stash it for this session so file access can become the
+          // linux user without any root sudo seam.
+          const linuxUser = (user.linux_user && user.linux_user.trim()) || user.username;
+          validPassword = await dependencies.pam.verifyLinuxPassword(linuxUser, password);
+          if (validPassword) {
+            dependencies.pam.setSecret(linuxUser, password);
+          }
+        } else {
+          validPassword = await dependencies.comparePassword(password, user.password_hash);
+        }
+      }
       if (!user || !validPassword) {
         throw new AppError('Invalid username or password', {
           code: 'AUTH_INVALID_CREDENTIALS',
@@ -178,6 +203,15 @@ export function createAuthService(dependencies: AuthDependencies) {
         });
       }
 
+      // PAM accounts authenticate against the linux password, which MyMu does not
+      // manage — changing it belongs to the OS (`passwd`), not this endpoint.
+      if (user.pam_auth) {
+        throw new AppError('This account’s password is managed by the system', {
+          code: 'AUTH_PAM_MANAGED',
+          statusCode: 400,
+        });
+      }
+
       const forced = Boolean(user.must_change_password);
       if (!forced) {
         const validPassword = currentPassword
@@ -230,7 +264,20 @@ export function createAuthService(dependencies: AuthDependencies) {
       return { token: dependencies.generateToken(user as AuthUser) };
     },
 
-    logout() {
+    logout(authUser?: unknown) {
+      // Drop any in-memory linux-password secret held for this session (model b).
+      if (
+        typeof authUser === 'object'
+        && authUser !== null
+        && 'username' in authUser
+        && typeof (authUser as AuthLoginUser).username === 'string'
+      ) {
+        const u = authUser as AuthLoginUser;
+        if (u.pam_auth) {
+          const linuxUser = (u.linux_user && u.linux_user.trim()) || u.username;
+          dependencies.pam.clearSecret(linuxUser);
+        }
+      }
       return { success: true, message: 'Logged out successfully' };
     },
   };

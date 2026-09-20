@@ -38,11 +38,14 @@ type UserRow = {
   // 1 while the password is an admin-issued one-time password the user must
   // replace before reaching the app; 0 once they have set their own.
   must_change_password: number;
+  // 1 = authenticate this account against the linux password (PAM/`su`) rather
+  // than the bcrypt hash, and reach its files as that linux user. 0 = bcrypt.
+  pam_auth: number;
 };
 
 export type UserPublicRow = Pick<
   UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'agent_deny' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny' | 'must_change_password'
+  'id' | 'username' | 'created_at' | 'last_login' | 'agent_allow' | 'agent_deny' | 'linux_user' | 'account_owner' | 'agent_start_cmd' | 'model_deny' | 'must_change_password' | 'pam_auth'
 >;
 
 // Admin-view row for the Users management panel — everything the owner needs to
@@ -54,6 +57,7 @@ export type CreateUserOptions = {
   linuxUser?: string | null;
   agentAllow?: string | null;
   mustChangePassword?: boolean;
+  pamAuth?: boolean;
 };
 
 type UserGitConfig = {
@@ -104,7 +108,7 @@ export const userDb = {
       : null;
     const result = db
       .prepare(
-        'INSERT INTO users (username, password_hash, account_owner, linux_user, agent_allow, must_change_password) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO users (username, password_hash, account_owner, linux_user, agent_allow, must_change_password, pam_auth) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         username,
@@ -113,8 +117,15 @@ export const userDb = {
         linuxUser,
         agentAllow,
         options.mustChangePassword ? 1 : 0,
+        options.pamAuth ? 1 : 0,
       );
     return { id: result.lastInsertRowid, username };
+  },
+
+  /** Toggle whether an account authenticates via the linux password (PAM/`su`). */
+  updatePamAuth(userId: number, on: boolean): void {
+    const db = getConnection();
+    db.prepare('UPDATE users SET pam_auth = ? WHERE id = ?').run(on ? 1 : 0, userId);
   },
 
   /**
@@ -133,7 +144,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password, is_active FROM users ORDER BY id'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password, pam_auth, is_active FROM users ORDER BY id'
       )
       .all() as UserAdminRow[];
   },
@@ -167,7 +178,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password, pam_auth FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -177,7 +188,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, agent_allow, agent_deny, linux_user, account_owner, agent_start_cmd, model_deny, must_change_password, pam_auth FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

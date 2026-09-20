@@ -16,6 +16,11 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
       updateLastLogin: () => undefined,
       updatePassword: () => undefined,
     },
+    pam: {
+      verifyLinuxPassword: async () => false,
+      setSecret: () => undefined,
+      clearSecret: () => undefined,
+    },
     transaction: {
       begin: () => undefined,
       commit: () => undefined,
@@ -80,6 +85,55 @@ test('login rejects an invalid password without issuing a token', async () => {
     (error: unknown) => error instanceof AppError && error.code === 'AUTH_INVALID_CREDENTIALS',
   );
   assert.equal(tokenIssued, false);
+});
+
+test('pam_auth login verifies the linux password and stashes the session secret', async () => {
+  const secrets: Array<{ user: string; pw: string }> = [];
+  let bcryptCalled = false;
+  const service = createAuthService(createDependencies({
+    users: {
+      hasUsers: () => true,
+      createUser: () => { throw new Error('unused'); },
+      getUserByUsername: () => ({ id: 3, username: 'mansoor', password_hash: 'ignored', pam_auth: 1, linux_user: 'mansoor' }),
+      updateLastLogin: () => undefined,
+      updatePassword: () => undefined,
+    },
+    comparePassword: async () => { bcryptCalled = true; return false; },
+    pam: {
+      verifyLinuxPassword: async (u, pw) => u === 'mansoor' && pw === 'linux-pw',
+      setSecret: (user, pw) => secrets.push({ user, pw }),
+      clearSecret: () => undefined,
+    },
+  }));
+
+  const result = await service.login('mansoor', 'linux-pw');
+  assert.equal(result.success, true);
+  assert.deepEqual(secrets, [{ user: 'mansoor', pw: 'linux-pw' }]);
+  assert.equal(bcryptCalled, false, 'pam accounts must not fall through to bcrypt');
+});
+
+test('pam_auth login rejects a wrong linux password and stores no secret', async () => {
+  const secrets: string[] = [];
+  const service = createAuthService(createDependencies({
+    users: {
+      hasUsers: () => true,
+      createUser: () => { throw new Error('unused'); },
+      getUserByUsername: () => ({ id: 3, username: 'mansoor', password_hash: 'ignored', pam_auth: 1, linux_user: 'mansoor' }),
+      updateLastLogin: () => undefined,
+      updatePassword: () => undefined,
+    },
+    pam: {
+      verifyLinuxPassword: async () => false,
+      setSecret: (user) => secrets.push(user),
+      clearSecret: () => undefined,
+    },
+  }));
+
+  await assert.rejects(
+    service.login('mansoor', 'wrong'),
+    (error: unknown) => error instanceof AppError && error.code === 'AUTH_INVALID_CREDENTIALS',
+  );
+  assert.deepEqual(secrets, []);
 });
 
 test('changePassword clears the one-time flag without re-checking the temp password', async () => {

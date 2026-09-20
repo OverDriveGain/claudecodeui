@@ -12,7 +12,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- Set to 1 when the password is an admin-issued one-time password: the user
     -- may sign in with it but is forced to choose a new password before reaching
     -- the app. Cleared the moment they set their own password.
-    must_change_password INTEGER NOT NULL DEFAULT 0
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    -- Opt-in per-user auth mode. 1 = authenticate against the LINUX password
+    -- (PAM via su) instead of the stored bcrypt hash; the verified password is
+    -- held in memory for the session and used to reach the users own files as
+    -- that linux user (no root sudo seam). 0 = classic bcrypt login. Off by
+    -- default so existing (sudo-model) deployments are unchanged.
+    pam_auth INTEGER NOT NULL DEFAULT 0
 );
 `;
 
