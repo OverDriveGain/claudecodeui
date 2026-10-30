@@ -65,6 +65,15 @@ const RC_PING_INTERVAL_MS = 30 * 1000;
 const RC_RECONNECT_BASE_MS = 1000;
 const RC_RECONNECT_CAP_MS = 30 * 1000;
 const RC_RECONNECT_MAX_RETRIES = 8;
+// A reopened socket only counts as recovered (retry counter back to 0) once it has
+// stayed open this long. Resetting on mere OPEN made the backoff and the give-up
+// path unreachable for a relay that accepts the upgrade and then closes at once:
+// the reconnect loop ran at the 1s base delay forever (the Sep 2026 1003 storm).
+const RC_STABLE_OPEN_MS = 10 * 1000;
+// Close codes after which reopening can never succeed: 4003 = unauthorized,
+// 1003 = the relay refuses the subscription (reason "not_found" — the session was
+// deleted, e.g. its agent restarted under a new session id). Drop the entry.
+const RC_PERMANENT_CLOSE_CODES = new Set([1003, 4003]);
 // Cap the frames emitted from the missed-events top-up after a reconnect.
 const RC_TOPUP_EMIT_MAX = 200;
 // Stall watchdog. The upstream subscription can go silently stale: the socket keeps
@@ -84,7 +93,10 @@ const RC_STALL_QUIET_MS = Math.max(5000, Number.parseInt(process.env.RC_STALL_QU
 // view froze until a manual refresh. While subscribers are watching, also probe on a
 // slower cadence when NO turn is open; the same cursor top-up is the discriminator
 // (idle agent → nothing new → no-op; stale socket → missed events → emit + recycle).
-const RC_IDLE_SYNC_MS = Math.max(10 * 1000, Number.parseInt(process.env.RC_IDLE_SYNC_MS || '', 10) || 60 * 1000);
+// 15s (was 60s): a turn started from the agent's own terminal on a stale socket
+// used to surface up to a minute late, as one burst. A healthy idle probe is one
+// cursor GET returning nothing, and it only runs while a viewer is subscribed.
+const RC_IDLE_SYNC_MS = Math.max(10 * 1000, Number.parseInt(process.env.RC_IDLE_SYNC_MS || '', 10) || 15 * 1000);
 // Cap of remembered live-delivered event uuids per session (staleness discriminator:
 // a topped-up event we already streamed is NOT evidence the socket missed anything).
 const RC_SEEN_UUIDS_MAX = 2000;
@@ -1148,8 +1160,15 @@ export async function attachSession(sessionId, ws, normalize) {
 async function emitMissedEventsAfterReconnect(sessionId, entry, preDropCount) {
   try {
     const all = await getSessionEventsCached(sessionId);
-    const missed = all.slice(Math.max(0, preDropCount));
+    // The pre-drop count comes from the disk cache, which lags the live stream, so
+    // the slice also holds events the socket already delivered. Re-emitting them
+    // turned every routine drop into a burst of up to RC_TOPUP_EMIT_MAX frames on
+    // the viewer. Only events the socket never delivered are actually missed.
+    const missed = all
+      .slice(Math.max(0, preDropCount))
+      .filter((e) => !(e && e.uuid && entry.seenEventUuids.has(e.uuid)));
     if (missed.length === 0) return;
+    console.log('[rc] reconnect top-up: emitting events missed during the drop', { sessionId, missed: missed.length });
     emitRawEvents(sessionId, entry, missed);
   } catch { /* the next manual refresh / history fetch covers it */ }
 }
@@ -1285,6 +1304,7 @@ async function syncStalledUpstream(sessionId, entry) {
     emitRawEvents(sessionId, entry, missed);
     // The socket failed to stream events the relay had — it's stale. Terminate to
     // fire 'close' → the transparent reconnect path resubscribes with fresh auth.
+    entry.closeCause = 'stall-recycle';
     try { entry.upstream?.terminate(); } catch { /* already dead */ }
   } catch { /* relay unreachable — the next watchdog tick retries */ }
   finally { entry.stallSyncInFlight = false; }
@@ -1312,8 +1332,8 @@ function scheduleRemoteReconnect(sessionId, entry) {
     try { preDropCount = (await getSessionEventsCached(sessionId, { topUp: false })).length; } catch { /* 0 → capped emit */ }
     try {
       await openRemoteUpstream(sessionId, entry);
-      entry.retries = 0;
-      console.log('[rc] upstream reconnected', { sessionId });
+      // retries is reset by the stability timer in openRemoteUpstream, not here.
+      console.log('[rc] upstream reconnected', { sessionId, retries: entry.retries });
       await emitMissedEventsAfterReconnect(sessionId, entry, preDropCount);
       // A question/permission asked during the gap would otherwise be invisible.
       const out = activeRemoteSessions.get(sessionId)?.ws || entry.ws;
@@ -1340,6 +1360,13 @@ async function openRemoteUpstream(sessionId, entry) {
     headers: { Authorization: `Bearer ${token}`, 'anthropic-version': ANTHROPIC_VERSION },
   });
   entry.upstream = upstream;
+  entry.closeCause = null;
+  let openedAt = 0;
+  let stableTimer = null;
+  upstream.once('open', () => {
+    openedAt = Date.now();
+    stableTimer = setTimeout(() => { entry.retries = 0; }, RC_STABLE_OPEN_MS);
+  });
 
   // Keepalive + dead-socket detection (standard ws heartbeat): a silently-dead
   // TCP connection emits nothing — without pinging, the stream just stops and the
@@ -1350,6 +1377,7 @@ async function openRemoteUpstream(sessionId, entry) {
   entry.pingTimer = setInterval(() => {
     if (upstream.readyState !== WebSocket.OPEN) return;
     if (!entry.alive) {
+      entry.closeCause = 'ping-timeout';
       try { upstream.terminate(); } catch { /* already dead */ }
       return;
     }
@@ -1513,12 +1541,27 @@ async function openRemoteUpstream(sessionId, entry) {
     }
   });
 
-  upstream.on('close', (code) => {
+  upstream.on('close', (code, reasonBuf) => {
     if (entry.pingTimer) { clearInterval(entry.pingTimer); entry.pingTimer = null; }
+    if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
     // Deliberate detach (or a superseded entry) — no signal, no reconnect.
     if (entry.closedByUs || activeRemoteSessions.get(sessionId) !== entry) return;
-    if (code === 4003) {
-      // Unauthorized: permanent. Tell the GUI the stream ended and drop the entry.
+    // Who closed it. A local terminate() also surfaces as 1006, so without the
+    // cause a self-inflicted recycle is indistinguishable from a relay-side drop.
+    const closeInfo = {
+      sessionId,
+      code,
+      reason: reasonBuf ? reasonBuf.toString().slice(0, 120) : '',
+      cause: entry.closeCause || 'peer',
+      openS: openedAt ? Math.round((Date.now() - openedAt) / 1000) : 0,
+      retries: entry.retries,
+    };
+    entry.closeCause = null;
+    if (RC_PERMANENT_CLOSE_CODES.has(code)) {
+      // Permanent: tell the GUI the stream ended and drop the entry. A later
+      // re-subscribe starts a fresh attach, which costs one dial, not a loop.
+      console.log('[rc] upstream closed permanently, dropping subscription', closeInfo);
+      if (entry.stallTimer) { clearInterval(entry.stallTimer); entry.stallTimer = null; }
       activeRemoteSessions.delete(sessionId);
       fanOut(entry, createNormalizedMessage({ kind: 'complete', exitCode: 1, sessionId, provider: 'claude' }));
       return;
@@ -1527,7 +1570,7 @@ async function openRemoteUpstream(sessionId, entry) {
     // heartbeat): keep the entry (writer + replay buffer stay bound) and reopen in
     // the background. No `complete` is sent — a mid-turn close would otherwise
     // wrongly clear the working indicator that the reconnected stream continues.
-    console.log('[rc] upstream closed, scheduling reconnect', { sessionId, code });
+    console.log('[rc] upstream closed, scheduling reconnect', closeInfo);
     scheduleRemoteReconnect(sessionId, entry);
   });
   upstream.on('error', (err) => {
