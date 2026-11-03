@@ -474,12 +474,29 @@ export async function listDirNamesAsUser(user: string, dir: string): Promise<str
   return Array.isArray(parsed) ? parsed : [];
 }
 
-// ~/.claude/sessions/*.json of a foreign user, as one JSON array. SYNC because
+// Live-session registry of a foreign user, as one JSON array: their
+// $CLAUDE_CONFIG_DIR/sessions (if set in their env) plus ~/.claude/sessions. SYNC because
 // local-sessions' resolver is sync and on hot paths; results are cached there.
 const SESSIONS_READER = `
 import glob, json, os
 out = []
-for f in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):
+dirs = []
+home = os.path.realpath(os.path.expanduser('~'))
+cfg = os.environ.get('CLAUDE_CONFIG_DIR')
+# su/sudo may leak the CCUI process's own CLAUDE_CONFIG_DIR — only trust one
+# that lives inside THIS user's home, never another user's registry.
+if cfg and os.path.realpath(cfg).startswith(home + os.sep):
+    dirs.append(os.path.join(cfg, 'sessions'))
+dirs.append(os.path.expanduser('~/.claude/sessions'))
+seen = set()
+files = []
+for d in dirs:
+    r = os.path.realpath(d)
+    if r in seen:
+        continue
+    seen.add(r)
+    files.extend(glob.glob(os.path.join(d, '*.json')))
+for f in files:
     try:
         out.append(json.load(open(f)))
     except Exception:

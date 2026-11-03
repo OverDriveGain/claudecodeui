@@ -17,12 +17,33 @@ import path from 'node:path';
 
 import { mappedForeignUsers, sessionRegistryForUserSync } from './user-fs.js';
 
-// Claude's live-session registry. `CLAUDE_SESSIONS_DIR` overrides the default
-// for relocated ~/.claude layouts (and lets a test instance point at an empty
-// dir to force cross-host federation).
-function sessionsDir(): string {
+// Claude's live-session registry dirs. `CLAUDE_SESSIONS_DIR` is an exclusive
+// override (lets a test instance point at an empty dir to force cross-host
+// federation). Otherwise read BOTH `$CLAUDE_CONFIG_DIR/sessions` (claude's
+// relocated config root — e.g. a per-account dir) and the default
+// `~/.claude/sessions`, deduped by realpath: agents launched before/after a
+// config-dir switch may live in either.
+function sessionsDirs(): string[] {
   const override = process.env.CLAUDE_SESSIONS_DIR;
-  return override && override.length > 0 ? override : path.join(os.homedir(), '.claude', 'sessions');
+  if (override && override.length > 0) return [override];
+  const candidates: string[] = [];
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  if (configDir && configDir.length > 0) candidates.push(path.join(configDir, 'sessions'));
+  candidates.push(path.join(os.homedir(), '.claude', 'sessions'));
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const dir of candidates) {
+    let key = dir;
+    try {
+      key = fs.realpathSync(dir);
+    } catch {
+      // Missing dir — keep the raw path; readdir below tolerates it.
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dirs.push(dir);
+  }
+  return dirs;
 }
 
 // Reading + parsing every session file on each request is wasteful for an
@@ -49,28 +70,27 @@ function sessionSuffix(id: string): string {
   return underscore >= 0 ? id.slice(underscore + 1) : id;
 }
 
-/** Build (or reuse) the suffix→session map from `~/.claude/sessions/*.json`. */
+/** Build (or reuse) the suffix→session map from the session registry dirs. */
 function loadLocalSessions(): Map<string, LocalSession> {
   const now = Date.now();
   if (cache && now - cache.at < CACHE_TTL_MS) {
     return cache.map;
   }
 
-  const dir = sessionsDir();
   const map = new Map<string, LocalSession>();
-  let files: string[] = [];
-  try {
-    files = fs.readdirSync(dir);
-  } catch {
-    // No sessions dir (claude never ran here) — empty map, cached briefly.
-    cache = { at: now, map };
-    return map;
+  const files: string[] = [];
+  for (const dir of sessionsDirs()) {
+    try {
+      for (const name of fs.readdirSync(dir)) files.push(path.join(dir, name));
+    } catch {
+      // No sessions dir here (claude never ran with this config root) — skip.
+    }
   }
 
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     try {
-      const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+      const raw = fs.readFileSync(file, 'utf8');
       const parsed = JSON.parse(raw) as {
         bridgeSessionId?: unknown;
         cwd?: unknown;
