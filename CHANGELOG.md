@@ -2,6 +2,12 @@
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+## [1.37.29] — MyMu (2026-11-04)
+
+### Features
+
+* **Android push via UnifiedPush (no Firebase)** — `POST /api/push/register` with `{ deviceToken: <https endpoint URL>, platform: "android-up", appVersion }` stores the endpoint under a new `unifiedpush` channel in `notification_channel_endpoints` (https only, max 1024 chars). `DELETE /api/push/register` and `GET /api/push/registrations` now cover both APNs and UnifiedPush (registrations carry a `channel` field). Every event that reaches APNs, including live-agent turn completion, is also sent by `POST <endpointUrl>` with JSON `{title, body, sessionId, projectId, collapseId}`, using a 10 s timeout, the same presence suppression, and pruning of the endpoint on 404/410. APNs delivery is unchanged.
+
 ## [1.37.23] — MyMu (2026-09-14)
 
 ### Features

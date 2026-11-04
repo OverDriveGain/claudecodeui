@@ -1259,3 +1259,23 @@ export type CliApplication = {
 export type SandboxCommandService = {
   execute(argumentsList: string[]): Promise<number>;
 };
+
+// ---------------------------
+//----------------- MOBILE PUSH TYPES ------------
+
+/**
+ * Channel-neutral mobile push alert built by the notification orchestrator and
+ * handed to every native push sender (APNs for iOS, UnifiedPush for Android).
+ *
+ * The field names are a wire contract with the MyMu mobile apps: the UnifiedPush
+ * sender serializes this object verbatim as its JSON body, and the APNs sender
+ * maps it into the `aps` payload. Do not rename fields without updating both apps.
+ * `collapseId` lets a newer alert for the same session replace an older one.
+ */
+export type MobilePushAlert = {
+  title: string;
+  body: string;
+  sessionId?: string | null;
+  projectId?: string | null;
+  collapseId?: string | null;
+};

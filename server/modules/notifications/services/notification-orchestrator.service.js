@@ -4,6 +4,7 @@ import { notificationPreferencesDb, pushSubscriptionsDb, sessionsDb } from '@/mo
 import { sendDesktopNotification as sendDesktopNotificationToClients } from '@/modules/notifications/services/desktop-notification-clients.service.js';
 import { APNS_CHANNEL, isApnsConfigured, sendApnsToUser } from '@/modules/notifications/services/apns.service.js';
 import { isUserPresentOnSession } from '@/modules/notifications/services/session-presence.service.js';
+import { UNIFIEDPUSH_CHANNEL, sendUnifiedPushToUser } from '@/modules/notifications/services/unifiedpush.service.js';
 
 const PREVIEW_MAX = 140;
 
@@ -270,6 +271,28 @@ function sendApnsForEvent(userId, event) {
   });
 }
 
+// Android counterpart of sendApnsForEvent — same presence suppression, same
+// alert fields (the app parses the JSON body keys verbatim).
+function sendUnifiedPushForEvent(userId, event) {
+  if (event?.sessionId && isUserPresentOnSession(userId, event.sessionId)) {
+    console.log('[push] UnifiedPush suppressed — user present (live socket) on session', {
+      userId,
+      sessionId: event.sessionId,
+    });
+    return Promise.resolve({ attempted: 0, sent: 0, suppressed: true });
+  }
+  console.log('[push] delivering UnifiedPush', { userId, sessionId: event?.sessionId || null });
+  return Promise.resolve(sendUnifiedPushToUser(userId, buildApnsAlert(event))).then((result) => {
+    console.log('[push] UnifiedPush delivery result', {
+      userId,
+      sessionId: event?.sessionId || null,
+      attempted: result?.attempted ?? 0,
+      sent: result?.sent ?? 0,
+    });
+    return result;
+  });
+}
+
 const notificationChannels = [
   {
     id: 'webPush',
@@ -287,6 +310,12 @@ const notificationChannels = [
     id: APNS_CHANNEL,
     isEnabled: (preferences) => isApnsConfigured() && Boolean(preferences?.channels?.[APNS_CHANNEL]),
     send: ({ userId, event }) => sendApnsForEvent(userId, event)
+  },
+  {
+    // No server-side config needed: the endpoint URL is the capability.
+    id: UNIFIEDPUSH_CHANNEL,
+    isEnabled: (preferences) => Boolean(preferences?.channels?.[UNIFIEDPUSH_CHANNEL]),
+    send: ({ userId, event }) => sendUnifiedPushForEvent(userId, event)
   }
 ];
 
@@ -335,6 +364,9 @@ function notifyUserIfEnabled({ userId, event }) {
           configured: isApnsConfigured(),
           prefOn: Boolean(preferences?.channels?.[APNS_CHANNEL]),
         });
+      }
+      if (apnsScoped && channel.id === UNIFIEDPUSH_CHANNEL) {
+        console.log('[push] dropped — UnifiedPush channel disabled (no Android endpoint)', { userId });
       }
       continue;
     }
@@ -385,7 +417,7 @@ function notifyBackgroundWorkCompleted({ userId, provider, sessionId = null, ses
  * signal that stops the "working" spinner. Carries the reply preview + the
  * client's project id so the mobile push can deep-link into the conversation.
  *
- * Delivery is scoped to the APNs channel only (`channels: [APNS_CHANNEL]`): this
+ * Delivery is scoped to the mobile push channels only (APNs + UnifiedPush): this
  * is the mobile push feature, and existing web-push/desktop subscribers must not
  * start receiving turn-completion popups they never got before. It rides the
  * existing `stop` event preference and the standard dedupe window.
@@ -406,7 +438,7 @@ function notifyTurnCompleted({ userId, provider, sessionId = null, projectId = n
       code: 'run.stopped',
       meta: { stopReason: 'completed', sessionName, projectId, replyPreview },
       severity: 'info',
-      channels: [APNS_CHANNEL],
+      channels: [APNS_CHANNEL, UNIFIEDPUSH_CHANNEL],
       dedupeKey: `${provider}:turn:complete:${sessionId || 'none'}`
     })
   });

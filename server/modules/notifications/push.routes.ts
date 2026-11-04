@@ -1,15 +1,24 @@
 import express from 'express';
 
-import { notificationChannelEndpointsDb, notificationPreferencesDb } from '@/modules/database/index.js';
 import { APNS_CHANNEL } from '@/modules/notifications/services/apns.service.js';
+import {
+  listPushRegistrations,
+  registerPushDevice,
+  unregisterPushDevice,
+} from '@/modules/notifications/services/push-registry.service.js';
+import {
+  normalizeUnifiedPushEndpoint,
+  UNIFIEDPUSH_CHANNEL,
+  UNIFIEDPUSH_PLATFORM,
+} from '@/modules/notifications/services/unifiedpush.service.js';
 
 /**
- * Native push-notification device registry (currently iOS/APNs).
+ * Native push-notification device registry (iOS/APNs + Android/UnifiedPush).
  *
- * A thin, explicit façade the mobile client speaks to; it stores device tokens
- * in the shared `notification_channel_endpoints` table under channel `apns`
- * (endpoint_id = the APNs device token) so the notification orchestrator's
- * existing per-user fan-out, preferences and dedupe all apply unchanged.
+ * A thin, explicit façade the mobile clients speak to. A registration with
+ * `platform: "android-up"` is stored under channel `unifiedpush`
+ * (deviceToken = the UnifiedPush endpoint URL); everything else under `apns`
+ * (deviceToken = the APNs device token).
  *
  * Mounted under `/api/push`, behind `authenticateToken` — every registration is
  * scoped to the authenticated user.
@@ -29,33 +38,9 @@ function readText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function sanitizeRegistration(endpoint: any) {
-  const metadata = notificationChannelEndpointsDb.parseMetadata(endpoint.metadata_json);
-  return {
-    deviceToken: endpoint.endpoint_id,
-    platform: typeof metadata.platform === 'string' ? metadata.platform : null,
-    bundleId: typeof metadata.bundleId === 'string' ? metadata.bundleId : null,
-    appVersion: typeof metadata.appVersion === 'string' ? metadata.appVersion : null,
-    enabled: Boolean(endpoint.enabled),
-    lastSeenAt: endpoint.last_seen_at,
-    createdAt: endpoint.created_at,
-    updatedAt: endpoint.updated_at,
-  };
-}
-
-// Keep the user's `apns` channel preference in step with whether any enabled
-// device remains — the orchestrator only fans out to channels the user has on.
-function syncApnsChannelPreference(userId: number): void {
-  const currentPrefs = notificationPreferencesDb.getPreferences(userId);
-  const hasEnabledDevice = notificationChannelEndpointsDb.getEnabledEndpoints(userId, APNS_CHANNEL).length > 0;
-  notificationPreferencesDb.updatePreferences(userId, {
-    ...currentPrefs,
-    channels: { ...currentPrefs.channels, [APNS_CHANNEL]: hasEnabledDevice },
-  });
-}
-
 // POST /api/push/register
-// Body: { deviceToken, platform?: "ios", bundleId?: "com.mymu.app", appVersion? }
+// iOS:     { deviceToken, platform?: "ios", bundleId?: "com.mymu.app", appVersion? }
+// Android: { deviceToken: <https UnifiedPush endpoint URL>, platform: "android-up", appVersion? }
 router.post('/register', (req, res) => {
   try {
     const { deviceToken, platform, bundleId, appVersion } = req.body || {};
@@ -65,28 +50,42 @@ router.post('/register', (req, res) => {
     }
 
     const userId = readUserId(req);
-    const endpoint = notificationChannelEndpointsDb.upsertEndpoint({
+    const platformText = readText(platform);
+
+    if (platformText === UNIFIEDPUSH_PLATFORM) {
+      const endpointUrl = normalizeUnifiedPushEndpoint(token);
+      if (!endpointUrl) {
+        return res.status(400).json({ error: 'deviceToken must be an https UnifiedPush endpoint URL (max 1024 chars)' });
+      }
+      const registration = registerPushDevice({
+        userId,
+        channel: UNIFIEDPUSH_CHANNEL,
+        endpointId: endpointUrl,
+        label: null,
+        metadata: { platform: UNIFIEDPUSH_PLATFORM, appVersion: readText(appVersion) || null },
+      });
+      return res.json({ success: true, registration });
+    }
+
+    const registration = registerPushDevice({
       userId,
       channel: APNS_CHANNEL,
       endpointId: token,
       label: readText(bundleId) || null,
       metadata: {
-        platform: readText(platform) || 'ios',
+        platform: platformText || 'ios',
         bundleId: readText(bundleId) || null,
         appVersion: readText(appVersion) || null,
       },
-      enabled: true,
     });
-    syncApnsChannelPreference(userId);
-
-    return res.json({ success: true, registration: sanitizeRegistration(endpoint) });
+    return res.json({ success: true, registration });
   } catch (error) {
     console.error('Error registering push device:', error);
     return res.status(500).json({ error: 'Failed to register push device' });
   }
 });
 
-// DELETE /api/push/register        Body: { deviceToken }
+// DELETE /api/push/register        Body: { deviceToken }  (APNs token or UnifiedPush URL)
 // DELETE /api/push/register/:deviceToken
 function unregister(req: express.Request, res: express.Response) {
   try {
@@ -96,8 +95,7 @@ function unregister(req: express.Request, res: express.Response) {
     }
 
     const userId = readUserId(req);
-    const removed = notificationChannelEndpointsDb.removeEndpoint(userId, APNS_CHANNEL, token);
-    syncApnsChannelPreference(userId);
+    const removed = unregisterPushDevice(userId, token);
 
     if (!removed) {
       return res.status(404).json({ error: 'Push device not found' });
@@ -111,13 +109,11 @@ function unregister(req: express.Request, res: express.Response) {
 router.delete('/register', unregister);
 router.delete('/register/:deviceToken', unregister);
 
-// GET /api/push/registrations — this user's registered devices (debug / app UI).
+// GET /api/push/registrations — this user's registered devices on both channels.
 router.get('/registrations', (req, res) => {
   try {
     const userId = readUserId(req);
-    const registrations = notificationChannelEndpointsDb
-      .getEndpoints(userId, APNS_CHANNEL)
-      .map(sanitizeRegistration);
+    const registrations = listPushRegistrations(userId);
     return res.json({ success: true, registrations });
   } catch (error) {
     console.error('Error listing push devices:', error);

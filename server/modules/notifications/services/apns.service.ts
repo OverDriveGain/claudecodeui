@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http2 from 'node:http2';
 
 import { notificationChannelEndpointsDb } from '@/modules/database/index.js';
+import type { MobilePushAlert } from '@/shared/types.js';
 
 /**
  * Apple Push Notification service (APNs) sender — dependency-free.
@@ -40,13 +41,7 @@ type ApnsConfig = {
   production: boolean;
 };
 
-export type ApnsAlert = {
-  title: string;
-  body: string;
-  sessionId?: string | null;
-  projectId?: string | null;
-  collapseId?: string | null;
-};
+type ApnsAlert = MobilePushAlert;
 
 function readConfig(): ApnsConfig {
   const flag = (process.env.APNS_PRODUCTION || '').trim().toLowerCase();
