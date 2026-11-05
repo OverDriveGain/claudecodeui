@@ -14,13 +14,21 @@ import type { AddressInfo } from 'node:net';
 
 import { WebSocketServer } from 'ws';
 
-type Behaviour = 'not-found' | 'drop' | 'stream-then-drop';
+type Behaviour = 'not-found' | 'drop' | 'stream-then-drop' | 'turn-ended';
 const behaviourBySession = new Map<string, Behaviour>();
 const dialsBySession = new Map<string, number[]>();
 // Events-API contents per session (default: no events).
 const eventsBySession = new Map<string, Array<{ uuid: string; type: string }>>();
 
+// Relay roster rows served by GET /v1/code/sessions.
+let rosterRows: Array<Record<string, unknown>> = [];
+
 const server = http.createServer((req, res) => {
+  if ((req.url || '').startsWith('/v1/code/sessions')) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: rosterRows, next_cursor: null }));
+    return;
+  }
   const sessionId = /\/v1\/sessions\/([^/]+)\/events/.exec(req.url || '')?.[1] || '';
   const data = eventsBySession.get(sessionId) || [];
   res.writeHead(200, { 'content-type': 'application/json' });
@@ -33,6 +41,10 @@ wss.on('connection', (socket, req) => {
   const behaviour = behaviourBySession.get(sessionId);
   const dial = dialsBySession.get(sessionId)?.length || 0;
   if (behaviour === 'not-found') socket.close(1003, 'not_found');
+  else if (behaviour === 'turn-ended') {
+    // The socket delivers a turn end, then stays up but silent (stale).
+    socket.send(JSON.stringify({ uuid: 'ev-result', type: 'result' }));
+  }
   else if (behaviour === 'stream-then-drop') {
     if (dial > 1) return; // the reconnected socket stays up
     // Deliver two events live, then drop. Only afterwards does the events API show
@@ -112,4 +124,31 @@ test('the reconnect top-up re-emits only events the dropped socket never deliver
   assert.equal(dialsBySession.get(sessionId)?.length, 2, 'dropped once, reconnected once');
   const ids = frames.filter((f) => f.kind === 'text').map((f) => f.id);
   assert.deepEqual(ids, ['ev-a', 'ev-b', 'ev-c'], 'each event reaches the viewer exactly once');
+});
+
+test('a closed turn on a subscribed entry yields to newer relay activity', async () => {
+  const sessionId = 'cse_outside_turn';
+  behaviourBySession.set(sessionId, 'turn-ended');
+  const { writer } = fakeWriter();
+  await rc.attachSession(sessionId, writer, () => []);
+  await sleep(300); // the socket delivered `result` → turnOpen=false
+  const row = (lastEventAt: string) => ({
+    id: sessionId,
+    title: 'agent',
+    status: 'active',
+    connection_status: 'connected',
+    worker_status: 'running',
+    last_event_at: lastEventAt,
+  });
+  try {
+    // Relay saw nothing after our socket's last event: the stale 'running' flag
+    // must stay overridden (the /clear case).
+    rosterRows = [row(new Date(Date.now() - 5000).toISOString())];
+    assert.equal((await rc.listAgents())[0].running, false, 'turn end we observed wins');
+    // A turn started outside the GUI: the relay has newer events than the socket.
+    rosterRows = [row(new Date(Date.now() + 5000).toISOString())];
+    assert.equal((await rc.listAgents())[0].running, true, 'entry is behind the relay');
+  } finally {
+    rc.detachSession(sessionId);
+  }
 });

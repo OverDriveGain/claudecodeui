@@ -615,6 +615,15 @@ async function loadMcpConfig(cwd) {
  * @param {Object} context - Provider-scoped model, session, and auth lookups
  * @returns {Promise<void>}
  */
+/** True when `dirPath` exists and is a directory (false on any stat error). */
+async function isDirectory(dirPath) {
+  try {
+    return (await fs.stat(dirPath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function queryClaudeSDK(command, options = {}, ws, context) {
   const { sessionId, sessionSummary } = options;
   // Callers pass the stable app session id; the SDK only understands the
@@ -665,6 +674,23 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     console.warn('[Claude SDK] MYMU owner resolution failed:', error?.message || error);
   }
   if (mymuSpawnOwner) options = { ...options, spawnOwner: mymuSpawnOwner };
+
+  // A missing working directory makes child_process.spawn fail with ENOENT, which
+  // the SDK reports as "Claude Code native binary not found at claude" — sending
+  // users after a binary that is installed fine. Projects whose folder was moved or
+  // deleted stay in the project list, so check the folder and say so plainly.
+  // Skipped for foreign-owned projects: the service user may not see into that home.
+  if (options.cwd && !mymuSpawnOwner && !(await isDirectory(options.cwd))) {
+    console.warn('[Claude SDK] project folder missing, not spawning', { cwd: options.cwd });
+    ws?.send?.(createNormalizedMessage({
+      kind: 'error',
+      content: `Project folder not found: ${options.cwd}. It was moved or deleted. Recreate the folder or remove this project.`,
+      sessionId: sessionId || null,
+      provider: 'claude',
+    }));
+    ws?.send?.(createCompleteMessage({ provider: 'claude', sessionId: sessionId || null, exitCode: 1 }));
+    return;
+  }
 
   // Closes the held stdin stream so the CLI can wind down. Replaced once the
   // stream exists; the finally block calls it no matter how the run ends.

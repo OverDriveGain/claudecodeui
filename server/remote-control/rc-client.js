@@ -444,6 +444,10 @@ export function isRemoteControlConfigured() {
 // "running" worker_status that hasn't produced an event in this long is a stale flag
 // left by an interrupted turn, not real work. Safety net for the sidebar dot.
 const RUNNING_MAX_IDLE_MS = 90 * 1000;
+// Tolerance when comparing the relay's last_event_at (relay clock) with our
+// local receive timestamps: a live-delivered event can carry a relay timestamp a
+// little ahead of our clock without meaning we missed anything.
+const RC_RELAY_CLOCK_SKEW_MS = 2000;
 
 // An "open" turn whose upstream has been silent this long is a dead worker
 // (crashed/killed mid-turn — no result ever comes), not a silent tool call.
@@ -474,12 +478,22 @@ function isWorkerRunning(s) {
   // stale 'running' long after (verified: still 'running' minutes after a
   // /clear) — trusting the flag then re-armed pollers' loaders till next turn.
   const entry = activeRemoteSessions.get(s.id);
-  if (entry) {
-    if (!entry.turnOpen) return false;
-    if (Date.now() - (entry.lastUpstreamAt || 0) < TURNOPEN_TRUST_MAX_MS) return true;
-    // fall through: open-turn entry gone silent too long — dead worker
-  }
   const last = Date.parse(s.last_event_at || s.created_at || '');
+  if (entry) {
+    if (!entry.turnOpen) {
+      // A closed turn is only authoritative if the entry has seen everything the
+      // relay has. turnOpen re-opens solely from socket events or the viewer-gated
+      // idle probe, so a turn started OUTSIDE the GUI on a stale socket (or with no
+      // viewer attached) never flips it — the agent then read idle while working.
+      // If the relay's last event is newer than anything this entry observed, the
+      // entry is behind: fall through to the relay flag + recency heuristic.
+      const seenAt = Math.max(entry.lastUpstreamAt || 0, entry.lastStallSyncAt || 0);
+      if (!Number.isFinite(last) || last <= seenAt + RC_RELAY_CLOCK_SKEW_MS) return false;
+    } else if (Date.now() - (entry.lastUpstreamAt || 0) < TURNOPEN_TRUST_MAX_MS) {
+      return true;
+    }
+    // fall through: entry behind the relay, or open turn gone silent too long
+  }
   return Number.isFinite(last) && Date.now() - last < RUNNING_MAX_IDLE_MS;
 }
 
